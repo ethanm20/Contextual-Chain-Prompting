@@ -48,6 +48,7 @@ significantly improves the generated descriptions.
 
 * **generate-GPT.py**    Generates the data using the GPT-4o-Mini LLM.
 * **Output:** CSV files with all input columns with C1-C6 columns generated using the LLM appended. 
+* **promptsBulk.json** JSON file that contains the prompts used for generating the Descriptions & Explanations
 
 #### CRCA Statistics #### 
 
