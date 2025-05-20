@@ -1,0 +1,67 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5
+0,0,181360,181360,,Local,Not required,Partial,CVE-2017-8925,https://www.cvedetails.com/cve/CVE-2017-8925/,CWE-404,Low,,,,2017-05-12,2.1,The omninet_open function in drivers/usb/serial/omninet.c in the Linux kernel before 4.10.4 allows local users to cause a denial of service (tty exhaustion) by leveraging reference count mishandling.,2019-10-02,DoS ,0,https://github.com/torvalds/linux/commit/30572418b445d85fcfe6c8fe84c947d2606767d8,30572418b445d85fcfe6c8fe84c947d2606767d8,"USB: serial: omninet: fix reference leaks at open
+
+This driver needlessly took another reference to the tty on open, a
+reference which was then never released on close. This lead to not just
+a leak of the tty, but also a driver reference leak that prevented the
+driver from being unloaded after a port had once been opened.
+
+Fixes: 4a90f09b20f4 (""tty: usb-serial krefs"")
+Cc: stable <stable@vger.kernel.org>	# 2.6.28
+Signed-off-by: Johan Hovold <johan@kernel.org>",4,drivers/usb/serial/omninet.c,"{""sha"": ""76564b3bebb9bc3b1c6c2ec5761b74b2bcefcd1e"", ""filename"": ""drivers/usb/serial/omninet.c"", ""status"": ""modified"", ""additions"": 0, ""deletions"": 6, ""changes"": 6, ""blob_url"": ""https://github.com/torvalds/linux/blob/30572418b445d85fcfe6c8fe84c947d2606767d8/drivers/usb/serial/omninet.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/30572418b445d85fcfe6c8fe84c947d2606767d8/drivers/usb/serial/omninet.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/usb/serial/omninet.c?ref=30572418b445d85fcfe6c8fe84c947d2606767d8"", ""patch"": ""@@ -142,12 +142,6 @@ static int omninet_port_remove(struct usb_serial_port *port)\n \n static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)\n {\n-\tstruct usb_serial\t*serial = port->serial;\n-\tstruct usb_serial_port\t*wport;\n-\n-\twport = serial->port[1];\n-\ttty_port_tty_set(&wport->port, tty);\n-\n \treturn usb_serial_generic_open(tty, port);\n }\n ""}"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+ 	return usb_serial_generic_open(tty, port);
+ }
+"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+ 	return usb_serial_generic_open(tty, port);
+ }
+",C,,"	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+",,"@@ -142,12 +142,6 @@ static int omninet_port_remove(struct usb_serial_port *port)
+ 
+ static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+-	struct usb_serial	*serial = port->serial;
+-	struct usb_serial_port	*wport;
+-
+-	wport = serial->port[1];
+-	tty_port_tty_set(&wport->port, tty);
+-
+ 	return usb_serial_generic_open(tty, port);
+ }
+ ",linux,30572418b445d85fcfe6c8fe84c947d2606767d8,0b1d250afb8eb9d65afb568bac9b9f9253a82b49,1," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+//flaw_line_below:
+	struct usb_serial	*serial = port->serial;
+//flaw_line_below:
+	struct usb_serial_port	*wport;
+//flaw_line_below:
+
+//flaw_line_below:
+	wport = serial->port[1];
+//flaw_line_below:
+	tty_port_tty_set(&wport->port, tty);
+//flaw_line_below:
+
+ 	return usb_serial_generic_open(tty, port);
+ }
+",181360," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+ 	return usb_serial_generic_open(tty, port);
+ }
+"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+ 	return usb_serial_generic_open(tty, port);
+ }
+","The vulnerability in the original code arises from the use of the variable `wport`, which is assigned the value of `serial->port[1]` without checking if `serial` has at least two ports. This could lead to a potential out-of-bounds access if `serial->port` contains fewer than two elements, resulting in undefined behavior or a crash. In the fixed code, the assignment and usage of `wport` are removed entirely, eliminating the risk of accessing an invalid memory location. The function now directly calls `usb_serial_generic_open(tty, port)`, ensuring safer execution without unnecessary complexity.","The vulnerability in the original code stems from the potential for accessing an invalid memory location due to an unchecked assumption about the number of elements in an array. Specifically, the code attempts to reference a second element without verifying that it exists, which could lead to out-of-bounds access and result in undefined behavior or crashes. The fixed code addresses this issue by removing the problematic reference entirely, simplifying the logic and ensuring that the function operates safely without the risk of accessing memory that may not be allocated, thus enhancing overall stability and security.","CWE-125,CWE-788,CWE-823,CWE-119,CWE-824,CWE-469,CWE-825,CWE-129,CWE-415,CWE-416",N,-1.0,2.0,4.0,0.0,1.0

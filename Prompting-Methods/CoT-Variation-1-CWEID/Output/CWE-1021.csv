@@ -1,0 +1,125 @@
+,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic
+0,186460,186460,,Remote,Not required,,CVE-2017-5016,https://www.cvedetails.com/cve/CVE-2017-5016/,CWE-1021,Medium,,Partial,,2017-02-17,4.3,"Blink in Google Chrome prior to 56.0.2924.76 for Linux, Windows and Mac, and 56.0.2924.87 for Android, failed to prevent certain UI elements from being displayed by non-visible pages, which allowed a remote attacker to show certain UI elements on a page they don't control via a crafted HTML page.",2019-10-02,,1,https://github.com/chromium/chromium/commit/a8e17a3031b6ad69c399e5e04dd0084e577097fc,a8e17a3031b6ad69c399e5e04dd0084e577097fc,"Form validation: Do not show validation bubble if the page is invisible.
+
+BUG=673163
+
+Review-Url: https://codereview.chromium.org/2572813003
+Cr-Commit-Position: refs/heads/master@{#438476}",1,third_party/WebKit/Source/core/html/HTMLFormControlElement.cpp,"{""sha"": ""9e5926ab83fe369e2ab3a18f3feec8d637b1ce0b"", ""filename"": ""third_party/WebKit/Source/core/html/HTMLFormControlElement.cpp"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/chromium/chromium/blob/a8e17a3031b6ad69c399e5e04dd0084e577097fc/third_party/WebKit/Source/core/html/HTMLFormControlElement.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/a8e17a3031b6ad69c399e5e04dd0084e577097fc/third_party/WebKit/Source/core/html/HTMLFormControlElement.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/HTMLFormControlElement.cpp?ref=a8e17a3031b6ad69c399e5e04dd0084e577097fc"", ""patch"": ""@@ -452,7 +452,7 @@ void HTMLFormControlElement::findCustomValidationMessageTextDirection(\n \n void HTMLFormControlElement::updateVisibleValidationMessage() {\n   Page* page = document().page();\n-  if (!page)\n+  if (!page || !page->isPageVisible())\n     return;\n   String message;\n   if (layoutObject() && willValidate())""}"," void HTMLFormControlElement::updateVisibleValidationMessage() {
+   Page* page = document().page();
+  if (!page || !page->isPageVisible())
+     return;
+   String message;
+   if (layoutObject() && willValidate())
+    message = validationMessage().stripWhiteSpace();
+
+  m_hasValidationMessage = true;
+  ValidationMessageClient* client = &page->validationMessageClient();
+  TextDirection messageDir = LTR;
+  TextDirection subMessageDir = LTR;
+  String subMessage = validationSubMessage().stripWhiteSpace();
+  if (message.isEmpty())
+    client->hideValidationMessage(*this);
+  else
+    findCustomValidationMessageTextDirection(message, messageDir, subMessage,
+                                             subMessageDir);
+  client->showValidationMessage(*this, message, messageDir, subMessage,
+                                subMessageDir);
+}
+"," void HTMLFormControlElement::updateVisibleValidationMessage() {
+   Page* page = document().page();
+  if (!page)
+     return;
+   String message;
+   if (layoutObject() && willValidate())
+    message = validationMessage().stripWhiteSpace();
+
+  m_hasValidationMessage = true;
+  ValidationMessageClient* client = &page->validationMessageClient();
+  TextDirection messageDir = LTR;
+  TextDirection subMessageDir = LTR;
+  String subMessage = validationSubMessage().stripWhiteSpace();
+  if (message.isEmpty())
+    client->hideValidationMessage(*this);
+  else
+    findCustomValidationMessageTextDirection(message, messageDir, subMessage,
+                                             subMessageDir);
+  client->showValidationMessage(*this, message, messageDir, subMessage,
+                                subMessageDir);
+}
+",C,"  if (!page || !page->isPageVisible())
+","  if (!page)
+",,"@@ -452,7 +452,7 @@ void HTMLFormControlElement::findCustomValidationMessageTextDirection(
+ 
+ void HTMLFormControlElement::updateVisibleValidationMessage() {
+   Page* page = document().page();
+-  if (!page)
++  if (!page || !page->isPageVisible())
+     return;
+   String message;
+   if (layoutObject() && willValidate())",Chrome,a8e17a3031b6ad69c399e5e04dd0084e577097fc,b76d5e11df4955210c8634da71836f31762186c9,1," void HTMLFormControlElement::updateVisibleValidationMessage() {
+   Page* page = document().page();
+//flaw_line_below:
+  if (!page)
+//fix_flaw_line_below:
+//  if (!page || !page->isPageVisible())
+     return;
+   String message;
+   if (layoutObject() && willValidate())
+    message = validationMessage().stripWhiteSpace();
+
+  m_hasValidationMessage = true;
+  ValidationMessageClient* client = &page->validationMessageClient();
+  TextDirection messageDir = LTR;
+  TextDirection subMessageDir = LTR;
+  String subMessage = validationSubMessage().stripWhiteSpace();
+  if (message.isEmpty())
+    client->hideValidationMessage(*this);
+  else
+    findCustomValidationMessageTextDirection(message, messageDir, subMessage,
+                                             subMessageDir);
+  client->showValidationMessage(*this, message, messageDir, subMessage,
+                                subMessageDir);
+}
+",186460," void HTMLFormControlElement::updateVisibleValidationMessage() {
+   Page* page = document().page();
+  if (!page)
+     return;
+   String message;
+   if (layoutObject() && willValidate())
+    message = validationMessage().stripWhiteSpace();
+
+  m_hasValidationMessage = true;
+  ValidationMessageClient* client = &page->validationMessageClient();
+  TextDirection messageDir = LTR;
+  TextDirection subMessageDir = LTR;
+  String subMessage = validationSubMessage().stripWhiteSpace();
+  if (message.isEmpty())
+    client->hideValidationMessage(*this);
+  else
+    findCustomValidationMessageTextDirection(message, messageDir, subMessage,
+                                             subMessageDir);
+  client->showValidationMessage(*this, message, messageDir, subMessage,
+                                subMessageDir);
+}
+"," void HTMLFormControlElement::updateVisibleValidationMessage() {
+   Page* page = document().page();
+  if (!page || !page->isPageVisible())
+     return;
+   String message;
+   if (layoutObject() && willValidate())
+    message = validationMessage().stripWhiteSpace();
+
+  m_hasValidationMessage = true;
+  ValidationMessageClient* client = &page->validationMessageClient();
+  TextDirection messageDir = LTR;
+  TextDirection subMessageDir = LTR;
+  String subMessage = validationSubMessage().stripWhiteSpace();
+  if (message.isEmpty())
+    client->hideValidationMessage(*this);
+  else
+    findCustomValidationMessageTextDirection(message, messageDir, subMessage,
+                                             subMessageDir);
+  client->showValidationMessage(*this, message, messageDir, subMessage,
+                                subMessageDir);
+}
+","The `updateVisibleValidationMessage` function is responsible for updating the validation message displayed for an HTML form control element. It first retrieves the associated page and checks if it exists. If the control is valid and has a layout object, it retrieves and strips whitespace from the validation message. The function then determines the text direction for the main and sub-messages. If the main message is empty, it hides the validation message; otherwise, it finds the appropriate text direction and displays the validation message along with any sub-message to the user through the page's validation message client.","The function updates the visible validation message for a form control element by first checking if the associated page exists. If the control is valid and has a layout, it retrieves the validation message and removes any extra whitespace. It then determines the text direction for both the main and any sub-messages. If the main message is empty, it hides the validation message; otherwise, it finds the appropriate text direction and displays the main message along with the sub-message to the user, ensuring that the validation feedback is clear and correctly formatted.","The vulnerability identified as CWE-1021, which relates to the exposure of sensitive information through improper error handling, was addressed by adding a check for the visibility of the page. In the vulnerable code, the function would proceed to update the validation message even if the page was not visible, potentially leading to unintended information disclosure. The fix introduced a condition to verify that the page is both present and visible before executing the message update logic. This ensures that validation messages are only shown when the page is actively displayed to the user, thereby mitigating the risk of exposing sensitive information.","The vulnerability identified as CWE-1021, which involves the exposure of sensitive information through improper error handling, was present in the original code because it allowed validation messages to be processed and displayed even when the associated page was not visible. This could lead to unintended information disclosure to users who should not see such messages. The fix implemented a check to ensure that the page is both present and visible before proceeding with the validation message update. This change effectively prevents the display of sensitive information when the page is not actively being viewed, enhancing security.","The vulnerability was fixed by adding a condition to check both the existence and visibility of the page before proceeding with the validation message update. In the modified code, the check `if (!page || !page->isPageVisible())` ensures that the function exits early if the page is either absent or not visible. This prevents the function from executing the logic that retrieves and displays validation messages when the page is not actively shown to the user. As a result, sensitive information is safeguarded from being exposed in scenarios where the page is hidden or not rendered.","The vulnerability was fixed by implementing an additional check to ensure that the associated page is both present and visible before executing the logic for updating validation messages. This change prevents the function from processing and displaying validation messages when the page is not actively shown to the user. By exiting early if the page is not visible, the fix effectively mitigates the risk of exposing sensitive information in scenarios where the user should not have access to such messages. This enhancement improves the overall security of the application by controlling when validation feedback is presented."

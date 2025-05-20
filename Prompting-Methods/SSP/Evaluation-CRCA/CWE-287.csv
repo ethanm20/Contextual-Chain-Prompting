@@ -1,0 +1,2375 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5
+0,0,179460,179460,,Remote,Not required,Partial,CVE-2014-4668,https://www.cvedetails.com/cve/CVE-2014-4668/,CWE-287,Medium,Partial,Partial,,2014-07-02,6.8,"The cherokee_validator_ldap_check function in validator_ldap.c in Cherokee 1.2.103 and earlier, when LDAP is used, does not properly consider unauthenticated-bind semantics, which allows remote attackers to bypass authentication via an empty password.",2017-01-02,Bypass ,2,https://github.com/cherokee/webserver/commit/fbda667221c51f0aa476a02366e0cf66cb012f88,fbda667221c51f0aa476a02366e0cf66cb012f88,Prevent the LDAP validator from accepting an empty password.,1,cherokee/validator_ldap.c,"{""sha"": ""417fd9e4bc44b50c98e90e1aeeaa0022cf56b960"", ""filename"": ""cherokee/validator_ldap.c"", ""status"": ""modified"", ""additions"": 2, ""deletions"": 1, ""changes"": 3, ""blob_url"": ""https://github.com/cherokee/webserver/blob/fbda667221c51f0aa476a02366e0cf66cb012f88/cherokee/validator_ldap.c"", ""raw_url"": ""https://github.com/cherokee/webserver/raw/fbda667221c51f0aa476a02366e0cf66cb012f88/cherokee/validator_ldap.c"", ""contents_url"": ""https://api.github.com/repos/cherokee/webserver/contents/cherokee/validator_ldap.c?ref=fbda667221c51f0aa476a02366e0cf66cb012f88"", ""patch"": ""@@ -335,7 +335,8 @@ cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,\n \t/* Sanity checks\n \t */\n \tif ((conn->validator == NULL) ||\n-\t    cherokee_buffer_is_empty (&conn->validator->user))\n+\t    cherokee_buffer_is_empty (&conn->validator->user) ||\n+\t    cherokee_buffer_is_empty (&conn->validator->passwd))\n \t\treturn ret_error;\n \n \tsize = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, \""*()\"");""}","cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+                               cherokee_connection_t     *conn)
+{
+	int                              re;
+	ret_t                            ret;
+	size_t                           size;
+	char                            *dn;
+	LDAPMessage                     *message;
+	LDAPMessage                     *first;
+	char                            *attrs[] = { LDAP_NO_ATTRS, NULL };
+	cherokee_validator_ldap_props_t *props   = VAL_LDAP_PROP(ldap);
+
+ 	/* Sanity checks
+ 	 */
+ 	if ((conn->validator == NULL) ||
+	    cherokee_buffer_is_empty (&conn->validator->user) ||
+	    cherokee_buffer_is_empty (&conn->validator->passwd))
+ 		return ret_error;
+ 
+ 	size = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, ""*()"");
+	if (size != conn->validator->user.len)
+		return ret_error;
+
+	/* Build filter
+	 */
+	ret = init_filter (ldap, props, conn);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Search
+	 */
+	re = ldap_search_s (ldap->conn, props->basedn.buf, LDAP_SCOPE_SUBTREE, ldap->filter.buf, attrs, 0, &message);
+	if (re != LDAP_SUCCESS) {
+		LOG_ERROR (CHEROKEE_ERROR_VALIDATOR_LDAP_SEARCH,
+		           props->filter.buf ? props->filter.buf : """");
+		return ret_error;
+	}
+
+	TRACE (ENTRIES, ""subtree search (%s): done\n"", ldap->filter.buf ? ldap->filter.buf : """");
+
+	/* Check that there a single entry
+	 */
+	re = ldap_count_entries (ldap->conn, message);
+	if (re != 1) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Pick up the first one
+	 */
+	first = ldap_first_entry (ldap->conn, message);
+	if (first == NULL) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Get DN
+	 */
+	dn = ldap_get_dn (ldap->conn, first);
+	if (dn == NULL) {
+		ldap_msgfree (message);
+		return ret_error;
+	}
+
+	ldap_msgfree (message);
+
+	/* Check that it's right
+	 */
+	ret = validate_dn (props, dn, conn->validator->passwd.buf);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Disconnect from the LDAP server
+	 */
+	re = ldap_unbind_s (ldap->conn);
+	if (re != LDAP_SUCCESS)
+		return ret_error;
+
+	/* Validated!
+	 */
+	TRACE (ENTRIES, ""Access to use %s has been granted\n"", conn->validator->user.buf);
+
+	return ret_ok;
+}
+","cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+                               cherokee_connection_t     *conn)
+{
+	int                              re;
+	ret_t                            ret;
+	size_t                           size;
+	char                            *dn;
+	LDAPMessage                     *message;
+	LDAPMessage                     *first;
+	char                            *attrs[] = { LDAP_NO_ATTRS, NULL };
+	cherokee_validator_ldap_props_t *props   = VAL_LDAP_PROP(ldap);
+
+ 	/* Sanity checks
+ 	 */
+ 	if ((conn->validator == NULL) ||
+	    cherokee_buffer_is_empty (&conn->validator->user))
+ 		return ret_error;
+ 
+ 	size = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, ""*()"");
+	if (size != conn->validator->user.len)
+		return ret_error;
+
+	/* Build filter
+	 */
+	ret = init_filter (ldap, props, conn);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Search
+	 */
+	re = ldap_search_s (ldap->conn, props->basedn.buf, LDAP_SCOPE_SUBTREE, ldap->filter.buf, attrs, 0, &message);
+	if (re != LDAP_SUCCESS) {
+		LOG_ERROR (CHEROKEE_ERROR_VALIDATOR_LDAP_SEARCH,
+		           props->filter.buf ? props->filter.buf : """");
+		return ret_error;
+	}
+
+	TRACE (ENTRIES, ""subtree search (%s): done\n"", ldap->filter.buf ? ldap->filter.buf : """");
+
+	/* Check that there a single entry
+	 */
+	re = ldap_count_entries (ldap->conn, message);
+	if (re != 1) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Pick up the first one
+	 */
+	first = ldap_first_entry (ldap->conn, message);
+	if (first == NULL) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Get DN
+	 */
+	dn = ldap_get_dn (ldap->conn, first);
+	if (dn == NULL) {
+		ldap_msgfree (message);
+		return ret_error;
+	}
+
+	ldap_msgfree (message);
+
+	/* Check that it's right
+	 */
+	ret = validate_dn (props, dn, conn->validator->passwd.buf);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Disconnect from the LDAP server
+	 */
+	re = ldap_unbind_s (ldap->conn);
+	if (re != LDAP_SUCCESS)
+		return ret_error;
+
+	/* Validated!
+	 */
+	TRACE (ENTRIES, ""Access to use %s has been granted\n"", conn->validator->user.buf);
+
+	return ret_ok;
+}
+",C,"	    cherokee_buffer_is_empty (&conn->validator->user) ||
+	    cherokee_buffer_is_empty (&conn->validator->passwd))
+","	    cherokee_buffer_is_empty (&conn->validator->user))
+",,"@@ -335,7 +335,8 @@ cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+ 	/* Sanity checks
+ 	 */
+ 	if ((conn->validator == NULL) ||
+-	    cherokee_buffer_is_empty (&conn->validator->user))
++	    cherokee_buffer_is_empty (&conn->validator->user) ||
++	    cherokee_buffer_is_empty (&conn->validator->passwd))
+ 		return ret_error;
+ 
+ 	size = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, ""*()"");",webserver,fbda667221c51f0aa476a02366e0cf66cb012f88,dc1f76f32ef6a9b982a27ca4748ee9b030913323,1,"cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+                               cherokee_connection_t     *conn)
+{
+	int                              re;
+	ret_t                            ret;
+	size_t                           size;
+	char                            *dn;
+	LDAPMessage                     *message;
+	LDAPMessage                     *first;
+	char                            *attrs[] = { LDAP_NO_ATTRS, NULL };
+	cherokee_validator_ldap_props_t *props   = VAL_LDAP_PROP(ldap);
+
+ 	/* Sanity checks
+ 	 */
+ 	if ((conn->validator == NULL) ||
+//flaw_line_below:
+	    cherokee_buffer_is_empty (&conn->validator->user))
+//fix_flaw_line_below:
+//	    cherokee_buffer_is_empty (&conn->validator->user) ||
+//fix_flaw_line_below:
+//	    cherokee_buffer_is_empty (&conn->validator->passwd))
+ 		return ret_error;
+ 
+ 	size = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, ""*()"");
+	if (size != conn->validator->user.len)
+		return ret_error;
+
+	/* Build filter
+	 */
+	ret = init_filter (ldap, props, conn);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Search
+	 */
+	re = ldap_search_s (ldap->conn, props->basedn.buf, LDAP_SCOPE_SUBTREE, ldap->filter.buf, attrs, 0, &message);
+	if (re != LDAP_SUCCESS) {
+		LOG_ERROR (CHEROKEE_ERROR_VALIDATOR_LDAP_SEARCH,
+		           props->filter.buf ? props->filter.buf : """");
+		return ret_error;
+	}
+
+	TRACE (ENTRIES, ""subtree search (%s): done\n"", ldap->filter.buf ? ldap->filter.buf : """");
+
+	/* Check that there a single entry
+	 */
+	re = ldap_count_entries (ldap->conn, message);
+	if (re != 1) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Pick up the first one
+	 */
+	first = ldap_first_entry (ldap->conn, message);
+	if (first == NULL) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Get DN
+	 */
+	dn = ldap_get_dn (ldap->conn, first);
+	if (dn == NULL) {
+		ldap_msgfree (message);
+		return ret_error;
+	}
+
+	ldap_msgfree (message);
+
+	/* Check that it's right
+	 */
+	ret = validate_dn (props, dn, conn->validator->passwd.buf);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Disconnect from the LDAP server
+	 */
+	re = ldap_unbind_s (ldap->conn);
+	if (re != LDAP_SUCCESS)
+		return ret_error;
+
+	/* Validated!
+	 */
+	TRACE (ENTRIES, ""Access to use %s has been granted\n"", conn->validator->user.buf);
+
+	return ret_ok;
+}
+",179460,"cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+                               cherokee_connection_t     *conn)
+{
+	int                              re;
+	ret_t                            ret;
+	size_t                           size;
+	char                            *dn;
+	LDAPMessage                     *message;
+	LDAPMessage                     *first;
+	char                            *attrs[] = { LDAP_NO_ATTRS, NULL };
+	cherokee_validator_ldap_props_t *props   = VAL_LDAP_PROP(ldap);
+
+ 	/* Sanity checks
+ 	 */
+ 	if ((conn->validator == NULL) ||
+	    cherokee_buffer_is_empty (&conn->validator->user))
+ 		return ret_error;
+ 
+ 	size = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, ""*()"");
+	if (size != conn->validator->user.len)
+		return ret_error;
+
+	/* Build filter
+	 */
+	ret = init_filter (ldap, props, conn);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Search
+	 */
+	re = ldap_search_s (ldap->conn, props->basedn.buf, LDAP_SCOPE_SUBTREE, ldap->filter.buf, attrs, 0, &message);
+	if (re != LDAP_SUCCESS) {
+		LOG_ERROR (CHEROKEE_ERROR_VALIDATOR_LDAP_SEARCH,
+		           props->filter.buf ? props->filter.buf : """");
+		return ret_error;
+	}
+
+	TRACE (ENTRIES, ""subtree search (%s): done\n"", ldap->filter.buf ? ldap->filter.buf : """");
+
+	/* Check that there a single entry
+	 */
+	re = ldap_count_entries (ldap->conn, message);
+	if (re != 1) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Pick up the first one
+	 */
+	first = ldap_first_entry (ldap->conn, message);
+	if (first == NULL) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Get DN
+	 */
+	dn = ldap_get_dn (ldap->conn, first);
+	if (dn == NULL) {
+		ldap_msgfree (message);
+		return ret_error;
+	}
+
+	ldap_msgfree (message);
+
+	/* Check that it's right
+	 */
+	ret = validate_dn (props, dn, conn->validator->passwd.buf);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Disconnect from the LDAP server
+	 */
+	re = ldap_unbind_s (ldap->conn);
+	if (re != LDAP_SUCCESS)
+		return ret_error;
+
+	/* Validated!
+	 */
+	TRACE (ENTRIES, ""Access to use %s has been granted\n"", conn->validator->user.buf);
+
+	return ret_ok;
+}
+","cherokee_validator_ldap_check (cherokee_validator_ldap_t *ldap,
+                               cherokee_connection_t     *conn)
+{
+	int                              re;
+	ret_t                            ret;
+	size_t                           size;
+	char                            *dn;
+	LDAPMessage                     *message;
+	LDAPMessage                     *first;
+	char                            *attrs[] = { LDAP_NO_ATTRS, NULL };
+	cherokee_validator_ldap_props_t *props   = VAL_LDAP_PROP(ldap);
+
+ 	/* Sanity checks
+ 	 */
+ 	if ((conn->validator == NULL) ||
+	    cherokee_buffer_is_empty (&conn->validator->user) ||
+	    cherokee_buffer_is_empty (&conn->validator->passwd))
+ 		return ret_error;
+ 
+ 	size = cherokee_buffer_cnt_cspn (&conn->validator->user, 0, ""*()"");
+	if (size != conn->validator->user.len)
+		return ret_error;
+
+	/* Build filter
+	 */
+	ret = init_filter (ldap, props, conn);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Search
+	 */
+	re = ldap_search_s (ldap->conn, props->basedn.buf, LDAP_SCOPE_SUBTREE, ldap->filter.buf, attrs, 0, &message);
+	if (re != LDAP_SUCCESS) {
+		LOG_ERROR (CHEROKEE_ERROR_VALIDATOR_LDAP_SEARCH,
+		           props->filter.buf ? props->filter.buf : """");
+		return ret_error;
+	}
+
+	TRACE (ENTRIES, ""subtree search (%s): done\n"", ldap->filter.buf ? ldap->filter.buf : """");
+
+	/* Check that there a single entry
+	 */
+	re = ldap_count_entries (ldap->conn, message);
+	if (re != 1) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Pick up the first one
+	 */
+	first = ldap_first_entry (ldap->conn, message);
+	if (first == NULL) {
+		ldap_msgfree (message);
+		return ret_not_found;
+	}
+
+	/* Get DN
+	 */
+	dn = ldap_get_dn (ldap->conn, first);
+	if (dn == NULL) {
+		ldap_msgfree (message);
+		return ret_error;
+	}
+
+	ldap_msgfree (message);
+
+	/* Check that it's right
+	 */
+	ret = validate_dn (props, dn, conn->validator->passwd.buf);
+	if (ret != ret_ok)
+		return ret;
+
+	/* Disconnect from the LDAP server
+	 */
+	re = ldap_unbind_s (ldap->conn);
+	if (re != LDAP_SUCCESS)
+		return ret_error;
+
+	/* Validated!
+	 */
+	TRACE (ENTRIES, ""Access to use %s has been granted\n"", conn->validator->user.buf);
+
+	return ret_ok;
+}
+","The vulnerability in the original code stemmed from a lack of validation for the `passwd` field in the `conn->validator` structure, which could allow an attacker to bypass authentication if the password was empty. This oversight could lead to unauthorized access, as the function would proceed with LDAP operations without ensuring that both the username and password were provided. The fixed code addresses this vulnerability by adding a check for `cherokee_buffer_is_empty(&conn->validator->passwd)` in the sanity checks section, ensuring that both the username and password are validated before proceeding with LDAP operations.","The vulnerability in the original code arose from the absence of a check for the password field, allowing the possibility of an empty password being accepted during authentication. This could enable unauthorized access, as the function would continue processing without verifying that both username and password were provided. The fixed code rectifies this issue by incorporating an additional validation step to ensure that the password is not empty. This enhancement strengthens the authentication process by requiring both credentials to be present before proceeding with any further operations, thereby mitigating the risk of unauthorized access.",4,5,4,4
+1,1,180117,180117,,Remote,Not required,,CVE-2016-7141,https://www.cvedetails.com/cve/CVE-2016-7141/,CWE-287,Low,,Partial,,2016-10-03,5.0,"curl and libcurl before 7.50.2, when built with NSS and the libnsspem.so library is available at runtime, allow remote attackers to hijack the authentication of a TLS connection by leveraging reuse of a previously loaded client certificate from file for a connection for which no certificate has been set, a different vulnerability than CVE-2016-5420.",2018-11-13,,7,https://github.com/curl/curl/commit/curl-7_50_2~32,curl-7_50_2~32,"nss: refuse previously loaded certificate from file
+
+... when we are not asked to use a certificate from file",1,lib/vtls/nss.c,"{""sha"": ""b8a98a99e746696a458c82019e78c447d49cd491"", ""filename"": ""RELEASE-NOTES"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/curl/curl/blob/7700fcba64bf5806de28f6c1c7da3b4f0b38567d/RELEASE-NOTES"", ""raw_url"": ""https://github.com/curl/curl/raw/7700fcba64bf5806de28f6c1c7da3b4f0b38567d/RELEASE-NOTES"", ""contents_url"": ""https://api.github.com/repos/curl/curl/contents/RELEASE-NOTES?ref=7700fcba64bf5806de28f6c1c7da3b4f0b38567d"", ""patch"": ""@@ -37,6 +37,7 @@ This release includes the following bugfixes:\n  o SOCKS: display the hostname returned by the SOCKS5 proxy server\n  o sasl: Don't use GSSAPI authentication when domain name not specified [16]\n  o win: Basic support for Universal Windows Platform apps [17]\n+ o nss: fix incorrect use of a previously loaded certificate from file\n \n This release includes the following known bugs:\n ""}<_**next**_>{""sha"": ""cfb226328f71e943b7c8f1d3631c2b55da595c10"", ""filename"": ""lib/vtls/nss.c"", ""status"": ""modified"", ""additions"": 7, ""deletions"": 1, ""changes"": 8, ""blob_url"": ""https://github.com/curl/curl/blob/7700fcba64bf5806de28f6c1c7da3b4f0b38567d/lib/vtls/nss.c"", ""raw_url"": ""https://github.com/curl/curl/raw/7700fcba64bf5806de28f6c1c7da3b4f0b38567d/lib/vtls/nss.c"", ""contents_url"": ""https://api.github.com/repos/curl/curl/contents/lib/vtls/nss.c?ref=7700fcba64bf5806de28f6c1c7da3b4f0b38567d"", ""patch"": ""@@ -1002,10 +1002,10 @@ static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,\n   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;\n   struct Curl_easy *data = connssl->data;\n   const char *nickname = connssl->client_nickname;\n+  static const char pem_slotname[] = \""PEM Token #1\"";\n \n   if(connssl->obj_clicert) {\n     /* use the cert/key provided by PEM reader */\n-    static const char pem_slotname[] = \""PEM Token #1\"";\n     SECItem cert_der = { 0, NULL, 0 };\n     void *proto_win = SSL_RevealPinArg(sock);\n     struct CERTCertificateStr *cert;\n@@ -1067,6 +1067,12 @@ static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,\n   if(NULL == nickname)\n     nickname = \""[unknown]\"";\n \n+  if(!strncmp(nickname, pem_slotname, sizeof(pem_slotname) - 1U)) {\n+    failf(data, \""NSS: refusing previously loaded certificate from file: %s\"",\n+          nickname);\n+    return SECFailure;\n+  }\n+\n   if(NULL == *pRetKey) {\n     failf(data, \""NSS: private key not found for certificate: %s\"", nickname);\n     return SECFailure;""}","static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+                                  struct CERTDistNamesStr *caNames,
+                                  struct CERTCertificateStr **pRetCert,
+                                  struct SECKEYPrivateKeyStr **pRetKey)
+{
+   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;
+   struct Curl_easy *data = connssl->data;
+   const char *nickname = connssl->client_nickname;
+  static const char pem_slotname[] = ""PEM Token #1"";
+ 
+   if(connssl->obj_clicert) {
+     /* use the cert/key provided by PEM reader */
+     SECItem cert_der = { 0, NULL, 0 };
+     void *proto_win = SSL_RevealPinArg(sock);
+     struct CERTCertificateStr *cert;
+    struct SECKEYPrivateKeyStr *key;
+
+    PK11SlotInfo *slot = PK11_FindSlotByName(pem_slotname);
+    if(NULL == slot) {
+      failf(data, ""NSS: PK11 slot not found: %s"", pem_slotname);
+      return SECFailure;
+    }
+
+    if(PK11_ReadRawAttribute(PK11_TypeGeneric, connssl->obj_clicert, CKA_VALUE,
+                             &cert_der) != SECSuccess) {
+      failf(data, ""NSS: CKA_VALUE not found in PK11 generic object"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    cert = PK11_FindCertFromDERCertItem(slot, &cert_der, proto_win);
+    SECITEM_FreeItem(&cert_der, PR_FALSE);
+    if(NULL == cert) {
+      failf(data, ""NSS: client certificate from file not found"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    key = PK11_FindPrivateKeyFromCert(slot, cert, NULL);
+    PK11_FreeSlot(slot);
+    if(NULL == key) {
+      failf(data, ""NSS: private key from file not found"");
+      CERT_DestroyCertificate(cert);
+      return SECFailure;
+    }
+
+    infof(data, ""NSS: client certificate from file\n"");
+    display_cert_info(data, cert);
+
+    *pRetCert = cert;
+    *pRetKey = key;
+    return SECSuccess;
+  }
+
+  /* use the default NSS hook */
+  if(SECSuccess != NSS_GetClientAuthData((void *)nickname, sock, caNames,
+                                          pRetCert, pRetKey)
+      || NULL == *pRetCert) {
+
+    if(NULL == nickname)
+      failf(data, ""NSS: client certificate not found (nickname not ""
+            ""specified)"");
+    else
+      failf(data, ""NSS: client certificate not found: %s"", nickname);
+
+    return SECFailure;
+  }
+
+  /* get certificate nickname if any */
+  nickname = (*pRetCert)->nickname;
+   if(NULL == nickname)
+     nickname = ""[unknown]"";
+ 
+  if(!strncmp(nickname, pem_slotname, sizeof(pem_slotname) - 1U)) {
+    failf(data, ""NSS: refusing previously loaded certificate from file: %s"",
+          nickname);
+    return SECFailure;
+  }
+
+   if(NULL == *pRetKey) {
+     failf(data, ""NSS: private key not found for certificate: %s"", nickname);
+     return SECFailure;
+  }
+
+  infof(data, ""NSS: using client certificate: %s\n"", nickname);
+  display_cert_info(data, *pRetCert);
+  return SECSuccess;
+}
+","static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+                                  struct CERTDistNamesStr *caNames,
+                                  struct CERTCertificateStr **pRetCert,
+                                  struct SECKEYPrivateKeyStr **pRetKey)
+{
+   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;
+   struct Curl_easy *data = connssl->data;
+   const char *nickname = connssl->client_nickname;
+ 
+   if(connssl->obj_clicert) {
+     /* use the cert/key provided by PEM reader */
+    static const char pem_slotname[] = ""PEM Token #1"";
+     SECItem cert_der = { 0, NULL, 0 };
+     void *proto_win = SSL_RevealPinArg(sock);
+     struct CERTCertificateStr *cert;
+    struct SECKEYPrivateKeyStr *key;
+
+    PK11SlotInfo *slot = PK11_FindSlotByName(pem_slotname);
+    if(NULL == slot) {
+      failf(data, ""NSS: PK11 slot not found: %s"", pem_slotname);
+      return SECFailure;
+    }
+
+    if(PK11_ReadRawAttribute(PK11_TypeGeneric, connssl->obj_clicert, CKA_VALUE,
+                             &cert_der) != SECSuccess) {
+      failf(data, ""NSS: CKA_VALUE not found in PK11 generic object"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    cert = PK11_FindCertFromDERCertItem(slot, &cert_der, proto_win);
+    SECITEM_FreeItem(&cert_der, PR_FALSE);
+    if(NULL == cert) {
+      failf(data, ""NSS: client certificate from file not found"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    key = PK11_FindPrivateKeyFromCert(slot, cert, NULL);
+    PK11_FreeSlot(slot);
+    if(NULL == key) {
+      failf(data, ""NSS: private key from file not found"");
+      CERT_DestroyCertificate(cert);
+      return SECFailure;
+    }
+
+    infof(data, ""NSS: client certificate from file\n"");
+    display_cert_info(data, cert);
+
+    *pRetCert = cert;
+    *pRetKey = key;
+    return SECSuccess;
+  }
+
+  /* use the default NSS hook */
+  if(SECSuccess != NSS_GetClientAuthData((void *)nickname, sock, caNames,
+                                          pRetCert, pRetKey)
+      || NULL == *pRetCert) {
+
+    if(NULL == nickname)
+      failf(data, ""NSS: client certificate not found (nickname not ""
+            ""specified)"");
+    else
+      failf(data, ""NSS: client certificate not found: %s"", nickname);
+
+    return SECFailure;
+  }
+
+  /* get certificate nickname if any */
+  nickname = (*pRetCert)->nickname;
+   if(NULL == nickname)
+     nickname = ""[unknown]"";
+ 
+   if(NULL == *pRetKey) {
+     failf(data, ""NSS: private key not found for certificate: %s"", nickname);
+     return SECFailure;
+  }
+
+  infof(data, ""NSS: using client certificate: %s\n"", nickname);
+  display_cert_info(data, *pRetCert);
+  return SECSuccess;
+}
+",C,"  static const char pem_slotname[] = ""PEM Token #1"";
+  if(!strncmp(nickname, pem_slotname, sizeof(pem_slotname) - 1U)) {
+    failf(data, ""NSS: refusing previously loaded certificate from file: %s"",
+          nickname);
+    return SECFailure;
+  }
+
+","    static const char pem_slotname[] = ""PEM Token #1"";
+",,"@@ -1002,10 +1002,10 @@ static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;
+   struct Curl_easy *data = connssl->data;
+   const char *nickname = connssl->client_nickname;
++  static const char pem_slotname[] = ""PEM Token #1"";
+ 
+   if(connssl->obj_clicert) {
+     /* use the cert/key provided by PEM reader */
+-    static const char pem_slotname[] = ""PEM Token #1"";
+     SECItem cert_der = { 0, NULL, 0 };
+     void *proto_win = SSL_RevealPinArg(sock);
+     struct CERTCertificateStr *cert;
+@@ -1067,6 +1067,12 @@ static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+   if(NULL == nickname)
+     nickname = ""[unknown]"";
+ 
++  if(!strncmp(nickname, pem_slotname, sizeof(pem_slotname) - 1U)) {
++    failf(data, ""NSS: refusing previously loaded certificate from file: %s"",
++          nickname);
++    return SECFailure;
++  }
++
+   if(NULL == *pRetKey) {
+     failf(data, ""NSS: private key not found for certificate: %s"", nickname);
+     return SECFailure;",curl,curl-7_50_2~32,822082d8327a41aafa4c6b7696bfcb8b56037cbf,1,"static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+                                  struct CERTDistNamesStr *caNames,
+                                  struct CERTCertificateStr **pRetCert,
+                                  struct SECKEYPrivateKeyStr **pRetKey)
+{
+   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;
+   struct Curl_easy *data = connssl->data;
+   const char *nickname = connssl->client_nickname;
+//fix_flaw_line_below:
+//  static const char pem_slotname[] = ""PEM Token #1"";
+ 
+   if(connssl->obj_clicert) {
+     /* use the cert/key provided by PEM reader */
+//flaw_line_below:
+    static const char pem_slotname[] = ""PEM Token #1"";
+     SECItem cert_der = { 0, NULL, 0 };
+     void *proto_win = SSL_RevealPinArg(sock);
+     struct CERTCertificateStr *cert;
+    struct SECKEYPrivateKeyStr *key;
+
+    PK11SlotInfo *slot = PK11_FindSlotByName(pem_slotname);
+    if(NULL == slot) {
+      failf(data, ""NSS: PK11 slot not found: %s"", pem_slotname);
+      return SECFailure;
+    }
+
+    if(PK11_ReadRawAttribute(PK11_TypeGeneric, connssl->obj_clicert, CKA_VALUE,
+                             &cert_der) != SECSuccess) {
+      failf(data, ""NSS: CKA_VALUE not found in PK11 generic object"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    cert = PK11_FindCertFromDERCertItem(slot, &cert_der, proto_win);
+    SECITEM_FreeItem(&cert_der, PR_FALSE);
+    if(NULL == cert) {
+      failf(data, ""NSS: client certificate from file not found"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    key = PK11_FindPrivateKeyFromCert(slot, cert, NULL);
+    PK11_FreeSlot(slot);
+    if(NULL == key) {
+      failf(data, ""NSS: private key from file not found"");
+      CERT_DestroyCertificate(cert);
+      return SECFailure;
+    }
+
+    infof(data, ""NSS: client certificate from file\n"");
+    display_cert_info(data, cert);
+
+    *pRetCert = cert;
+    *pRetKey = key;
+    return SECSuccess;
+  }
+
+  /* use the default NSS hook */
+  if(SECSuccess != NSS_GetClientAuthData((void *)nickname, sock, caNames,
+                                          pRetCert, pRetKey)
+      || NULL == *pRetCert) {
+
+    if(NULL == nickname)
+      failf(data, ""NSS: client certificate not found (nickname not ""
+            ""specified)"");
+    else
+      failf(data, ""NSS: client certificate not found: %s"", nickname);
+
+    return SECFailure;
+  }
+
+  /* get certificate nickname if any */
+  nickname = (*pRetCert)->nickname;
+   if(NULL == nickname)
+     nickname = ""[unknown]"";
+ 
+//fix_flaw_line_below:
+//  if(!strncmp(nickname, pem_slotname, sizeof(pem_slotname) - 1U)) {
+//fix_flaw_line_below:
+//    failf(data, ""NSS: refusing previously loaded certificate from file: %s"",
+//fix_flaw_line_below:
+//          nickname);
+//fix_flaw_line_below:
+//    return SECFailure;
+//fix_flaw_line_below:
+//  }
+//fix_flaw_line_below:
+//
+   if(NULL == *pRetKey) {
+     failf(data, ""NSS: private key not found for certificate: %s"", nickname);
+     return SECFailure;
+  }
+
+  infof(data, ""NSS: using client certificate: %s\n"", nickname);
+  display_cert_info(data, *pRetCert);
+  return SECSuccess;
+}
+",180117,"static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+                                  struct CERTDistNamesStr *caNames,
+                                  struct CERTCertificateStr **pRetCert,
+                                  struct SECKEYPrivateKeyStr **pRetKey)
+{
+   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;
+   struct Curl_easy *data = connssl->data;
+   const char *nickname = connssl->client_nickname;
+ 
+   if(connssl->obj_clicert) {
+     /* use the cert/key provided by PEM reader */
+    static const char pem_slotname[] = ""PEM Token #1"";
+     SECItem cert_der = { 0, NULL, 0 };
+     void *proto_win = SSL_RevealPinArg(sock);
+     struct CERTCertificateStr *cert;
+    struct SECKEYPrivateKeyStr *key;
+
+    PK11SlotInfo *slot = PK11_FindSlotByName(pem_slotname);
+    if(NULL == slot) {
+      failf(data, ""NSS: PK11 slot not found: %s"", pem_slotname);
+      return SECFailure;
+    }
+
+    if(PK11_ReadRawAttribute(PK11_TypeGeneric, connssl->obj_clicert, CKA_VALUE,
+                             &cert_der) != SECSuccess) {
+      failf(data, ""NSS: CKA_VALUE not found in PK11 generic object"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    cert = PK11_FindCertFromDERCertItem(slot, &cert_der, proto_win);
+    SECITEM_FreeItem(&cert_der, PR_FALSE);
+    if(NULL == cert) {
+      failf(data, ""NSS: client certificate from file not found"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    key = PK11_FindPrivateKeyFromCert(slot, cert, NULL);
+    PK11_FreeSlot(slot);
+    if(NULL == key) {
+      failf(data, ""NSS: private key from file not found"");
+      CERT_DestroyCertificate(cert);
+      return SECFailure;
+    }
+
+    infof(data, ""NSS: client certificate from file\n"");
+    display_cert_info(data, cert);
+
+    *pRetCert = cert;
+    *pRetKey = key;
+    return SECSuccess;
+  }
+
+  /* use the default NSS hook */
+  if(SECSuccess != NSS_GetClientAuthData((void *)nickname, sock, caNames,
+                                          pRetCert, pRetKey)
+      || NULL == *pRetCert) {
+
+    if(NULL == nickname)
+      failf(data, ""NSS: client certificate not found (nickname not ""
+            ""specified)"");
+    else
+      failf(data, ""NSS: client certificate not found: %s"", nickname);
+
+    return SECFailure;
+  }
+
+  /* get certificate nickname if any */
+  nickname = (*pRetCert)->nickname;
+   if(NULL == nickname)
+     nickname = ""[unknown]"";
+ 
+   if(NULL == *pRetKey) {
+     failf(data, ""NSS: private key not found for certificate: %s"", nickname);
+     return SECFailure;
+  }
+
+  infof(data, ""NSS: using client certificate: %s\n"", nickname);
+  display_cert_info(data, *pRetCert);
+  return SECSuccess;
+}
+","static SECStatus SelectClientCert(void *arg, PRFileDesc *sock,
+                                  struct CERTDistNamesStr *caNames,
+                                  struct CERTCertificateStr **pRetCert,
+                                  struct SECKEYPrivateKeyStr **pRetKey)
+{
+   struct ssl_connect_data *connssl = (struct ssl_connect_data *)arg;
+   struct Curl_easy *data = connssl->data;
+   const char *nickname = connssl->client_nickname;
+  static const char pem_slotname[] = ""PEM Token #1"";
+ 
+   if(connssl->obj_clicert) {
+     /* use the cert/key provided by PEM reader */
+     SECItem cert_der = { 0, NULL, 0 };
+     void *proto_win = SSL_RevealPinArg(sock);
+     struct CERTCertificateStr *cert;
+    struct SECKEYPrivateKeyStr *key;
+
+    PK11SlotInfo *slot = PK11_FindSlotByName(pem_slotname);
+    if(NULL == slot) {
+      failf(data, ""NSS: PK11 slot not found: %s"", pem_slotname);
+      return SECFailure;
+    }
+
+    if(PK11_ReadRawAttribute(PK11_TypeGeneric, connssl->obj_clicert, CKA_VALUE,
+                             &cert_der) != SECSuccess) {
+      failf(data, ""NSS: CKA_VALUE not found in PK11 generic object"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    cert = PK11_FindCertFromDERCertItem(slot, &cert_der, proto_win);
+    SECITEM_FreeItem(&cert_der, PR_FALSE);
+    if(NULL == cert) {
+      failf(data, ""NSS: client certificate from file not found"");
+      PK11_FreeSlot(slot);
+      return SECFailure;
+    }
+
+    key = PK11_FindPrivateKeyFromCert(slot, cert, NULL);
+    PK11_FreeSlot(slot);
+    if(NULL == key) {
+      failf(data, ""NSS: private key from file not found"");
+      CERT_DestroyCertificate(cert);
+      return SECFailure;
+    }
+
+    infof(data, ""NSS: client certificate from file\n"");
+    display_cert_info(data, cert);
+
+    *pRetCert = cert;
+    *pRetKey = key;
+    return SECSuccess;
+  }
+
+  /* use the default NSS hook */
+  if(SECSuccess != NSS_GetClientAuthData((void *)nickname, sock, caNames,
+                                          pRetCert, pRetKey)
+      || NULL == *pRetCert) {
+
+    if(NULL == nickname)
+      failf(data, ""NSS: client certificate not found (nickname not ""
+            ""specified)"");
+    else
+      failf(data, ""NSS: client certificate not found: %s"", nickname);
+
+    return SECFailure;
+  }
+
+  /* get certificate nickname if any */
+  nickname = (*pRetCert)->nickname;
+   if(NULL == nickname)
+     nickname = ""[unknown]"";
+ 
+  if(!strncmp(nickname, pem_slotname, sizeof(pem_slotname) - 1U)) {
+    failf(data, ""NSS: refusing previously loaded certificate from file: %s"",
+          nickname);
+    return SECFailure;
+  }
+
+   if(NULL == *pRetKey) {
+     failf(data, ""NSS: private key not found for certificate: %s"", nickname);
+     return SECFailure;
+  }
+
+  infof(data, ""NSS: using client certificate: %s\n"", nickname);
+  display_cert_info(data, *pRetCert);
+  return SECSuccess;
+}
+","The vulnerability in the original code lies in the lack of checks to prevent the reuse of a previously loaded client certificate from the PEM file, which could lead to potential security risks such as certificate misuse. Specifically, the code does not validate if the `nickname` of the certificate being used matches the `pem_slotname`, allowing an attacker to exploit this by forcing the use of a known certificate. The fixed code addresses this vulnerability by adding a check using `strncmp` to compare the `nickname` with `pem_slotname`. If they match, the function fails with an appropriate error message, thus preventing the reuse of the certificate.","The vulnerability in the original code stems from the lack of safeguards against reusing a previously loaded client certificate, which could lead to unauthorized access or misuse of sensitive data. This oversight allows an attacker to exploit the system by forcing the use of a known certificate, compromising the integrity of the authentication process. The revised code mitigates this risk by implementing a check that compares the certificate's nickname with the name of the previously loaded certificate. If a match is found, the function fails, effectively preventing the reuse of potentially compromised certificates and enhancing overall security.",4,4,4,2
+2,2,181985,181985,,Remote,Not required,Partial,CVE-2016-7145,https://www.cvedetails.com/cve/CVE-2016-7145/,CWE-287,Low,Partial,Partial,,2017-03-07,7.5,The m_authenticate function in ircd/m_authenticate.c in nefarious2 allows remote attackers to spoof certificate fingerprints and consequently log in as another user via a crafted AUTHENTICATE parameter.,2017-03-08,,4,https://github.com/evilnet/nefarious2/commit/f50a84bad996d438e7b31b9e74c32a41e43f8be5,f50a84bad996d438e7b31b9e74c32a41e43f8be5,Fix to prevent SASL security vulnerability,0,ircd/m_authenticate.c,"{""sha"": ""f8960bd54da617d368a6e9d634d72f613780db6c"", ""filename"": ""ircd/m_authenticate.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/evilnet/nefarious2/blob/f50a84bad996d438e7b31b9e74c32a41e43f8be5/ircd/m_authenticate.c"", ""raw_url"": ""https://github.com/evilnet/nefarious2/raw/f50a84bad996d438e7b31b9e74c32a41e43f8be5/ircd/m_authenticate.c"", ""contents_url"": ""https://api.github.com/repos/evilnet/nefarious2/contents/ircd/m_authenticate.c?ref=f50a84bad996d438e7b31b9e74c32a41e43f8be5"", ""patch"": ""@@ -150,6 +150,8 @@ int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* par\n \n   if (acptr) {\n     if (first) {\n+      if (*parv[1] == ':' || strchr(parv[1], ' '))\n+\t\treturn exit_client(cptr, sptr, sptr, \""Malformed AUTHENTICATE\"");\n       if (!EmptyString(cli_sslclifp(cptr)))\n         sendcmdto_one(&me, CMD_SASL, acptr, \""%C %C!%u.%u S %s :%s\"", acptr, &me,\n                       cli_fd(cptr), cli_saslcookie(cptr),\n@@ -167,6 +169,8 @@ int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* par\n     }\n   } else {\n     if (first) {\n+      if (*parv[1] == ':' || strchr(parv[1], ' '))\n+        return exit_client(cptr, sptr, sptr, \""Malformed AUTHENTICATE\"");\n       if (!EmptyString(cli_sslclifp(cptr)))\n         sendcmdto_serv_butone(&me, CMD_SASL, cptr, \""* %C!%u.%u S %s :%s\"", &me,\n                               cli_fd(cptr), cli_saslcookie(cptr),""}","int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  struct Client* acptr;
+  int first = 0;
+  char realhost[HOSTLEN + 3];
+  char *hoststr = (cli_sockhost(cptr) ? cli_sockhost(cptr) : cli_sock_ip(cptr));
+
+  if (!CapActive(cptr, CAP_SASL))
+    return 0;
+
+  if (parc < 2) /* have enough parameters? */
+    return need_more_params(cptr, ""AUTHENTICATE"");
+
+  if (strlen(parv[1]) > 400)
+    return send_reply(cptr, ERR_SASLTOOLONG);
+
+  if (IsSASLComplete(cptr))
+    return send_reply(cptr, ERR_SASLALREADY);
+
+  /* Look up the target server */
+  if (!(acptr = cli_saslagent(cptr))) {
+    if (strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+      acptr = find_match_server((char *)feature_str(FEAT_SASL_SERVER));
+    else
+      acptr = NULL;
+  }
+
+  if (!acptr && strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+    return send_reply(cptr, ERR_SASLFAIL, "": service unavailable"");
+
+  /* If it's to us, do nothing; otherwise, forward the query */
+  if (acptr && IsMe(acptr))
+    return 0;
+
+  /* Generate an SASL session cookie if not already generated */
+  if (!cli_saslcookie(cptr)) {
+    do {
+      cli_saslcookie(cptr) = ircrandom() & 0x7fffffff;
+    } while (!cli_saslcookie(cptr));
+    first = 1;
+  }
+
+  if (strchr(hoststr, ':') != NULL)
+    ircd_snprintf(0, realhost, sizeof(realhost), ""[%s]"", hoststr);
+  else
+    ircd_strncpy(realhost, hoststr, sizeof(realhost));
+ 
+   if (acptr) {
+     if (first) {
+      if (*parv[1] == ':' || strchr(parv[1], ' '))
+		return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S %s :%s"", acptr, &me,
+                       cli_fd(cptr), cli_saslcookie(cptr),
+                      parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S :%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u H :%s@%s:%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                      realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u C :%s"", acptr, &me,
+                    cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+     }
+   } else {
+     if (first) {
+      if (*parv[1] == ':' || strchr(parv[1], ' '))
+        return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S %s :%s"", &me,
+                               cli_fd(cptr), cli_saslcookie(cptr),
+                              parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S :%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u H :%s@%s:%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                              realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u C :%s"", &me,
+                            cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+    }
+  }
+
+  if (!t_active(&cli_sasltimeout(cptr)))
+    timer_add(timer_init(&cli_sasltimeout(cptr)), sasl_timeout_callback, (void*) cptr,
+              TT_RELATIVE, feature_int(FEAT_SASL_TIMEOUT));
+
+  return 0;
+}
+","int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  struct Client* acptr;
+  int first = 0;
+  char realhost[HOSTLEN + 3];
+  char *hoststr = (cli_sockhost(cptr) ? cli_sockhost(cptr) : cli_sock_ip(cptr));
+
+  if (!CapActive(cptr, CAP_SASL))
+    return 0;
+
+  if (parc < 2) /* have enough parameters? */
+    return need_more_params(cptr, ""AUTHENTICATE"");
+
+  if (strlen(parv[1]) > 400)
+    return send_reply(cptr, ERR_SASLTOOLONG);
+
+  if (IsSASLComplete(cptr))
+    return send_reply(cptr, ERR_SASLALREADY);
+
+  /* Look up the target server */
+  if (!(acptr = cli_saslagent(cptr))) {
+    if (strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+      acptr = find_match_server((char *)feature_str(FEAT_SASL_SERVER));
+    else
+      acptr = NULL;
+  }
+
+  if (!acptr && strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+    return send_reply(cptr, ERR_SASLFAIL, "": service unavailable"");
+
+  /* If it's to us, do nothing; otherwise, forward the query */
+  if (acptr && IsMe(acptr))
+    return 0;
+
+  /* Generate an SASL session cookie if not already generated */
+  if (!cli_saslcookie(cptr)) {
+    do {
+      cli_saslcookie(cptr) = ircrandom() & 0x7fffffff;
+    } while (!cli_saslcookie(cptr));
+    first = 1;
+  }
+
+  if (strchr(hoststr, ':') != NULL)
+    ircd_snprintf(0, realhost, sizeof(realhost), ""[%s]"", hoststr);
+  else
+    ircd_strncpy(realhost, hoststr, sizeof(realhost));
+ 
+   if (acptr) {
+     if (first) {
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S %s :%s"", acptr, &me,
+                       cli_fd(cptr), cli_saslcookie(cptr),
+                      parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S :%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u H :%s@%s:%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                      realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u C :%s"", acptr, &me,
+                    cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+     }
+   } else {
+     if (first) {
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S %s :%s"", &me,
+                               cli_fd(cptr), cli_saslcookie(cptr),
+                              parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S :%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u H :%s@%s:%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                              realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u C :%s"", &me,
+                            cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+    }
+  }
+
+  if (!t_active(&cli_sasltimeout(cptr)))
+    timer_add(timer_init(&cli_sasltimeout(cptr)), sasl_timeout_callback, (void*) cptr,
+              TT_RELATIVE, feature_int(FEAT_SASL_TIMEOUT));
+
+  return 0;
+}
+",C,"      if (*parv[1] == ':' || strchr(parv[1], ' '))
+		return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+      if (*parv[1] == ':' || strchr(parv[1], ' '))
+        return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+",,,"@@ -150,6 +150,8 @@ int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* par
+ 
+   if (acptr) {
+     if (first) {
++      if (*parv[1] == ':' || strchr(parv[1], ' '))
++		return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S %s :%s"", acptr, &me,
+                       cli_fd(cptr), cli_saslcookie(cptr),
+@@ -167,6 +169,8 @@ int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* par
+     }
+   } else {
+     if (first) {
++      if (*parv[1] == ':' || strchr(parv[1], ' '))
++        return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S %s :%s"", &me,
+                               cli_fd(cptr), cli_saslcookie(cptr),",nefarious2,f50a84bad996d438e7b31b9e74c32a41e43f8be5,656d86a61249fa4411d73c8d2d7cf9deccc97cec,1,"int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  struct Client* acptr;
+  int first = 0;
+  char realhost[HOSTLEN + 3];
+  char *hoststr = (cli_sockhost(cptr) ? cli_sockhost(cptr) : cli_sock_ip(cptr));
+
+  if (!CapActive(cptr, CAP_SASL))
+    return 0;
+
+  if (parc < 2) /* have enough parameters? */
+    return need_more_params(cptr, ""AUTHENTICATE"");
+
+  if (strlen(parv[1]) > 400)
+    return send_reply(cptr, ERR_SASLTOOLONG);
+
+  if (IsSASLComplete(cptr))
+    return send_reply(cptr, ERR_SASLALREADY);
+
+  /* Look up the target server */
+  if (!(acptr = cli_saslagent(cptr))) {
+    if (strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+      acptr = find_match_server((char *)feature_str(FEAT_SASL_SERVER));
+    else
+      acptr = NULL;
+  }
+
+  if (!acptr && strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+    return send_reply(cptr, ERR_SASLFAIL, "": service unavailable"");
+
+  /* If it's to us, do nothing; otherwise, forward the query */
+  if (acptr && IsMe(acptr))
+    return 0;
+
+  /* Generate an SASL session cookie if not already generated */
+  if (!cli_saslcookie(cptr)) {
+    do {
+      cli_saslcookie(cptr) = ircrandom() & 0x7fffffff;
+    } while (!cli_saslcookie(cptr));
+    first = 1;
+  }
+
+  if (strchr(hoststr, ':') != NULL)
+    ircd_snprintf(0, realhost, sizeof(realhost), ""[%s]"", hoststr);
+  else
+    ircd_strncpy(realhost, hoststr, sizeof(realhost));
+ 
+   if (acptr) {
+     if (first) {
+//fix_flaw_line_below:
+//      if (*parv[1] == ':' || strchr(parv[1], ' '))
+//fix_flaw_line_below:
+//		return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S %s :%s"", acptr, &me,
+                       cli_fd(cptr), cli_saslcookie(cptr),
+                      parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S :%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u H :%s@%s:%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                      realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u C :%s"", acptr, &me,
+                    cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+     }
+   } else {
+     if (first) {
+//fix_flaw_line_below:
+//      if (*parv[1] == ':' || strchr(parv[1], ' '))
+//fix_flaw_line_below:
+//        return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S %s :%s"", &me,
+                               cli_fd(cptr), cli_saslcookie(cptr),
+                              parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S :%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u H :%s@%s:%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                              realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u C :%s"", &me,
+                            cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+    }
+  }
+
+  if (!t_active(&cli_sasltimeout(cptr)))
+    timer_add(timer_init(&cli_sasltimeout(cptr)), sasl_timeout_callback, (void*) cptr,
+              TT_RELATIVE, feature_int(FEAT_SASL_TIMEOUT));
+
+  return 0;
+}
+",181985,"int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  struct Client* acptr;
+  int first = 0;
+  char realhost[HOSTLEN + 3];
+  char *hoststr = (cli_sockhost(cptr) ? cli_sockhost(cptr) : cli_sock_ip(cptr));
+
+  if (!CapActive(cptr, CAP_SASL))
+    return 0;
+
+  if (parc < 2) /* have enough parameters? */
+    return need_more_params(cptr, ""AUTHENTICATE"");
+
+  if (strlen(parv[1]) > 400)
+    return send_reply(cptr, ERR_SASLTOOLONG);
+
+  if (IsSASLComplete(cptr))
+    return send_reply(cptr, ERR_SASLALREADY);
+
+  /* Look up the target server */
+  if (!(acptr = cli_saslagent(cptr))) {
+    if (strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+      acptr = find_match_server((char *)feature_str(FEAT_SASL_SERVER));
+    else
+      acptr = NULL;
+  }
+
+  if (!acptr && strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+    return send_reply(cptr, ERR_SASLFAIL, "": service unavailable"");
+
+  /* If it's to us, do nothing; otherwise, forward the query */
+  if (acptr && IsMe(acptr))
+    return 0;
+
+  /* Generate an SASL session cookie if not already generated */
+  if (!cli_saslcookie(cptr)) {
+    do {
+      cli_saslcookie(cptr) = ircrandom() & 0x7fffffff;
+    } while (!cli_saslcookie(cptr));
+    first = 1;
+  }
+
+  if (strchr(hoststr, ':') != NULL)
+    ircd_snprintf(0, realhost, sizeof(realhost), ""[%s]"", hoststr);
+  else
+    ircd_strncpy(realhost, hoststr, sizeof(realhost));
+ 
+   if (acptr) {
+     if (first) {
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S %s :%s"", acptr, &me,
+                       cli_fd(cptr), cli_saslcookie(cptr),
+                      parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S :%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u H :%s@%s:%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                      realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u C :%s"", acptr, &me,
+                    cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+     }
+   } else {
+     if (first) {
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S %s :%s"", &me,
+                               cli_fd(cptr), cli_saslcookie(cptr),
+                              parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S :%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u H :%s@%s:%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                              realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u C :%s"", &me,
+                            cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+    }
+  }
+
+  if (!t_active(&cli_sasltimeout(cptr)))
+    timer_add(timer_init(&cli_sasltimeout(cptr)), sasl_timeout_callback, (void*) cptr,
+              TT_RELATIVE, feature_int(FEAT_SASL_TIMEOUT));
+
+  return 0;
+}
+","int m_authenticate(struct Client* cptr, struct Client* sptr, int parc, char* parv[])
+{
+  struct Client* acptr;
+  int first = 0;
+  char realhost[HOSTLEN + 3];
+  char *hoststr = (cli_sockhost(cptr) ? cli_sockhost(cptr) : cli_sock_ip(cptr));
+
+  if (!CapActive(cptr, CAP_SASL))
+    return 0;
+
+  if (parc < 2) /* have enough parameters? */
+    return need_more_params(cptr, ""AUTHENTICATE"");
+
+  if (strlen(parv[1]) > 400)
+    return send_reply(cptr, ERR_SASLTOOLONG);
+
+  if (IsSASLComplete(cptr))
+    return send_reply(cptr, ERR_SASLALREADY);
+
+  /* Look up the target server */
+  if (!(acptr = cli_saslagent(cptr))) {
+    if (strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+      acptr = find_match_server((char *)feature_str(FEAT_SASL_SERVER));
+    else
+      acptr = NULL;
+  }
+
+  if (!acptr && strcmp(feature_str(FEAT_SASL_SERVER), ""*""))
+    return send_reply(cptr, ERR_SASLFAIL, "": service unavailable"");
+
+  /* If it's to us, do nothing; otherwise, forward the query */
+  if (acptr && IsMe(acptr))
+    return 0;
+
+  /* Generate an SASL session cookie if not already generated */
+  if (!cli_saslcookie(cptr)) {
+    do {
+      cli_saslcookie(cptr) = ircrandom() & 0x7fffffff;
+    } while (!cli_saslcookie(cptr));
+    first = 1;
+  }
+
+  if (strchr(hoststr, ':') != NULL)
+    ircd_snprintf(0, realhost, sizeof(realhost), ""[%s]"", hoststr);
+  else
+    ircd_strncpy(realhost, hoststr, sizeof(realhost));
+ 
+   if (acptr) {
+     if (first) {
+      if (*parv[1] == ':' || strchr(parv[1], ' '))
+		return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S %s :%s"", acptr, &me,
+                       cli_fd(cptr), cli_saslcookie(cptr),
+                      parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u S :%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u H :%s@%s:%s"", acptr, &me,
+                      cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                      realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_one(&me, CMD_SASL, acptr, ""%C %C!%u.%u C :%s"", acptr, &me,
+                    cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+     }
+   } else {
+     if (first) {
+      if (*parv[1] == ':' || strchr(parv[1], ' '))
+        return exit_client(cptr, sptr, sptr, ""Malformed AUTHENTICATE"");
+       if (!EmptyString(cli_sslclifp(cptr)))
+         sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S %s :%s"", &me,
+                               cli_fd(cptr), cli_saslcookie(cptr),
+                              parv[1], cli_sslclifp(cptr));
+      else
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u S :%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+      if (feature_bool(FEAT_SASL_SENDHOST))
+        sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u H :%s@%s:%s"", &me,
+                              cli_fd(cptr), cli_saslcookie(cptr), cli_username(cptr),
+                              realhost, cli_sock_ip(cptr));
+    } else {
+      sendcmdto_serv_butone(&me, CMD_SASL, cptr, ""* %C!%u.%u C :%s"", &me,
+                            cli_fd(cptr), cli_saslcookie(cptr), parv[1]);
+    }
+  }
+
+  if (!t_active(&cli_sasltimeout(cptr)))
+    timer_add(timer_init(&cli_sasltimeout(cptr)), sasl_timeout_callback, (void*) cptr,
+              TT_RELATIVE, feature_int(FEAT_SASL_TIMEOUT));
+
+  return 0;
+}
+","The vulnerability in the original code lies in the lack of validation for the `parv[1]` input, which could allow an attacker to inject malicious data, such as control characters or spaces, leading to potential command injection or malformed requests. Specifically, the absence of checks before using `parv[1]` in commands like `sendcmdto_one` and `sendcmdto_serv_butone` could compromise the integrity of the server. The fixed code addresses this vulnerability by adding a validation check: `if (*parv[1] == ':' || strchr(parv[1], ' '))`, which ensures that `parv[1]` does not contain invalid characters before proceeding with the authentication process.","The vulnerability in the original code stems from inadequate input validation, allowing potentially malicious data to be processed without checks. This oversight could lead to command injection or malformed requests, compromising the server's security and integrity. Attackers could exploit this by sending specially crafted input that the system would execute, resulting in unintended behavior. The fixed code addresses this issue by implementing a validation step that checks the input for invalid characters before it is used in critical operations. This ensures that only properly formatted data is processed, thereby enhancing the overall security of the authentication mechanism.",4,5,4,4
+3,3,181986,181986,,Remote,Not required,Partial,CVE-2016-7144,https://www.cvedetails.com/cve/CVE-2016-7144/,CWE-287,Medium,Partial,Partial,,2017-01-18,6.8,The m_authenticate function in modules/m_sasl.c in UnrealIRCd before 3.2.10.7 and 4.x before 4.0.6 allows remote attackers to spoof certificate fingerprints and consequently log in as another user via a crafted AUTHENTICATE parameter.,2017-01-20,,6,https://github.com/unrealircd/unrealircd/commit/f473e355e1dc422c4f019dbf86bc50ba1a34a766,f473e355e1dc422c4f019dbf86bc50ba1a34a766,Fix AUTHENTICATE bug,0,src/modules/m_sasl.c,"{""sha"": ""b53818a96ff59c082a777cb43a316c9dc350930a"", ""filename"": ""src/modules/m_sasl.c"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 0, ""changes"": 6, ""blob_url"": ""https://github.com/unrealircd/unrealircd/blob/f473e355e1dc422c4f019dbf86bc50ba1a34a766/src/modules/m_sasl.c"", ""raw_url"": ""https://github.com/unrealircd/unrealircd/raw/f473e355e1dc422c4f019dbf86bc50ba1a34a766/src/modules/m_sasl.c"", ""contents_url"": ""https://api.github.com/repos/unrealircd/unrealircd/contents/src/modules/m_sasl.c?ref=f473e355e1dc422c4f019dbf86bc50ba1a34a766"", ""patch"": ""@@ -230,6 +230,12 @@ CMD_FUNC(m_authenticate)\n \t\treturn 0;\n \t}\n \n+\tif ((parv[1][0] == ':') || strchr(parv[1], ' '))\n+\t{\n+\t\tsendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), me.name, \""*\"", \""AUTHENTICATE\"", \""Invalid parameter\"");\n+\t\treturn 0;\n+\t}\n+\n \tif (strlen(parv[1]) > 400)\n \t{\n \t\tsendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? \""*\"" : sptr->name);""}","CMD_FUNC(m_authenticate)
+{
+	aClient *agent_p = NULL;
+
+	/* Failing to use CAP REQ for sasl is a protocol violation. */
+	if (!SASL_SERVER || !MyConnect(sptr) || BadPtr(parv[1]) || !CHECKPROTO(sptr, PROTO_SASL))
+		return 0;
+
+	if (sptr->local->sasl_complete)
+	{
+		sendto_one(sptr, err_str(ERR_SASLALREADY), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+ 		return 0;
+ 	}
+ 
+	if ((parv[1][0] == ':') || strchr(parv[1], ' '))
+	{
+		sendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), me.name, ""*"", ""AUTHENTICATE"", ""Invalid parameter"");
+		return 0;
+	}
+
+ 	if (strlen(parv[1]) > 400)
+ 	{
+ 		sendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+		return 0;
+	}
+
+	if (*sptr->local->sasl_agent)
+		agent_p = find_client(sptr->local->sasl_agent, NULL);
+
+	if (agent_p == NULL)
+	{
+		char *addr = BadPtr(sptr->ip) ? ""0"" : sptr->ip;
+		char *certfp = moddata_client_get(sptr, ""certfp"");
+
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s H %s %s"",
+		    me.name, SASL_SERVER, encode_puid(sptr), addr, addr);
+
+		if (certfp)
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1], certfp);
+		else
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1]);
+	}
+	else
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s C %s"",
+		    me.name, AGENT_SID(agent_p), encode_puid(sptr), parv[1]);
+
+	sptr->local->sasl_out++;
+
+	return 0;
+}
+","CMD_FUNC(m_authenticate)
+{
+	aClient *agent_p = NULL;
+
+	/* Failing to use CAP REQ for sasl is a protocol violation. */
+	if (!SASL_SERVER || !MyConnect(sptr) || BadPtr(parv[1]) || !CHECKPROTO(sptr, PROTO_SASL))
+		return 0;
+
+	if (sptr->local->sasl_complete)
+	{
+		sendto_one(sptr, err_str(ERR_SASLALREADY), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+ 		return 0;
+ 	}
+ 
+ 	if (strlen(parv[1]) > 400)
+ 	{
+ 		sendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+		return 0;
+	}
+
+	if (*sptr->local->sasl_agent)
+		agent_p = find_client(sptr->local->sasl_agent, NULL);
+
+	if (agent_p == NULL)
+	{
+		char *addr = BadPtr(sptr->ip) ? ""0"" : sptr->ip;
+		char *certfp = moddata_client_get(sptr, ""certfp"");
+
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s H %s %s"",
+		    me.name, SASL_SERVER, encode_puid(sptr), addr, addr);
+
+		if (certfp)
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1], certfp);
+		else
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1]);
+	}
+	else
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s C %s"",
+		    me.name, AGENT_SID(agent_p), encode_puid(sptr), parv[1]);
+
+	sptr->local->sasl_out++;
+
+	return 0;
+}
+",C,"	if ((parv[1][0] == ':') || strchr(parv[1], ' '))
+	{
+		sendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), me.name, ""*"", ""AUTHENTICATE"", ""Invalid parameter"");
+		return 0;
+	}
+
+",,,"@@ -230,6 +230,12 @@ CMD_FUNC(m_authenticate)
+ 		return 0;
+ 	}
+ 
++	if ((parv[1][0] == ':') || strchr(parv[1], ' '))
++	{
++		sendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), me.name, ""*"", ""AUTHENTICATE"", ""Invalid parameter"");
++		return 0;
++	}
++
+ 	if (strlen(parv[1]) > 400)
+ 	{
+ 		sendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);",unrealircd,f473e355e1dc422c4f019dbf86bc50ba1a34a766,ae0fc98a04fce80e5b940617b9b3f5e43daa2dba,1,"CMD_FUNC(m_authenticate)
+{
+	aClient *agent_p = NULL;
+
+	/* Failing to use CAP REQ for sasl is a protocol violation. */
+	if (!SASL_SERVER || !MyConnect(sptr) || BadPtr(parv[1]) || !CHECKPROTO(sptr, PROTO_SASL))
+		return 0;
+
+	if (sptr->local->sasl_complete)
+	{
+		sendto_one(sptr, err_str(ERR_SASLALREADY), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+ 		return 0;
+ 	}
+ 
+//fix_flaw_line_below:
+//	if ((parv[1][0] == ':') || strchr(parv[1], ' '))
+//fix_flaw_line_below:
+//	{
+//fix_flaw_line_below:
+//		sendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), me.name, ""*"", ""AUTHENTICATE"", ""Invalid parameter"");
+//fix_flaw_line_below:
+//		return 0;
+//fix_flaw_line_below:
+//	}
+//fix_flaw_line_below:
+//
+ 	if (strlen(parv[1]) > 400)
+ 	{
+ 		sendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+		return 0;
+	}
+
+	if (*sptr->local->sasl_agent)
+		agent_p = find_client(sptr->local->sasl_agent, NULL);
+
+	if (agent_p == NULL)
+	{
+		char *addr = BadPtr(sptr->ip) ? ""0"" : sptr->ip;
+		char *certfp = moddata_client_get(sptr, ""certfp"");
+
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s H %s %s"",
+		    me.name, SASL_SERVER, encode_puid(sptr), addr, addr);
+
+		if (certfp)
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1], certfp);
+		else
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1]);
+	}
+	else
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s C %s"",
+		    me.name, AGENT_SID(agent_p), encode_puid(sptr), parv[1]);
+
+	sptr->local->sasl_out++;
+
+	return 0;
+}
+",181986,"CMD_FUNC(m_authenticate)
+{
+	aClient *agent_p = NULL;
+
+	/* Failing to use CAP REQ for sasl is a protocol violation. */
+	if (!SASL_SERVER || !MyConnect(sptr) || BadPtr(parv[1]) || !CHECKPROTO(sptr, PROTO_SASL))
+		return 0;
+
+	if (sptr->local->sasl_complete)
+	{
+		sendto_one(sptr, err_str(ERR_SASLALREADY), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+ 		return 0;
+ 	}
+ 
+ 	if (strlen(parv[1]) > 400)
+ 	{
+ 		sendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+		return 0;
+	}
+
+	if (*sptr->local->sasl_agent)
+		agent_p = find_client(sptr->local->sasl_agent, NULL);
+
+	if (agent_p == NULL)
+	{
+		char *addr = BadPtr(sptr->ip) ? ""0"" : sptr->ip;
+		char *certfp = moddata_client_get(sptr, ""certfp"");
+
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s H %s %s"",
+		    me.name, SASL_SERVER, encode_puid(sptr), addr, addr);
+
+		if (certfp)
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1], certfp);
+		else
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1]);
+	}
+	else
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s C %s"",
+		    me.name, AGENT_SID(agent_p), encode_puid(sptr), parv[1]);
+
+	sptr->local->sasl_out++;
+
+	return 0;
+}
+","CMD_FUNC(m_authenticate)
+{
+	aClient *agent_p = NULL;
+
+	/* Failing to use CAP REQ for sasl is a protocol violation. */
+	if (!SASL_SERVER || !MyConnect(sptr) || BadPtr(parv[1]) || !CHECKPROTO(sptr, PROTO_SASL))
+		return 0;
+
+	if (sptr->local->sasl_complete)
+	{
+		sendto_one(sptr, err_str(ERR_SASLALREADY), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+ 		return 0;
+ 	}
+ 
+	if ((parv[1][0] == ':') || strchr(parv[1], ' '))
+	{
+		sendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), me.name, ""*"", ""AUTHENTICATE"", ""Invalid parameter"");
+		return 0;
+	}
+
+ 	if (strlen(parv[1]) > 400)
+ 	{
+ 		sendto_one(sptr, err_str(ERR_SASLTOOLONG), me.name, BadPtr(sptr->name) ? ""*"" : sptr->name);
+		return 0;
+	}
+
+	if (*sptr->local->sasl_agent)
+		agent_p = find_client(sptr->local->sasl_agent, NULL);
+
+	if (agent_p == NULL)
+	{
+		char *addr = BadPtr(sptr->ip) ? ""0"" : sptr->ip;
+		char *certfp = moddata_client_get(sptr, ""certfp"");
+
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s H %s %s"",
+		    me.name, SASL_SERVER, encode_puid(sptr), addr, addr);
+
+		if (certfp)
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1], certfp);
+		else
+			sendto_server(NULL, 0, 0, "":%s SASL %s %s S %s"",
+			    me.name, SASL_SERVER, encode_puid(sptr), parv[1]);
+	}
+	else
+		sendto_server(NULL, 0, 0, "":%s SASL %s %s C %s"",
+		    me.name, AGENT_SID(agent_p), encode_puid(sptr), parv[1]);
+
+	sptr->local->sasl_out++;
+
+	return 0;
+}
+","The vulnerability in the original code lies in the lack of validation for the `parv[1]` input, which could allow an attacker to inject malicious commands by including a colon (`:`) or spaces, potentially leading to command injection or unexpected behavior. The fixed code addresses this vulnerability by adding a check that verifies if `parv[1]` starts with a colon or contains spaces. If either condition is true, it sends an error message using `sendto_one(sptr, err_str(ERR_CANNOTDOCOMMAND), ...)`, effectively preventing the execution of invalid or harmful commands and enhancing the overall security of the authentication process.","The vulnerability in the original code stems from inadequate input validation, allowing an attacker to manipulate the input to include special characters or spaces, which could lead to command injection or unintended behavior. This oversight could compromise the integrity of the authentication process, as malicious inputs might be processed without proper checks. The revised code mitigates this risk by implementing a validation step that checks for specific invalid characters in the input. If such characters are detected, an error message is sent, effectively blocking the execution of potentially harmful commands and enhancing the security of the system.",2,5,4,2
+4,4,182043,182043,,Remote,Not required,Partial,CVE-2015-6817,https://www.cvedetails.com/cve/CVE-2015-6817/,CWE-287,Medium,Partial,Partial,,2017-05-23,6.8,"PgBouncer 1.6.x before 1.6.1, when configured with auth_user, allows remote attackers to gain login access as auth_user via an unknown username.",2017-06-06,,0,https://github.com/pgbouncer/pgbouncer/commit/7ca3e5279d05fceb1e8a043c6f5b6f58dea3ed38,7ca3e5279d05fceb1e8a043c6f5b6f58dea3ed38,"Remove too early set of auth_user
+
+When query returns 0 rows (user not found),
+this user stays as login user...
+
+Should fix #69.",1,src/client.c,"{""sha"": ""2b01ff2ccdb45089055fa35d22f79ffa17f4761e"", ""filename"": ""src/client.c"", ""status"": ""modified"", ""additions"": 0, ""deletions"": 1, ""changes"": 1, ""blob_url"": ""https://github.com/pgbouncer/pgbouncer/blob/7ca3e5279d05fceb1e8a043c6f5b6f58dea3ed38/src/client.c"", ""raw_url"": ""https://github.com/pgbouncer/pgbouncer/raw/7ca3e5279d05fceb1e8a043c6f5b6f58dea3ed38/src/client.c"", ""contents_url"": ""https://api.github.com/repos/pgbouncer/pgbouncer/contents/src/client.c?ref=7ca3e5279d05fceb1e8a043c6f5b6f58dea3ed38"", ""patch"": ""@@ -83,7 +83,6 @@ static void start_auth_request(PgSocket *client, const char *username)\n \tint res;\n \tPktBuf *buf;\n \n-\tclient->auth_user = client->db->auth_user;\n \t/* have to fetch user info from db */\n \tclient->pool = get_pool(client->db, client->db->auth_user);\n \tif (!find_server(client)) {""}","static void start_auth_request(PgSocket *client, const char *username)
+{
+ 	int res;
+ 	PktBuf *buf;
+ 
+ 	/* have to fetch user info from db */
+ 	client->pool = get_pool(client->db, client->db->auth_user);
+ 	if (!find_server(client)) {
+		client->wait_for_user_conn = true;
+		return;
+	}
+	slog_noise(client, ""Doing auth_conn query"");
+	client->wait_for_user_conn = false;
+	client->wait_for_user = true;
+	if (!sbuf_pause(&client->sbuf)) {
+		release_server(client->link);
+		disconnect_client(client, true, ""pause failed"");
+		return;
+	}
+	client->link->ready = 0;
+
+	res = 0;
+	buf = pktbuf_dynamic(512);
+	if (buf) {
+		pktbuf_write_ExtQuery(buf, cf_auth_query, 1, username);
+		res = pktbuf_send_immediate(buf, client->link);
+		pktbuf_free(buf);
+		/*
+		 * Should do instead:
+		 *   res = pktbuf_send_queued(buf, client->link);
+		 * but that needs better integration with SBuf.
+		 */
+	}
+	if (!res)
+		disconnect_server(client->link, false, ""unable to send login query"");
+}
+","static void start_auth_request(PgSocket *client, const char *username)
+{
+ 	int res;
+ 	PktBuf *buf;
+ 
+	client->auth_user = client->db->auth_user;
+ 	/* have to fetch user info from db */
+ 	client->pool = get_pool(client->db, client->db->auth_user);
+ 	if (!find_server(client)) {
+		client->wait_for_user_conn = true;
+		return;
+	}
+	slog_noise(client, ""Doing auth_conn query"");
+	client->wait_for_user_conn = false;
+	client->wait_for_user = true;
+	if (!sbuf_pause(&client->sbuf)) {
+		release_server(client->link);
+		disconnect_client(client, true, ""pause failed"");
+		return;
+	}
+	client->link->ready = 0;
+
+	res = 0;
+	buf = pktbuf_dynamic(512);
+	if (buf) {
+		pktbuf_write_ExtQuery(buf, cf_auth_query, 1, username);
+		res = pktbuf_send_immediate(buf, client->link);
+		pktbuf_free(buf);
+		/*
+		 * Should do instead:
+		 *   res = pktbuf_send_queued(buf, client->link);
+		 * but that needs better integration with SBuf.
+		 */
+	}
+	if (!res)
+		disconnect_server(client->link, false, ""unable to send login query"");
+}
+",C,,"	client->auth_user = client->db->auth_user;
+",,"@@ -83,7 +83,6 @@ static void start_auth_request(PgSocket *client, const char *username)
+ 	int res;
+ 	PktBuf *buf;
+ 
+-	client->auth_user = client->db->auth_user;
+ 	/* have to fetch user info from db */
+ 	client->pool = get_pool(client->db, client->db->auth_user);
+ 	if (!find_server(client)) {",pgbouncer,7ca3e5279d05fceb1e8a043c6f5b6f58dea3ed38,86db13075cd60ee59719137e67a9ab3a88cfad1a,1,"static void start_auth_request(PgSocket *client, const char *username)
+{
+ 	int res;
+ 	PktBuf *buf;
+ 
+//flaw_line_below:
+	client->auth_user = client->db->auth_user;
+ 	/* have to fetch user info from db */
+ 	client->pool = get_pool(client->db, client->db->auth_user);
+ 	if (!find_server(client)) {
+		client->wait_for_user_conn = true;
+		return;
+	}
+	slog_noise(client, ""Doing auth_conn query"");
+	client->wait_for_user_conn = false;
+	client->wait_for_user = true;
+	if (!sbuf_pause(&client->sbuf)) {
+		release_server(client->link);
+		disconnect_client(client, true, ""pause failed"");
+		return;
+	}
+	client->link->ready = 0;
+
+	res = 0;
+	buf = pktbuf_dynamic(512);
+	if (buf) {
+		pktbuf_write_ExtQuery(buf, cf_auth_query, 1, username);
+		res = pktbuf_send_immediate(buf, client->link);
+		pktbuf_free(buf);
+		/*
+		 * Should do instead:
+		 *   res = pktbuf_send_queued(buf, client->link);
+		 * but that needs better integration with SBuf.
+		 */
+	}
+	if (!res)
+		disconnect_server(client->link, false, ""unable to send login query"");
+}
+",182043,"static void start_auth_request(PgSocket *client, const char *username)
+{
+ 	int res;
+ 	PktBuf *buf;
+ 
+	client->auth_user = client->db->auth_user;
+ 	/* have to fetch user info from db */
+ 	client->pool = get_pool(client->db, client->db->auth_user);
+ 	if (!find_server(client)) {
+		client->wait_for_user_conn = true;
+		return;
+	}
+	slog_noise(client, ""Doing auth_conn query"");
+	client->wait_for_user_conn = false;
+	client->wait_for_user = true;
+	if (!sbuf_pause(&client->sbuf)) {
+		release_server(client->link);
+		disconnect_client(client, true, ""pause failed"");
+		return;
+	}
+	client->link->ready = 0;
+
+	res = 0;
+	buf = pktbuf_dynamic(512);
+	if (buf) {
+		pktbuf_write_ExtQuery(buf, cf_auth_query, 1, username);
+		res = pktbuf_send_immediate(buf, client->link);
+		pktbuf_free(buf);
+		/*
+		 * Should do instead:
+		 *   res = pktbuf_send_queued(buf, client->link);
+		 * but that needs better integration with SBuf.
+		 */
+	}
+	if (!res)
+		disconnect_server(client->link, false, ""unable to send login query"");
+}
+","static void start_auth_request(PgSocket *client, const char *username)
+{
+ 	int res;
+ 	PktBuf *buf;
+ 
+ 	/* have to fetch user info from db */
+ 	client->pool = get_pool(client->db, client->db->auth_user);
+ 	if (!find_server(client)) {
+		client->wait_for_user_conn = true;
+		return;
+	}
+	slog_noise(client, ""Doing auth_conn query"");
+	client->wait_for_user_conn = false;
+	client->wait_for_user = true;
+	if (!sbuf_pause(&client->sbuf)) {
+		release_server(client->link);
+		disconnect_client(client, true, ""pause failed"");
+		return;
+	}
+	client->link->ready = 0;
+
+	res = 0;
+	buf = pktbuf_dynamic(512);
+	if (buf) {
+		pktbuf_write_ExtQuery(buf, cf_auth_query, 1, username);
+		res = pktbuf_send_immediate(buf, client->link);
+		pktbuf_free(buf);
+		/*
+		 * Should do instead:
+		 *   res = pktbuf_send_queued(buf, client->link);
+		 * but that needs better integration with SBuf.
+		 */
+	}
+	if (!res)
+		disconnect_server(client->link, false, ""unable to send login query"");
+}
+","The vulnerability in the original code lies in the handling of the `buf` variable, specifically in the way the `pktbuf_send_immediate` function is used without proper error handling. If `pktbuf_dynamic` fails to allocate memory for `buf`, the subsequent call to `pktbuf_write_ExtQuery` could lead to undefined behavior or a crash, as it would attempt to operate on a null pointer. The fixed code does not change this logic, indicating that the vulnerability may not have been addressed in the provided code. To fully resolve the issue, additional checks for `buf` being non-null before proceeding with operations would be necessary.","The vulnerability in the original code stems from inadequate error handling when allocating memory for a buffer. If the memory allocation fails, the code proceeds to use the buffer without checking if it is valid, which can lead to undefined behavior or crashes. The fixed code, while not explicitly shown in the provided snippet, should ideally include additional checks to ensure that the buffer is successfully allocated before any operations are performed on it. This would prevent potential dereferencing of a null pointer and enhance the overall robustness of the code.",3,5,4,4
+5,5,184828,184828,,Remote,Not required,Partial,CVE-2013-6634,https://www.cvedetails.com/cve/CVE-2013-6634/,CWE-287,Medium,Partial,Partial,,2013-12-06,6.8,"The OneClickSigninHelper::ShowInfoBarIfPossible function in browser/ui/sync/one_click_signin_helper.cc in Google Chrome before 31.0.1650.63 uses an incorrect URL during realm validation, which allows remote attackers to conduct session fixation attacks and hijack web sessions by triggering improper sync after a 302 (aka Found) HTTP status code.",2014-03-05,,1,https://github.com/chromium/chromium/commit/50370b3c98047bdc80184ff87a502edc5c597d3a,50370b3c98047bdc80184ff87a502edc5c597d3a,"During redirects in the one click sign in flow, check the current URL
+instead of original URL to validate gaia http headers.
+
+BUG=307159
+
+Review URL: https://codereview.chromium.org/77343002
+
+git-svn-id: svn://svn.chromium.org/chrome/trunk/src@236563 0039d316-1c4b-4281-b951-d872f2087c98",1,chrome/browser/ui/sync/one_click_signin_helper.cc,"{""sha"": ""eecf03c35892b74e9a6141efdde5ef4ffa3a1466"", ""filename"": ""chrome/browser/ui/sync/one_click_signin_helper.cc"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/chromium/chromium/blob/50370b3c98047bdc80184ff87a502edc5c597d3a/chrome/browser/ui/sync/one_click_signin_helper.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/50370b3c98047bdc80184ff87a502edc5c597d3a/chrome/browser/ui/sync/one_click_signin_helper.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/browser/ui/sync/one_click_signin_helper.cc?ref=50370b3c98047bdc80184ff87a502edc5c597d3a"", ""patch"": ""@@ -855,7 +855,7 @@ void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,\n             << \"" g-c-s='\"" << google_chrome_signin_value << \""'\"";\n   }\n \n-  if (!gaia::IsGaiaSignonRealm(request->original_url().GetOrigin()))\n+  if (!gaia::IsGaiaSignonRealm(request->url().GetOrigin()))\n     return;\n \n   // Parse Google-Accounts-SignIn.""}","void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,
+                                                 ProfileIOData* io_data,
+                                                 int child_id,
+                                                 int route_id) {
+  std::string google_chrome_signin_value;
+  std::string google_accounts_signin_value;
+  request->GetResponseHeaderByName(""Google-Chrome-SignIn"",
+                                   &google_chrome_signin_value);
+  request->GetResponseHeaderByName(""Google-Accounts-SignIn"",
+                                   &google_accounts_signin_value);
+
+  if (!google_accounts_signin_value.empty() ||
+      !google_chrome_signin_value.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" g-a-s='"" << google_accounts_signin_value << ""'""
+             << "" g-c-s='"" << google_chrome_signin_value << ""'"";
+   }
+ 
+  if (!gaia::IsGaiaSignonRealm(request->url().GetOrigin()))
+     return;
+ 
+  std::vector<std::pair<std::string, std::string> > pairs;
+  base::SplitStringIntoKeyValuePairs(google_accounts_signin_value, '=', ',',
+                                     &pairs);
+  std::string session_index;
+  std::string email;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const std::pair<std::string, std::string>& pair = pairs[i];
+    const std::string& key = pair.first;
+    const std::string& value = pair.second;
+    if (key == ""email"") {
+      TrimString(value, ""\"""", &email);
+    } else if (key == ""sessionindex"") {
+      session_index = value;
+    }
+  }
+
+  if (!email.empty())
+    io_data->set_reverse_autologin_pending_email(email);
+
+  if (!email.empty() || !session_index.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" email="" << email
+            << "" sessionindex="" << session_index;
+  }
+
+  AutoAccept auto_accept = AUTO_ACCEPT_NONE;
+  signin::Source source = signin::SOURCE_UNKNOWN;
+  GURL continue_url;
+  std::vector<std::string> tokens;
+  base::SplitString(google_chrome_signin_value, ',', &tokens);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == ""accepted"") {
+      auto_accept = AUTO_ACCEPT_ACCEPTED;
+    } else if (token == ""configure"") {
+      auto_accept = AUTO_ACCEPT_CONFIGURE;
+    } else if (token == ""rejected-for-profile"") {
+      auto_accept = AUTO_ACCEPT_REJECTED_FOR_PROFILE;
+    }
+  }
+
+  source = GetSigninSource(request->url(), &continue_url);
+  if (source != signin::SOURCE_UNKNOWN)
+    auto_accept = AUTO_ACCEPT_EXPLICIT;
+
+  if (auto_accept != AUTO_ACCEPT_NONE) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" auto_accept="" << auto_accept;
+  }
+
+  if (session_index.empty() && email.empty() &&
+      auto_accept == AUTO_ACCEPT_NONE && !continue_url.is_valid()) {
+    return;
+  }
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&OneClickSigninHelper::ShowInfoBarUIThread, session_index,
+                 email, auto_accept, source, continue_url, child_id, route_id));
+}
+","void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,
+                                                 ProfileIOData* io_data,
+                                                 int child_id,
+                                                 int route_id) {
+  std::string google_chrome_signin_value;
+  std::string google_accounts_signin_value;
+  request->GetResponseHeaderByName(""Google-Chrome-SignIn"",
+                                   &google_chrome_signin_value);
+  request->GetResponseHeaderByName(""Google-Accounts-SignIn"",
+                                   &google_accounts_signin_value);
+
+  if (!google_accounts_signin_value.empty() ||
+      !google_chrome_signin_value.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" g-a-s='"" << google_accounts_signin_value << ""'""
+             << "" g-c-s='"" << google_chrome_signin_value << ""'"";
+   }
+ 
+  if (!gaia::IsGaiaSignonRealm(request->original_url().GetOrigin()))
+     return;
+ 
+  std::vector<std::pair<std::string, std::string> > pairs;
+  base::SplitStringIntoKeyValuePairs(google_accounts_signin_value, '=', ',',
+                                     &pairs);
+  std::string session_index;
+  std::string email;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const std::pair<std::string, std::string>& pair = pairs[i];
+    const std::string& key = pair.first;
+    const std::string& value = pair.second;
+    if (key == ""email"") {
+      TrimString(value, ""\"""", &email);
+    } else if (key == ""sessionindex"") {
+      session_index = value;
+    }
+  }
+
+  if (!email.empty())
+    io_data->set_reverse_autologin_pending_email(email);
+
+  if (!email.empty() || !session_index.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" email="" << email
+            << "" sessionindex="" << session_index;
+  }
+
+  AutoAccept auto_accept = AUTO_ACCEPT_NONE;
+  signin::Source source = signin::SOURCE_UNKNOWN;
+  GURL continue_url;
+  std::vector<std::string> tokens;
+  base::SplitString(google_chrome_signin_value, ',', &tokens);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == ""accepted"") {
+      auto_accept = AUTO_ACCEPT_ACCEPTED;
+    } else if (token == ""configure"") {
+      auto_accept = AUTO_ACCEPT_CONFIGURE;
+    } else if (token == ""rejected-for-profile"") {
+      auto_accept = AUTO_ACCEPT_REJECTED_FOR_PROFILE;
+    }
+  }
+
+  source = GetSigninSource(request->url(), &continue_url);
+  if (source != signin::SOURCE_UNKNOWN)
+    auto_accept = AUTO_ACCEPT_EXPLICIT;
+
+  if (auto_accept != AUTO_ACCEPT_NONE) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" auto_accept="" << auto_accept;
+  }
+
+  if (session_index.empty() && email.empty() &&
+      auto_accept == AUTO_ACCEPT_NONE && !continue_url.is_valid()) {
+    return;
+  }
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&OneClickSigninHelper::ShowInfoBarUIThread, session_index,
+                 email, auto_accept, source, continue_url, child_id, route_id));
+}
+",C,"  if (!gaia::IsGaiaSignonRealm(request->url().GetOrigin()))
+","  if (!gaia::IsGaiaSignonRealm(request->original_url().GetOrigin()))
+",,"@@ -855,7 +855,7 @@ void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,
+             << "" g-c-s='"" << google_chrome_signin_value << ""'"";
+   }
+ 
+-  if (!gaia::IsGaiaSignonRealm(request->original_url().GetOrigin()))
++  if (!gaia::IsGaiaSignonRealm(request->url().GetOrigin()))
+     return;
+ 
+   // Parse Google-Accounts-SignIn.",Chrome,50370b3c98047bdc80184ff87a502edc5c597d3a,8b23a96ea48a39ce96f329cc4a46ada1f8958524,1,"void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,
+                                                 ProfileIOData* io_data,
+                                                 int child_id,
+                                                 int route_id) {
+  std::string google_chrome_signin_value;
+  std::string google_accounts_signin_value;
+  request->GetResponseHeaderByName(""Google-Chrome-SignIn"",
+                                   &google_chrome_signin_value);
+  request->GetResponseHeaderByName(""Google-Accounts-SignIn"",
+                                   &google_accounts_signin_value);
+
+  if (!google_accounts_signin_value.empty() ||
+      !google_chrome_signin_value.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" g-a-s='"" << google_accounts_signin_value << ""'""
+             << "" g-c-s='"" << google_chrome_signin_value << ""'"";
+   }
+ 
+//flaw_line_below:
+  if (!gaia::IsGaiaSignonRealm(request->original_url().GetOrigin()))
+//fix_flaw_line_below:
+//  if (!gaia::IsGaiaSignonRealm(request->url().GetOrigin()))
+     return;
+ 
+   // Parse Google-Accounts-SignIn.
+  std::vector<std::pair<std::string, std::string> > pairs;
+  base::SplitStringIntoKeyValuePairs(google_accounts_signin_value, '=', ',',
+                                     &pairs);
+  std::string session_index;
+  std::string email;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const std::pair<std::string, std::string>& pair = pairs[i];
+    const std::string& key = pair.first;
+    const std::string& value = pair.second;
+    if (key == ""email"") {
+      TrimString(value, ""\"""", &email);
+    } else if (key == ""sessionindex"") {
+      session_index = value;
+    }
+  }
+
+  // Later in the chain of this request, we'll need to check the email address
+  // in the IO thread (see CanOfferOnIOThread).  So save the email address as
+  // user data on the request (only for web-based flow).
+  if (!email.empty())
+    io_data->set_reverse_autologin_pending_email(email);
+
+  if (!email.empty() || !session_index.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" email="" << email
+            << "" sessionindex="" << session_index;
+  }
+
+  // Parse Google-Chrome-SignIn.
+  AutoAccept auto_accept = AUTO_ACCEPT_NONE;
+  signin::Source source = signin::SOURCE_UNKNOWN;
+  GURL continue_url;
+  std::vector<std::string> tokens;
+  base::SplitString(google_chrome_signin_value, ',', &tokens);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == ""accepted"") {
+      auto_accept = AUTO_ACCEPT_ACCEPTED;
+    } else if (token == ""configure"") {
+      auto_accept = AUTO_ACCEPT_CONFIGURE;
+    } else if (token == ""rejected-for-profile"") {
+      auto_accept = AUTO_ACCEPT_REJECTED_FOR_PROFILE;
+    }
+  }
+
+  // If this is an explicit sign in (i.e., first run, NTP, Apps page, menu,
+  // settings) then force the auto accept type to explicit.
+  source = GetSigninSource(request->url(), &continue_url);
+  if (source != signin::SOURCE_UNKNOWN)
+    auto_accept = AUTO_ACCEPT_EXPLICIT;
+
+  if (auto_accept != AUTO_ACCEPT_NONE) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" auto_accept="" << auto_accept;
+  }
+
+  // If |session_index|, |email|, |auto_accept|, and |continue_url| all have
+  // their default value, don't bother posting a task to the UI thread.
+  // It will be a noop anyway.
+  //
+  // The two headers above may (but not always) come in different http requests
+  // so a post to the UI thread is still needed if |auto_accept| is not its
+  // default value, but |email| and |session_index| are.
+  if (session_index.empty() && email.empty() &&
+      auto_accept == AUTO_ACCEPT_NONE && !continue_url.is_valid()) {
+    return;
+  }
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&OneClickSigninHelper::ShowInfoBarUIThread, session_index,
+                 email, auto_accept, source, continue_url, child_id, route_id));
+}
+",184828,"void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,
+                                                 ProfileIOData* io_data,
+                                                 int child_id,
+                                                 int route_id) {
+  std::string google_chrome_signin_value;
+  std::string google_accounts_signin_value;
+  request->GetResponseHeaderByName(""Google-Chrome-SignIn"",
+                                   &google_chrome_signin_value);
+  request->GetResponseHeaderByName(""Google-Accounts-SignIn"",
+                                   &google_accounts_signin_value);
+
+  if (!google_accounts_signin_value.empty() ||
+      !google_chrome_signin_value.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" g-a-s='"" << google_accounts_signin_value << ""'""
+             << "" g-c-s='"" << google_chrome_signin_value << ""'"";
+   }
+ 
+  if (!gaia::IsGaiaSignonRealm(request->original_url().GetOrigin()))
+     return;
+ 
+  std::vector<std::pair<std::string, std::string> > pairs;
+  base::SplitStringIntoKeyValuePairs(google_accounts_signin_value, '=', ',',
+                                     &pairs);
+  std::string session_index;
+  std::string email;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const std::pair<std::string, std::string>& pair = pairs[i];
+    const std::string& key = pair.first;
+    const std::string& value = pair.second;
+    if (key == ""email"") {
+      TrimString(value, ""\"""", &email);
+    } else if (key == ""sessionindex"") {
+      session_index = value;
+    }
+  }
+
+  if (!email.empty())
+    io_data->set_reverse_autologin_pending_email(email);
+
+  if (!email.empty() || !session_index.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" email="" << email
+            << "" sessionindex="" << session_index;
+  }
+
+  AutoAccept auto_accept = AUTO_ACCEPT_NONE;
+  signin::Source source = signin::SOURCE_UNKNOWN;
+  GURL continue_url;
+  std::vector<std::string> tokens;
+  base::SplitString(google_chrome_signin_value, ',', &tokens);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == ""accepted"") {
+      auto_accept = AUTO_ACCEPT_ACCEPTED;
+    } else if (token == ""configure"") {
+      auto_accept = AUTO_ACCEPT_CONFIGURE;
+    } else if (token == ""rejected-for-profile"") {
+      auto_accept = AUTO_ACCEPT_REJECTED_FOR_PROFILE;
+    }
+  }
+
+  source = GetSigninSource(request->url(), &continue_url);
+  if (source != signin::SOURCE_UNKNOWN)
+    auto_accept = AUTO_ACCEPT_EXPLICIT;
+
+  if (auto_accept != AUTO_ACCEPT_NONE) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" auto_accept="" << auto_accept;
+  }
+
+  if (session_index.empty() && email.empty() &&
+      auto_accept == AUTO_ACCEPT_NONE && !continue_url.is_valid()) {
+    return;
+  }
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&OneClickSigninHelper::ShowInfoBarUIThread, session_index,
+                 email, auto_accept, source, continue_url, child_id, route_id));
+}
+","void OneClickSigninHelper::ShowInfoBarIfPossible(net::URLRequest* request,
+                                                 ProfileIOData* io_data,
+                                                 int child_id,
+                                                 int route_id) {
+  std::string google_chrome_signin_value;
+  std::string google_accounts_signin_value;
+  request->GetResponseHeaderByName(""Google-Chrome-SignIn"",
+                                   &google_chrome_signin_value);
+  request->GetResponseHeaderByName(""Google-Accounts-SignIn"",
+                                   &google_accounts_signin_value);
+
+  if (!google_accounts_signin_value.empty() ||
+      !google_chrome_signin_value.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" g-a-s='"" << google_accounts_signin_value << ""'""
+             << "" g-c-s='"" << google_chrome_signin_value << ""'"";
+   }
+ 
+  if (!gaia::IsGaiaSignonRealm(request->url().GetOrigin()))
+     return;
+ 
+  std::vector<std::pair<std::string, std::string> > pairs;
+  base::SplitStringIntoKeyValuePairs(google_accounts_signin_value, '=', ',',
+                                     &pairs);
+  std::string session_index;
+  std::string email;
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const std::pair<std::string, std::string>& pair = pairs[i];
+    const std::string& key = pair.first;
+    const std::string& value = pair.second;
+    if (key == ""email"") {
+      TrimString(value, ""\"""", &email);
+    } else if (key == ""sessionindex"") {
+      session_index = value;
+    }
+  }
+
+  if (!email.empty())
+    io_data->set_reverse_autologin_pending_email(email);
+
+  if (!email.empty() || !session_index.empty()) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" email="" << email
+            << "" sessionindex="" << session_index;
+  }
+
+  AutoAccept auto_accept = AUTO_ACCEPT_NONE;
+  signin::Source source = signin::SOURCE_UNKNOWN;
+  GURL continue_url;
+  std::vector<std::string> tokens;
+  base::SplitString(google_chrome_signin_value, ',', &tokens);
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    const std::string& token = tokens[i];
+    if (token == ""accepted"") {
+      auto_accept = AUTO_ACCEPT_ACCEPTED;
+    } else if (token == ""configure"") {
+      auto_accept = AUTO_ACCEPT_CONFIGURE;
+    } else if (token == ""rejected-for-profile"") {
+      auto_accept = AUTO_ACCEPT_REJECTED_FOR_PROFILE;
+    }
+  }
+
+  source = GetSigninSource(request->url(), &continue_url);
+  if (source != signin::SOURCE_UNKNOWN)
+    auto_accept = AUTO_ACCEPT_EXPLICIT;
+
+  if (auto_accept != AUTO_ACCEPT_NONE) {
+    VLOG(1) << ""OneClickSigninHelper::ShowInfoBarIfPossible:""
+            << "" auto_accept="" << auto_accept;
+  }
+
+  if (session_index.empty() && email.empty() &&
+      auto_accept == AUTO_ACCEPT_NONE && !continue_url.is_valid()) {
+    return;
+  }
+
+  content::BrowserThread::PostTask(
+      content::BrowserThread::UI, FROM_HERE,
+      base::Bind(&OneClickSigninHelper::ShowInfoBarUIThread, session_index,
+                 email, auto_accept, source, continue_url, child_id, route_id));
+}
+","The vulnerability in the original code lies in the lack of validation for the `request->url()` before processing the `google_accounts_signin_value` and `google_chrome_signin_value`. Specifically, the function does not ensure that the URL is from a trusted source, which could lead to potential security risks such as accepting malicious input. In the fixed code, the check was enhanced by using `gaia::IsGaiaSignonRealm(request->url().GetOrigin())`, ensuring that only URLs from a trusted sign-on realm are processed, thereby mitigating the risk of handling untrusted or malicious data.","The vulnerability in the original code stems from inadequate validation of the request's origin, allowing potentially malicious input to be processed without proper checks. This oversight could lead to security risks, such as unauthorized access or data manipulation. The fixed code addresses this issue by implementing a validation step that ensures the request originates from a trusted source before proceeding with further processing. This additional layer of security effectively mitigates the risk of handling untrusted data, thereby enhancing the overall integrity and safety of the application.",4,4,4,5
+6,6,185548,185548,,Remote,Not required,Partial,CVE-2013-6643,https://www.cvedetails.com/cve/CVE-2013-6643/,CWE-287,Low,Partial,Partial,,2014-01-16,7.5,The OneClickSigninBubbleView::WindowClosing function in browser/ui/views/sync/one_click_signin_bubble_view.cc in Google Chrome before 32.0.1700.76 on Windows and before 32.0.1700.77 on Mac OS X and Linux allows attackers to trigger a sync with an arbitrary Google account by leveraging improper handling of the closing of an untrusted signin confirm dialog.,2018-10-30,,4,https://github.com/chromium/chromium/commit/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f,fc343fd48badc0158dc2bb763e9a8b9342f3cb6f,"Fix a crash when a form control is in a past naems map of a demoted form element.
+
+Note that we wanted to add the protector in FormAssociatedElement::setForm(),
+but we couldn't do it because it is called from the constructor.
+
+BUG=326854
+TEST=automated.
+
+Review URL: https://codereview.chromium.org/105693013
+
+git-svn-id: svn://svn.chromium.org/blink/trunk@163680 bbb929c8-8fbe-4397-9dbb-9b2b20218538",2,third_party/WebKit/Source/core/html/FormAssociatedElement.cpp,"{""sha"": ""86cf193fa7e59bb94da19f240133200407470bcd"", ""filename"": ""third_party/WebKit/LayoutTests/fast/forms/past-names-crash-expected.txt"", ""status"": ""added"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/chromium/chromium/blob/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f/third_party/WebKit/LayoutTests/fast/forms/past-names-crash-expected.txt"", ""raw_url"": ""https://github.com/chromium/chromium/raw/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f/third_party/WebKit/LayoutTests/fast/forms/past-names-crash-expected.txt"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/fast/forms/past-names-crash-expected.txt?ref=fc343fd48badc0158dc2bb763e9a8b9342f3cb6f"", ""patch"": ""@@ -0,0 +1,4 @@\n+PASS successfullyParsed is true\n+\n+TEST COMPLETE\n+PASS if not crashed.""}<_**next**_>{""sha"": ""1e9fd1746b81cba3d9d9b646ce5e8a8b2a9bd544"", ""filename"": ""third_party/WebKit/LayoutTests/fast/forms/past-names-crash.html"", ""status"": ""added"", ""additions"": 28, ""deletions"": 0, ""changes"": 28, ""blob_url"": ""https://github.com/chromium/chromium/blob/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f/third_party/WebKit/LayoutTests/fast/forms/past-names-crash.html"", ""raw_url"": ""https://github.com/chromium/chromium/raw/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f/third_party/WebKit/LayoutTests/fast/forms/past-names-crash.html"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/fast/forms/past-names-crash.html?ref=fc343fd48badc0158dc2bb763e9a8b9342f3cb6f"", ""patch"": ""@@ -0,0 +1,28 @@\n+<!DOCTYPE html>\n+<html>\n+<body>\n+<script src=\""../../resources/js-test.js\""></script>\n+<div id=\""container\"">\n+<table>\n+<form id=\""form1\"">\n+<td>\n+<input name=\""q\""/>\n+<script>\n+jsTestIsAsync = true;\n+var form1 = document.getElementById(\""form1\"");\n+var container = document.getElementById(\""container\"");\n+form1['q'];\n+container.innerHTML = '';\n+setTimeout(function() {\n+    container.insertBefore(form1, null);\n+    gc();\n+    container.innerHTML = 'PASS if not crashed.';\n+    finishJSTest();\n+}, 0);\n+</script>\n+</td>\n+</form>\n+</table>\n+</div>\n+</body>\n+</html>""}<_**next**_>{""sha"": ""f0d92cbe55a030cc3301fb6307301e89e32d0a3e"", ""filename"": ""third_party/WebKit/Source/core/html/FormAssociatedElement.cpp"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 2, ""changes"": 6, ""blob_url"": ""https://github.com/chromium/chromium/blob/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f/third_party/WebKit/Source/core/html/FormAssociatedElement.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/fc343fd48badc0158dc2bb763e9a8b9342f3cb6f/third_party/WebKit/Source/core/html/FormAssociatedElement.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/FormAssociatedElement.cpp?ref=fc343fd48badc0158dc2bb763e9a8b9342f3cb6f"", ""patch"": ""@@ -122,8 +122,10 @@ HTMLFormElement* FormAssociatedElement::findAssociatedForm(const HTMLElement* el\n void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)\n {\n     ASSERT(m_form);\n-    if (toHTMLElement(this)->highestAncestor() != formRoot)\n-        setForm(0);\n+    if (toHTMLElement(this)->highestAncestor() == formRoot)\n+        return;\n+    RefPtr<HTMLElement> protector(toHTMLElement(this));\n+    setForm(0);\n }\n \n void FormAssociatedElement::setForm(HTMLFormElement* newForm)""}"," void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)
+ {
+     ASSERT(m_form);
+    if (toHTMLElement(this)->highestAncestor() == formRoot)
+        return;
+    RefPtr<HTMLElement> protector(toHTMLElement(this));
+    setForm(0);
+ }
+"," void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)
+ {
+     ASSERT(m_form);
+    if (toHTMLElement(this)->highestAncestor() != formRoot)
+        setForm(0);
+ }
+",C,"    if (toHTMLElement(this)->highestAncestor() == formRoot)
+        return;
+    RefPtr<HTMLElement> protector(toHTMLElement(this));
+    setForm(0);
+","    if (toHTMLElement(this)->highestAncestor() != formRoot)
+        setForm(0);
+",,"@@ -122,8 +122,10 @@ HTMLFormElement* FormAssociatedElement::findAssociatedForm(const HTMLElement* el
+ void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)
+ {
+     ASSERT(m_form);
+-    if (toHTMLElement(this)->highestAncestor() != formRoot)
+-        setForm(0);
++    if (toHTMLElement(this)->highestAncestor() == formRoot)
++        return;
++    RefPtr<HTMLElement> protector(toHTMLElement(this));
++    setForm(0);
+ }
+ 
+ void FormAssociatedElement::setForm(HTMLFormElement* newForm)",Chrome,fc343fd48badc0158dc2bb763e9a8b9342f3cb6f,9449b7d5c213cfb9fa2352e83dec607a057d6367,1," void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)
+ {
+     ASSERT(m_form);
+//flaw_line_below:
+    if (toHTMLElement(this)->highestAncestor() != formRoot)
+//flaw_line_below:
+        setForm(0);
+//fix_flaw_line_below:
+//    if (toHTMLElement(this)->highestAncestor() == formRoot)
+//fix_flaw_line_below:
+//        return;
+//fix_flaw_line_below:
+//    RefPtr<HTMLElement> protector(toHTMLElement(this));
+//fix_flaw_line_below:
+//    setForm(0);
+ }
+",185548," void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)
+ {
+     ASSERT(m_form);
+    if (toHTMLElement(this)->highestAncestor() != formRoot)
+        setForm(0);
+ }
+"," void FormAssociatedElement::formRemovedFromTree(const Node* formRoot)
+ {
+     ASSERT(m_form);
+    if (toHTMLElement(this)->highestAncestor() == formRoot)
+        return;
+    RefPtr<HTMLElement> protector(toHTMLElement(this));
+    setForm(0);
+ }
+","The vulnerability in the original code lies in the potential dereferencing of a null pointer when calling `toHTMLElement(this)->highestAncestor()` if `this` is not a valid HTMLElement. If the condition `toHTMLElement(this)->highestAncestor() != formRoot` is true, it sets the form to null without ensuring that `toHTMLElement(this)` is valid. The fixed code addresses this by first checking if `toHTMLElement(this)->highestAncestor() == formRoot` and returning early if true, thus preventing unnecessary operations. Additionally, it introduces a `RefPtr<HTMLElement> protector` to ensure that the HTMLElement is safely referenced before any further actions are taken.","The vulnerability in the original code arises from the potential for dereferencing a null or invalid pointer, which could lead to undefined behavior if the object is not properly validated before accessing its properties. This could occur if the object is not an instance of the expected type, resulting in a failure to safely manage memory and state. The fixed code mitigates this issue by implementing an early return mechanism that checks the condition before proceeding, ensuring that the object is valid and properly referenced. This change enhances safety by preventing unnecessary operations on potentially invalid objects.",2,4,1,2

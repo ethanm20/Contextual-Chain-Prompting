@@ -1,0 +1,18 @@
+{
+    "prompts": [ 
+            {
+                "column_prefix": "C5",
+                "column_name": "C5_Explanation_Vulnerability_Fixed_In_Context",
+                "conditional": false,
+                "response_length": 100,
+                "prompt": "Please explain the vulnerability in the vulnerable code (i.e. the Code before the Change) and then explain how the vulnerability was fixed in the changed code below. In your response please ensure that: \n 1. The response is limited to one paragraph and between 90-100 words. \n 2. The response should include variable/fuction/expression names from the code. \n Code before Change/Fix (Vulnerable Code): \n $primevul_func_before_fix \n Code after Change/Fix (Fixed Code): \n $primevul_func_after_fix \n"
+            },
+            {
+                "column_prefix": "C6",
+                "column_name": "C6_Explanation_Vulnerability_Fixed_Generic",
+                "conditional": false, 
+                "response_length": 100,
+                "prompt": "Please explain the vulnerability in the vulnerable code (i.e. the Code before the Change) and then explain how the vulnerability was fixed in the changed code below. In your response please ensure that: \n 1. The response is limited to one paragraph and between 90-100 words. \n 2. Do not include any variable/function/expression names in the description."
+        }
+]
+}

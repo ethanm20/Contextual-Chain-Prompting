@@ -1,0 +1,1233 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,180116,180116,,Remote,Not required,Partial,CVE-2016-7143,https://www.cvedetails.com/cve/CVE-2016-7143/,CWE-285,Medium,Partial,Partial,,2016-09-21,6.8,The m_authenticate function in modules/m_sasl.c in Charybdis before 3.5.3 allows remote attackers to spoof certificate fingerprints and consequently log in as another user via a crafted AUTHENTICATE parameter.,2016-11-28,,6,https://github.com/charybdis-ircd/charybdis/commit/818a3fda944b26d4814132cee14cfda4ea4aa824,818a3fda944b26d4814132cee14cfda4ea4aa824,"SASL: Disallow beginning : and space anywhere in AUTHENTICATE parameter
+
+This is a FIX FOR A SECURITY VULNERABILITY. All Charybdis users must
+apply this fix if you support SASL on your servers, or unload m_sasl.so
+in the meantime.",0,modules/m_sasl.c,"{""sha"": ""93c5a04124f3ee7f5bce71dfd65ced91749c532e"", ""filename"": ""modules/m_sasl.c"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 0, ""changes"": 6, ""blob_url"": ""https://github.com/charybdis-ircd/charybdis/blob/818a3fda944b26d4814132cee14cfda4ea4aa824/modules/m_sasl.c"", ""raw_url"": ""https://github.com/charybdis-ircd/charybdis/raw/818a3fda944b26d4814132cee14cfda4ea4aa824/modules/m_sasl.c"", ""contents_url"": ""https://api.github.com/repos/charybdis-ircd/charybdis/contents/modules/m_sasl.c?ref=818a3fda944b26d4814132cee14cfda4ea4aa824"", ""patch"": ""@@ -91,6 +91,12 @@ m_authenticate(struct Client *client_p, struct Client *source_p,\n \t\treturn 0;\n \t}\n \n+\tif (*parv[1] == ':' || strchr(parv[1], ' '))\n+\t{\n+\t\texit_client(client_p, client_p, client_p, \""Malformed AUTHENTICATE\"");\n+\t\treturn 0;\n+\t}\n+\n \tsaslserv_p = find_named_client(ConfigFileEntry.sasl_service);\n \tif (saslserv_p == NULL || !IsService(saslserv_p))\n \t{""}","m_authenticate(struct Client *client_p, struct Client *source_p,
+	int parc, const char *parv[])
+{
+	struct Client *agent_p = NULL;
+	struct Client *saslserv_p = NULL;
+
+	/* They really should use CAP for their own sake. */
+	if(!IsCapable(source_p, CLICAP_SASL))
+		return 0;
+
+	if (strlen(client_p->id) == 3)
+	{
+		exit_client(client_p, client_p, client_p, ""Mixing client and server protocol"");
+ 		return 0;
+ 	}
+ 
+	if (*parv[1] == ':' || strchr(parv[1], ' '))
+	{
+		exit_client(client_p, client_p, client_p, ""Malformed AUTHENTICATE"");
+		return 0;
+	}
+
+ 	saslserv_p = find_named_client(ConfigFileEntry.sasl_service);
+ 	if (saslserv_p == NULL || !IsService(saslserv_p))
+ 	{
+		sendto_one(source_p, form_str(ERR_SASLABORTED), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(source_p->localClient->sasl_complete)
+	{
+		*source_p->localClient->sasl_agent = '\0';
+		source_p->localClient->sasl_complete = 0;
+	}
+
+	if(strlen(parv[1]) > 400)
+	{
+		sendto_one(source_p, form_str(ERR_SASLTOOLONG), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(!*source_p->id)
+	{
+		/* Allocate a UID. */
+		strcpy(source_p->id, generate_uid());
+		add_to_id_hash(source_p->id, source_p);
+	}
+
+	if(*source_p->localClient->sasl_agent)
+		agent_p = find_id(source_p->localClient->sasl_agent);
+
+	if(agent_p == NULL)
+	{
+		sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s H %s %s"",
+					me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+					source_p->host, source_p->sockhost);
+
+		if (!strcmp(parv[1], ""EXTERNAL"") && source_p->certfp != NULL)
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1], source_p->certfp);
+		else
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1]);
+
+		rb_strlcpy(source_p->localClient->sasl_agent, saslserv_p->id, IDLEN);
+	}
+	else
+		sendto_one(agent_p, "":%s ENCAP %s SASL %s %s C %s"",
+				me.id, agent_p->servptr->name, source_p->id, agent_p->id,
+				parv[1]);
+	source_p->localClient->sasl_out++;
+
+	return 0;
+}
+","m_authenticate(struct Client *client_p, struct Client *source_p,
+	int parc, const char *parv[])
+{
+	struct Client *agent_p = NULL;
+	struct Client *saslserv_p = NULL;
+
+	/* They really should use CAP for their own sake. */
+	if(!IsCapable(source_p, CLICAP_SASL))
+		return 0;
+
+	if (strlen(client_p->id) == 3)
+	{
+		exit_client(client_p, client_p, client_p, ""Mixing client and server protocol"");
+ 		return 0;
+ 	}
+ 
+ 	saslserv_p = find_named_client(ConfigFileEntry.sasl_service);
+ 	if (saslserv_p == NULL || !IsService(saslserv_p))
+ 	{
+		sendto_one(source_p, form_str(ERR_SASLABORTED), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(source_p->localClient->sasl_complete)
+	{
+		*source_p->localClient->sasl_agent = '\0';
+		source_p->localClient->sasl_complete = 0;
+	}
+
+	if(strlen(parv[1]) > 400)
+	{
+		sendto_one(source_p, form_str(ERR_SASLTOOLONG), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(!*source_p->id)
+	{
+		/* Allocate a UID. */
+		strcpy(source_p->id, generate_uid());
+		add_to_id_hash(source_p->id, source_p);
+	}
+
+	if(*source_p->localClient->sasl_agent)
+		agent_p = find_id(source_p->localClient->sasl_agent);
+
+	if(agent_p == NULL)
+	{
+		sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s H %s %s"",
+					me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+					source_p->host, source_p->sockhost);
+
+		if (!strcmp(parv[1], ""EXTERNAL"") && source_p->certfp != NULL)
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1], source_p->certfp);
+		else
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1]);
+
+		rb_strlcpy(source_p->localClient->sasl_agent, saslserv_p->id, IDLEN);
+	}
+	else
+		sendto_one(agent_p, "":%s ENCAP %s SASL %s %s C %s"",
+				me.id, agent_p->servptr->name, source_p->id, agent_p->id,
+				parv[1]);
+	source_p->localClient->sasl_out++;
+
+	return 0;
+}
+",C,"	if (*parv[1] == ':' || strchr(parv[1], ' '))
+	{
+		exit_client(client_p, client_p, client_p, ""Malformed AUTHENTICATE"");
+		return 0;
+	}
+
+",,,"@@ -91,6 +91,12 @@ m_authenticate(struct Client *client_p, struct Client *source_p,
+ 		return 0;
+ 	}
+ 
++	if (*parv[1] == ':' || strchr(parv[1], ' '))
++	{
++		exit_client(client_p, client_p, client_p, ""Malformed AUTHENTICATE"");
++		return 0;
++	}
++
+ 	saslserv_p = find_named_client(ConfigFileEntry.sasl_service);
+ 	if (saslserv_p == NULL || !IsService(saslserv_p))
+ 	{",charybdis,818a3fda944b26d4814132cee14cfda4ea4aa824,f92b4d81d44580cd6df2d0b2f3cdfd7ad067ecd4,1,"m_authenticate(struct Client *client_p, struct Client *source_p,
+	int parc, const char *parv[])
+{
+	struct Client *agent_p = NULL;
+	struct Client *saslserv_p = NULL;
+
+	/* They really should use CAP for their own sake. */
+	if(!IsCapable(source_p, CLICAP_SASL))
+		return 0;
+
+	if (strlen(client_p->id) == 3)
+	{
+		exit_client(client_p, client_p, client_p, ""Mixing client and server protocol"");
+ 		return 0;
+ 	}
+ 
+//fix_flaw_line_below:
+//	if (*parv[1] == ':' || strchr(parv[1], ' '))
+//fix_flaw_line_below:
+//	{
+//fix_flaw_line_below:
+//		exit_client(client_p, client_p, client_p, ""Malformed AUTHENTICATE"");
+//fix_flaw_line_below:
+//		return 0;
+//fix_flaw_line_below:
+//	}
+//fix_flaw_line_below:
+//
+ 	saslserv_p = find_named_client(ConfigFileEntry.sasl_service);
+ 	if (saslserv_p == NULL || !IsService(saslserv_p))
+ 	{
+		sendto_one(source_p, form_str(ERR_SASLABORTED), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(source_p->localClient->sasl_complete)
+	{
+		*source_p->localClient->sasl_agent = '\0';
+		source_p->localClient->sasl_complete = 0;
+	}
+
+	if(strlen(parv[1]) > 400)
+	{
+		sendto_one(source_p, form_str(ERR_SASLTOOLONG), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(!*source_p->id)
+	{
+		/* Allocate a UID. */
+		strcpy(source_p->id, generate_uid());
+		add_to_id_hash(source_p->id, source_p);
+	}
+
+	if(*source_p->localClient->sasl_agent)
+		agent_p = find_id(source_p->localClient->sasl_agent);
+
+	if(agent_p == NULL)
+	{
+		sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s H %s %s"",
+					me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+					source_p->host, source_p->sockhost);
+
+		if (!strcmp(parv[1], ""EXTERNAL"") && source_p->certfp != NULL)
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1], source_p->certfp);
+		else
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1]);
+
+		rb_strlcpy(source_p->localClient->sasl_agent, saslserv_p->id, IDLEN);
+	}
+	else
+		sendto_one(agent_p, "":%s ENCAP %s SASL %s %s C %s"",
+				me.id, agent_p->servptr->name, source_p->id, agent_p->id,
+				parv[1]);
+	source_p->localClient->sasl_out++;
+
+	return 0;
+}
+",180116,"m_authenticate(struct Client *client_p, struct Client *source_p,
+	int parc, const char *parv[])
+{
+	struct Client *agent_p = NULL;
+	struct Client *saslserv_p = NULL;
+
+	/* They really should use CAP for their own sake. */
+	if(!IsCapable(source_p, CLICAP_SASL))
+		return 0;
+
+	if (strlen(client_p->id) == 3)
+	{
+		exit_client(client_p, client_p, client_p, ""Mixing client and server protocol"");
+ 		return 0;
+ 	}
+ 
+ 	saslserv_p = find_named_client(ConfigFileEntry.sasl_service);
+ 	if (saslserv_p == NULL || !IsService(saslserv_p))
+ 	{
+		sendto_one(source_p, form_str(ERR_SASLABORTED), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(source_p->localClient->sasl_complete)
+	{
+		*source_p->localClient->sasl_agent = '\0';
+		source_p->localClient->sasl_complete = 0;
+	}
+
+	if(strlen(parv[1]) > 400)
+	{
+		sendto_one(source_p, form_str(ERR_SASLTOOLONG), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(!*source_p->id)
+	{
+		/* Allocate a UID. */
+		strcpy(source_p->id, generate_uid());
+		add_to_id_hash(source_p->id, source_p);
+	}
+
+	if(*source_p->localClient->sasl_agent)
+		agent_p = find_id(source_p->localClient->sasl_agent);
+
+	if(agent_p == NULL)
+	{
+		sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s H %s %s"",
+					me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+					source_p->host, source_p->sockhost);
+
+		if (!strcmp(parv[1], ""EXTERNAL"") && source_p->certfp != NULL)
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1], source_p->certfp);
+		else
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1]);
+
+		rb_strlcpy(source_p->localClient->sasl_agent, saslserv_p->id, IDLEN);
+	}
+	else
+		sendto_one(agent_p, "":%s ENCAP %s SASL %s %s C %s"",
+				me.id, agent_p->servptr->name, source_p->id, agent_p->id,
+				parv[1]);
+	source_p->localClient->sasl_out++;
+
+	return 0;
+}
+","m_authenticate(struct Client *client_p, struct Client *source_p,
+	int parc, const char *parv[])
+{
+	struct Client *agent_p = NULL;
+	struct Client *saslserv_p = NULL;
+
+	/* They really should use CAP for their own sake. */
+	if(!IsCapable(source_p, CLICAP_SASL))
+		return 0;
+
+	if (strlen(client_p->id) == 3)
+	{
+		exit_client(client_p, client_p, client_p, ""Mixing client and server protocol"");
+ 		return 0;
+ 	}
+ 
+	if (*parv[1] == ':' || strchr(parv[1], ' '))
+	{
+		exit_client(client_p, client_p, client_p, ""Malformed AUTHENTICATE"");
+		return 0;
+	}
+
+ 	saslserv_p = find_named_client(ConfigFileEntry.sasl_service);
+ 	if (saslserv_p == NULL || !IsService(saslserv_p))
+ 	{
+		sendto_one(source_p, form_str(ERR_SASLABORTED), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(source_p->localClient->sasl_complete)
+	{
+		*source_p->localClient->sasl_agent = '\0';
+		source_p->localClient->sasl_complete = 0;
+	}
+
+	if(strlen(parv[1]) > 400)
+	{
+		sendto_one(source_p, form_str(ERR_SASLTOOLONG), me.name, EmptyString(source_p->name) ? ""*"" : source_p->name);
+		return 0;
+	}
+
+	if(!*source_p->id)
+	{
+		/* Allocate a UID. */
+		strcpy(source_p->id, generate_uid());
+		add_to_id_hash(source_p->id, source_p);
+	}
+
+	if(*source_p->localClient->sasl_agent)
+		agent_p = find_id(source_p->localClient->sasl_agent);
+
+	if(agent_p == NULL)
+	{
+		sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s H %s %s"",
+					me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+					source_p->host, source_p->sockhost);
+
+		if (!strcmp(parv[1], ""EXTERNAL"") && source_p->certfp != NULL)
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1], source_p->certfp);
+		else
+			sendto_one(saslserv_p, "":%s ENCAP %s SASL %s %s S %s"",
+						me.id, saslserv_p->servptr->name, source_p->id, saslserv_p->id,
+						parv[1]);
+
+		rb_strlcpy(source_p->localClient->sasl_agent, saslserv_p->id, IDLEN);
+	}
+	else
+		sendto_one(agent_p, "":%s ENCAP %s SASL %s %s C %s"",
+				me.id, agent_p->servptr->name, source_p->id, agent_p->id,
+				parv[1]);
+	source_p->localClient->sasl_out++;
+
+	return 0;
+}
+","The provided code implements an authentication function for a client in a server-client architecture, specifically handling SASL (Simple Authentication and Security Layer) authentication. It first checks if the source client supports SASL capabilities and validates the client ID length. If the source client does not have an associated SASL agent, it sends an authentication request to a designated SASL service, including relevant client information. If the authentication method is ""EXTERNAL"" and a certificate is available, it includes that in the request. The function also manages the state of the SASL process, ensuring proper communication between clients and the SASL service.","The code defines a function that facilitates the authentication of a client using a specific protocol. It begins by verifying the client's capability to use the authentication method and checks the validity of the client's identifier. If the client lacks an associated agent, it sends a request to a designated service, including necessary client details. The function also handles different authentication scenarios, such as including a certificate for external authentication. Additionally, it manages the state of the authentication process, ensuring effective communication between the client and the authentication service throughout the procedure.","The vulnerability in the original code arises from insufficient validation of the input provided for authentication, specifically the second parameter in the array. Attackers could exploit this by injecting malicious input, such as including special characters or spaces, which could lead to unexpected behavior or security breaches. The fixed code addresses this vulnerability by adding a check to ensure that the input does not start with a colon or contain spaces, thereby preventing malformed authentication requests. This additional validation helps to ensure that only properly formatted input is processed, enhancing the overall security of the authentication function.","The vulnerability in the original code stemmed from inadequate validation of user input during the authentication process, allowing attackers to potentially inject malformed data that could disrupt the system or lead to unauthorized access. This issue was addressed in the revised code by implementing checks to ensure that the input does not contain certain characters or formats that could indicate an attack, such as leading special characters or spaces. By enforcing stricter input validation, the updated code significantly reduces the risk of exploitation and enhances the overall security of the authentication mechanism.","The vulnerability was fixed by adding a validation check for the second parameter in the input array, ensuring it does not start with a colon or contain spaces. This was implemented with the condition that checks if the first character is a colon or if the string contains any spaces. If either condition is met, the function calls to exit the client with a specific error message, preventing malformed authentication requests from being processed. This enhancement effectively mitigates the risk of injection attacks and ensures that only properly formatted input is accepted for authentication.","The vulnerability was addressed by introducing a validation step that checks the format of the input provided for authentication. Specifically, the updated code ensures that the input does not begin with a special character or contain any spaces, which could indicate a malformed request. If the input fails this validation, the function terminates the authentication process and returns an error message, effectively preventing the processing of potentially harmful or improperly formatted data. This enhancement significantly strengthens the security of the authentication mechanism by ensuring that only valid input is accepted.","CWE-20, CWE-79, CWE-89, CWE-94, CWE-74, CWE-77, CWE-78, CWE-290, CWE-285, CWE-287",N,-1.0,"4,4","4,4","4,4","4,4"
+1,1,182620,182620,,Local,Not required,Complete,CVE-2016-7035,https://www.cvedetails.com/cve/CVE-2016-7035/,CWE-285,Low,Complete,Complete,,2018-09-10,7.2,"An authorization flaw was found in Pacemaker before 1.1.16, where it did not properly guard its IPC interface. An attacker with an unprivileged account on a Pacemaker node could use this flaw to, for example, force the Local Resource Manager daemon to execute a script as root and thereby gain root access on the machine.",2019-10-09,+Priv ,3,https://github.com/ClusterLabs/pacemaker/commit/5d71e65049,5d71e65049,"High: libcrmcommon: fix CVE-2016-7035 (improper IPC guarding)
+
+It was discovered that at some not so uncommon circumstances, some
+pacemaker daemons could be talked to, via libqb-facilitated IPC, by
+unprivileged clients due to flawed authorization decision.  Depending
+on the capabilities of affected daemons, this might equip unauthorized
+user with local privilege escalation or up to cluster-wide remote
+execution of possibly arbitrary commands when such user happens to
+reside at standard or remote/guest cluster node, respectively.
+
+The original vulnerability was introduced in an attempt to allow
+unprivileged IPC clients to clean up the file system materialized
+leftovers in case the server (otherwise responsible for the lifecycle
+of these files) crashes.  While the intended part of such behavior is
+now effectively voided (along with the unintended one), a best-effort
+fix to address this corner case systemically at libqb is coming along
+(https://github.com/ClusterLabs/libqb/pull/231).
+
+Affected versions:  1.1.10-rc1 (2013-04-17) - 1.1.15 (2016-06-21)
+Impact:             Important
+CVSSv3 ranking:     8.8 : AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H
+
+Credits for independent findings, in chronological order:
+  Jan ""poki"" Pokorný, of Red Hat
+  Alain Moulle, of ATOS/BULL",9,lib/common/ipc.c,"{""sha"": ""2949837e3737874799d01745d59fde36235aefc6"", ""filename"": ""lib/common/ipc.c"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 11, ""changes"": 14, ""blob_url"": ""https://github.com/ClusterLabs/pacemaker/blob/5d71e65049d143435b03d6b3709d82900f32276f/lib/common/ipc.c"", ""raw_url"": ""https://github.com/ClusterLabs/pacemaker/raw/5d71e65049d143435b03d6b3709d82900f32276f/lib/common/ipc.c"", ""contents_url"": ""https://api.github.com/repos/ClusterLabs/pacemaker/contents/lib/common/ipc.c?ref=5d71e65049d143435b03d6b3709d82900f32276f"", ""patch"": ""@@ -293,7 +293,6 @@ crm_client_disconnect_all(qb_ipcs_service_t *service)\n crm_client_t *\n crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)\n {\n-    static uid_t uid_server = 0;\n     static gid_t gid_cluster = 0;\n \n     crm_client_t *client = NULL;\n@@ -304,7 +303,6 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)\n     }\n \n     if (gid_cluster == 0) {\n-        uid_server = getuid();\n         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {\n             static bool have_error = FALSE;\n             if(have_error == FALSE) {\n@@ -314,16 +312,10 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)\n         }\n     }\n \n-    if(gid_cluster != 0 && gid_client != 0) {\n-        uid_t best_uid = -1; /* Passing -1 to chown(2) means don't change */\n-\n-        if(uid_client == 0 || uid_server == 0) { /* Someone is priveliged, but the other may not be */\n-            best_uid = QB_MAX(uid_client, uid_server);\n-            crm_trace(\""Allowing user %u to clean up after disconnect\"", best_uid);\n-        }\n-\n+    if (uid_client != 0) {\n         crm_trace(\""Giving access to group %u\"", gid_cluster);\n-        qb_ipcs_connection_auth_set(c, best_uid, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);\n+        /* Passing -1 to chown(2) means don't change */\n+        qb_ipcs_connection_auth_set(c, -1, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);\n     }\n \n     crm_client_init();""}"," crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+
+    CRM_LOG_ASSERT(c);
+    if (c == NULL) {
+        return NULL;
+     }
+ 
+     if (gid_cluster == 0) {
+         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+                crm_warn(""Could not find group for user %s"", CRM_DAEMON_USER);
+                have_error = TRUE;
+            }
+         }
+     }
+ 
+    if (uid_client != 0) {
+         crm_trace(""Giving access to group %u"", gid_cluster);
+        /* Passing -1 to chown(2) means don't change */
+        qb_ipcs_connection_auth_set(c, -1, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+     }
+ 
+     crm_client_init();
+
+    /* TODO: Do our own auth checking, return NULL if unauthorized */
+    client = calloc(1, sizeof(crm_client_t));
+
+    client->ipcs = c;
+    client->kind = CRM_CLIENT_IPC;
+    client->pid = crm_ipcs_client_pid(c);
+
+    client->id = crm_generate_uuid();
+
+    crm_debug(""Connecting %p for uid=%d gid=%d pid=%u id=%s"", c, uid_client, gid_client, client->pid, client->id);
+
+#if ENABLE_ACL
+    client->user = uid2username(uid_client);
+#endif
+
+    g_hash_table_insert(client_connections, c, client);
+    return client;
+}
+"," crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+    static uid_t uid_server = 0;
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+
+    CRM_LOG_ASSERT(c);
+    if (c == NULL) {
+        return NULL;
+     }
+ 
+     if (gid_cluster == 0) {
+        uid_server = getuid();
+         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+                crm_warn(""Could not find group for user %s"", CRM_DAEMON_USER);
+                have_error = TRUE;
+            }
+         }
+     }
+ 
+    if(gid_cluster != 0 && gid_client != 0) {
+        uid_t best_uid = -1; /* Passing -1 to chown(2) means don't change */
+        if(uid_client == 0 || uid_server == 0) { /* Someone is priveliged, but the other may not be */
+            best_uid = QB_MAX(uid_client, uid_server);
+            crm_trace(""Allowing user %u to clean up after disconnect"", best_uid);
+        }
+         crm_trace(""Giving access to group %u"", gid_cluster);
+        qb_ipcs_connection_auth_set(c, best_uid, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+     }
+ 
+     crm_client_init();
+
+    /* TODO: Do our own auth checking, return NULL if unauthorized */
+    client = calloc(1, sizeof(crm_client_t));
+
+    client->ipcs = c;
+    client->kind = CRM_CLIENT_IPC;
+    client->pid = crm_ipcs_client_pid(c);
+
+    client->id = crm_generate_uuid();
+
+    crm_debug(""Connecting %p for uid=%d gid=%d pid=%u id=%s"", c, uid_client, gid_client, client->pid, client->id);
+
+#if ENABLE_ACL
+    client->user = uid2username(uid_client);
+#endif
+
+    g_hash_table_insert(client_connections, c, client);
+    return client;
+}
+",C,"    if (uid_client != 0) {
+        /* Passing -1 to chown(2) means don't change */
+        qb_ipcs_connection_auth_set(c, -1, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+","    static uid_t uid_server = 0;
+        uid_server = getuid();
+    if(gid_cluster != 0 && gid_client != 0) {
+        uid_t best_uid = -1; /* Passing -1 to chown(2) means don't change */
+        if(uid_client == 0 || uid_server == 0) { /* Someone is priveliged, but the other may not be */
+            best_uid = QB_MAX(uid_client, uid_server);
+            crm_trace(""Allowing user %u to clean up after disconnect"", best_uid);
+        }
+        qb_ipcs_connection_auth_set(c, best_uid, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+",,"@@ -293,7 +293,6 @@ crm_client_disconnect_all(qb_ipcs_service_t *service)
+ crm_client_t *
+ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+-    static uid_t uid_server = 0;
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+@@ -304,7 +303,6 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+     }
+ 
+     if (gid_cluster == 0) {
+-        uid_server = getuid();
+         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+@@ -314,16 +312,10 @@ crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+         }
+     }
+ 
+-    if(gid_cluster != 0 && gid_client != 0) {
+-        uid_t best_uid = -1; /* Passing -1 to chown(2) means don't change */
+-
+-        if(uid_client == 0 || uid_server == 0) { /* Someone is priveliged, but the other may not be */
+-            best_uid = QB_MAX(uid_client, uid_server);
+-            crm_trace(""Allowing user %u to clean up after disconnect"", best_uid);
+-        }
+-
++    if (uid_client != 0) {
+         crm_trace(""Giving access to group %u"", gid_cluster);
+-        qb_ipcs_connection_auth_set(c, best_uid, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
++        /* Passing -1 to chown(2) means don't change */
++        qb_ipcs_connection_auth_set(c, -1, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+     }
+ 
+     crm_client_init();",pacemaker,5d71e65049,23f8e91a3ee1f9b4d55a50274ee932895dc2d355,1," crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+//flaw_line_below:
+    static uid_t uid_server = 0;
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+
+    CRM_LOG_ASSERT(c);
+    if (c == NULL) {
+        return NULL;
+     }
+ 
+     if (gid_cluster == 0) {
+//flaw_line_below:
+        uid_server = getuid();
+         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+                crm_warn(""Could not find group for user %s"", CRM_DAEMON_USER);
+                have_error = TRUE;
+            }
+         }
+     }
+ 
+//flaw_line_below:
+    if(gid_cluster != 0 && gid_client != 0) {
+//flaw_line_below:
+        uid_t best_uid = -1; /* Passing -1 to chown(2) means don't change */
+//flaw_line_below:
+
+//flaw_line_below:
+        if(uid_client == 0 || uid_server == 0) { /* Someone is priveliged, but the other may not be */
+//flaw_line_below:
+            best_uid = QB_MAX(uid_client, uid_server);
+//flaw_line_below:
+            crm_trace(""Allowing user %u to clean up after disconnect"", best_uid);
+//flaw_line_below:
+        }
+//flaw_line_below:
+
+//fix_flaw_line_below:
+//    if (uid_client != 0) {
+         crm_trace(""Giving access to group %u"", gid_cluster);
+//flaw_line_below:
+        qb_ipcs_connection_auth_set(c, best_uid, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+//fix_flaw_line_below:
+//        /* Passing -1 to chown(2) means don't change */
+//fix_flaw_line_below:
+//        qb_ipcs_connection_auth_set(c, -1, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+     }
+ 
+     crm_client_init();
+
+    /* TODO: Do our own auth checking, return NULL if unauthorized */
+    client = calloc(1, sizeof(crm_client_t));
+
+    client->ipcs = c;
+    client->kind = CRM_CLIENT_IPC;
+    client->pid = crm_ipcs_client_pid(c);
+
+    client->id = crm_generate_uuid();
+
+    crm_debug(""Connecting %p for uid=%d gid=%d pid=%u id=%s"", c, uid_client, gid_client, client->pid, client->id);
+
+#if ENABLE_ACL
+    client->user = uid2username(uid_client);
+#endif
+
+    g_hash_table_insert(client_connections, c, client);
+    return client;
+}
+",182620," crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+    static uid_t uid_server = 0;
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+
+    CRM_LOG_ASSERT(c);
+    if (c == NULL) {
+        return NULL;
+     }
+ 
+     if (gid_cluster == 0) {
+        uid_server = getuid();
+         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+                crm_warn(""Could not find group for user %s"", CRM_DAEMON_USER);
+                have_error = TRUE;
+            }
+         }
+     }
+ 
+    if(gid_cluster != 0 && gid_client != 0) {
+        uid_t best_uid = -1; /* Passing -1 to chown(2) means don't change */
+        if(uid_client == 0 || uid_server == 0) { /* Someone is priveliged, but the other may not be */
+            best_uid = QB_MAX(uid_client, uid_server);
+            crm_trace(""Allowing user %u to clean up after disconnect"", best_uid);
+        }
+         crm_trace(""Giving access to group %u"", gid_cluster);
+        qb_ipcs_connection_auth_set(c, best_uid, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+     }
+ 
+     crm_client_init();
+
+    /* TODO: Do our own auth checking, return NULL if unauthorized */
+    client = calloc(1, sizeof(crm_client_t));
+
+    client->ipcs = c;
+    client->kind = CRM_CLIENT_IPC;
+    client->pid = crm_ipcs_client_pid(c);
+
+    client->id = crm_generate_uuid();
+
+    crm_debug(""Connecting %p for uid=%d gid=%d pid=%u id=%s"", c, uid_client, gid_client, client->pid, client->id);
+
+#if ENABLE_ACL
+    client->user = uid2username(uid_client);
+#endif
+
+    g_hash_table_insert(client_connections, c, client);
+    return client;
+}
+"," crm_client_new(qb_ipcs_connection_t * c, uid_t uid_client, gid_t gid_client)
+ {
+     static gid_t gid_cluster = 0;
+ 
+     crm_client_t *client = NULL;
+
+    CRM_LOG_ASSERT(c);
+    if (c == NULL) {
+        return NULL;
+     }
+ 
+     if (gid_cluster == 0) {
+         if(crm_user_lookup(CRM_DAEMON_USER, NULL, &gid_cluster) < 0) {
+             static bool have_error = FALSE;
+             if(have_error == FALSE) {
+                crm_warn(""Could not find group for user %s"", CRM_DAEMON_USER);
+                have_error = TRUE;
+            }
+         }
+     }
+ 
+    if (uid_client != 0) {
+         crm_trace(""Giving access to group %u"", gid_cluster);
+        /* Passing -1 to chown(2) means don't change */
+        qb_ipcs_connection_auth_set(c, -1, gid_cluster, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+     }
+ 
+     crm_client_init();
+
+    /* TODO: Do our own auth checking, return NULL if unauthorized */
+    client = calloc(1, sizeof(crm_client_t));
+
+    client->ipcs = c;
+    client->kind = CRM_CLIENT_IPC;
+    client->pid = crm_ipcs_client_pid(c);
+
+    client->id = crm_generate_uuid();
+
+    crm_debug(""Connecting %p for uid=%d gid=%d pid=%u id=%s"", c, uid_client, gid_client, client->pid, client->id);
+
+#if ENABLE_ACL
+    client->user = uid2username(uid_client);
+#endif
+
+    g_hash_table_insert(client_connections, c, client);
+    return client;
+}
+","The `crm_client_new` function initializes a new client connection for a given IPC (Inter-Process Communication) connection, ensuring proper user and group permissions. It first checks the validity of the connection and retrieves the server's user ID and group ID if not already set. The function then determines the appropriate user ID for access control, allowing privileged users to manage disconnections. After setting the necessary permissions, it allocates memory for a new `crm_client_t` structure, populates it with connection details, and logs the connection information. Finally, it inserts the new client into a global connection table and returns the client object.","The function initializes a new client connection for inter-process communication while ensuring proper user and group permissions. It first verifies the connection's validity and retrieves the server's user and group identifiers if they are not already set. The function then determines the appropriate user identifier for access control, allowing privileged users to manage disconnections. After configuring the necessary permissions, it allocates memory for a new client structure, populates it with connection details, and logs relevant information. Finally, the new client is added to a global connection table, and the client object is returned.","The vulnerability in the original code stemmed from insufficient authorization checks, allowing potentially unauthorized users to gain access to sensitive resources. Specifically, the code allowed any client with a non-zero user ID to set permissions, which could lead to privilege escalation. In the fixed version, the condition was modified to ensure that only clients with a valid user ID are granted access to the group permissions. This change mitigates the risk by preventing unauthorized users from manipulating access controls, thereby enhancing the overall security of the client connection initialization process.","The vulnerability in the original code arose from inadequate authorization checks, which allowed unauthorized users to manipulate access permissions, potentially leading to privilege escalation. This issue was addressed in the revised code by ensuring that only clients with a valid user identifier could be granted access to sensitive group permissions. By implementing this restriction, the fixed version prevents unauthorized users from altering access controls, thereby enhancing the security of the client connection initialization process and reducing the risk of exploitation by malicious actors.","The vulnerability was fixed by modifying the condition that checks the user identifier before granting access to group permissions. In the original code, any non-zero user identifier could lead to permission changes, which posed a security risk. The revised code now checks that the `uid_client` is not zero before calling the `qb_ipcs_connection_auth_set` function, ensuring that only clients with valid user identifiers can be granted access to the group associated with `gid_cluster`. This change effectively restricts access to authorized users, thereby enhancing the security of the client connection initialization process.","The vulnerability was addressed by implementing stricter authorization checks before granting access to sensitive permissions. The revised code ensures that only clients with a valid user identifier are allowed to modify access controls, thereby preventing unauthorized users from manipulating permissions. This change effectively restricts access to only those users who are properly authenticated, reducing the risk of privilege escalation. By enforcing these conditions, the updated implementation enhances the overall security of the client connection process and mitigates potential exploitation by malicious actors.","CWE-284, CWE-285, CWE-287, CWE-269, CWE-732, CWE-863, CWE-266, CWE-264, CWE-274, CWE-639",N,-1.0,"4,4","5, 5","4,3","4,4"
+2,2,187175,187175,,Remote,Not required,,CVE-2018-16074,https://www.cvedetails.com/cve/CVE-2018-16074/,CWE-285,Medium,Partial,,,2019-06-27,4.3,Insufficient policy enforcement in site isolation in Google Chrome prior to 69.0.3497.81 allowed a remote attacker to bypass site isolation via a crafted HTML page.,2019-07-01,Bypass ,21,https://github.com/chromium/chromium/commit/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59,b1f87486936ca0d6d9abf4d3b9b423a9c976fd59,"Avoid sharing process for blob URLs with null origin.
+
+Previously, when a frame with a unique origin, such as from a data
+URL, created a blob URL, the blob URL looked like blob:null/guid and
+resulted in a site URL of ""blob:"" when navigated to.  This incorrectly
+allowed all such blob URLs to share a process, even if they were
+created by different sites.
+
+This CL changes the site URL assigned in such cases to be the full
+blob URL, which includes the GUID.  This avoids process sharing for
+all blob URLs with unique origins.
+
+This fix is conservative in the sense that it would also isolate
+different blob URLs created by the same unique origin from each other.
+This case isn't expected to be common, so it's unlikely to affect
+process count.  There's ongoing work to maintain a GUID for unique
+origins, so longer-term, we could try using that to track down the
+creator and potentially use that GUID in the site URL instead of the
+blob URL's GUID, to avoid unnecessary process isolation in scenarios
+like this.
+
+Note that as part of this, we discovered a bug where data URLs aren't
+able to script blob URLs that they create: https://crbug.com/865254.
+This scripting bug should be fixed independently of this CL, and as
+far as we can tell, this CL doesn't regress scripting cases like this
+further.
+
+Bug: 863623
+Change-Id: Ib50407adbba3d5ee0cf6d72d3df7f8d8f24684ee
+Reviewed-on: https://chromium-review.googlesource.com/1142389
+Commit-Queue: Alex Moshchuk <alexmos@chromium.org>
+Reviewed-by: Charlie Reis <creis@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#576318}",0,content/browser/site_instance_impl.cc,"{""sha"": ""df77d7f7605bce424440a1c109d17011a4fd51b2"", ""filename"": ""content/browser/site_instance_impl.cc"", ""status"": ""modified"", ""additions"": 21, ""deletions"": 1, ""changes"": 22, ""blob_url"": ""https://github.com/chromium/chromium/blob/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59/content/browser/site_instance_impl.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59/content/browser/site_instance_impl.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/browser/site_instance_impl.cc?ref=b1f87486936ca0d6d9abf4d3b9b423a9c976fd59"", ""patch"": ""@@ -449,10 +449,30 @@ GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,\n   // This is useful for cases like file URLs.\n   if (!origin.unique()) {\n     // Prefer to use the scheme of |origin| rather than |url|, to correctly\n-    // cover blob: and filesystem: URIs (see also https://crbug.com/697111).\n+    // cover blob:file: and filesystem:file: URIs (see also\n+    // https://crbug.com/697111).\n     DCHECK(!origin.scheme().empty());\n     return GURL(origin.scheme() + \"":\"");\n   } else if (url.has_scheme()) {\n+    // In some cases, it is not safe to use just the scheme as a site URL, as\n+    // that might allow two URLs created by different sites to to share a\n+    // process.  See https://crbug.com/863623.\n+    //\n+    // TODO(alexmos,creis): This should eventually be expanded to certain other\n+    // schemes, such as data: and file:.\n+    if (url.SchemeIsBlob()) {\n+      // We get here for blob URLs of form blob:null/guid.  Use the full URL\n+      // with the guid in that case, which isolates all blob URLs with unique\n+      // origins from each other.  Remove hash from the URL, since\n+      // same-document navigations shouldn't use a different site URL.\n+      if (url.has_ref()) {\n+        GURL::Replacements replacements;\n+        replacements.ClearRef();\n+        url = url.ReplaceComponents(replacements);\n+      }\n+      return url;\n+    }\n+\n     DCHECK(!url.scheme().empty());\n     return GURL(url.scheme() + \"":\"");\n   }""}<_**next**_>{""sha"": ""8e92db4991f5bd591ca12d2b684078b07ababf2a"", ""filename"": ""content/browser/site_instance_impl_unittest.cc"", ""status"": ""modified"", ""additions"": 11, ""deletions"": 0, ""changes"": 11, ""blob_url"": ""https://github.com/chromium/chromium/blob/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59/content/browser/site_instance_impl_unittest.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59/content/browser/site_instance_impl_unittest.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/browser/site_instance_impl_unittest.cc?ref=b1f87486936ca0d6d9abf4d3b9b423a9c976fd59"", ""patch"": ""@@ -344,6 +344,17 @@ TEST_F(SiteInstanceTest, GetSiteForURL) {\n   EXPECT_EQ(\""file\"", site_url.scheme());\n   EXPECT_FALSE(site_url.has_host());\n \n+  // Blob URLs created from a unique origin use the full URL as the site URL,\n+  // except for the hash.\n+  test_url = GURL(\""blob:null/1029e5a4-2983-4b90-a585-ed217563acfeb\"");\n+  site_url = SiteInstanceImpl::GetSiteForURL(nullptr, test_url);\n+  EXPECT_EQ(site_url, test_url);\n+  test_url = GURL(\""blob:null/1029e5a4-2983-4b90-a585-ed217563acfeb#foo\"");\n+  site_url = SiteInstanceImpl::GetSiteForURL(nullptr, test_url);\n+  EXPECT_NE(site_url, test_url);\n+  EXPECT_FALSE(site_url.has_ref());\n+  EXPECT_TRUE(site_url.EqualsIgnoringRef(test_url));\n+\n   // Private domains are preserved, appspot being such a site.\n   test_url = GURL(\n       \""blob:http://www.example.appspot.com:44/\""""}<_**next**_>{""sha"": ""7aa65cb6339166c914b910740b39f352ebeb7033"", ""filename"": ""content/browser/site_per_process_browsertest.cc"", ""status"": ""modified"", ""additions"": 50, ""deletions"": 0, ""changes"": 50, ""blob_url"": ""https://github.com/chromium/chromium/blob/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59/content/browser/site_per_process_browsertest.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/b1f87486936ca0d6d9abf4d3b9b423a9c976fd59/content/browser/site_per_process_browsertest.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/browser/site_per_process_browsertest.cc?ref=b1f87486936ca0d6d9abf4d3b9b423a9c976fd59"", ""patch"": ""@@ -12675,4 +12675,54 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,\n             subframe->effective_frame_policy().sandbox_flags);\n }\n \n+// Ensure that when two cross-site frames have subframes with unique origins,\n+// and those subframes create blob URLs and navigate to them, the blob URLs end\n+// up in different processes. See https://crbug.com/863623.\n+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,\n+                       TwoBlobURLsWithNullOriginDontShareProcess) {\n+  GURL main_url(embedded_test_server()->GetURL(\n+      \""a.com\"", \""/navigation_controller/page_with_data_iframe.html\""));\n+  EXPECT_TRUE(NavigateToURL(shell(), main_url));\n+  FrameTreeNode* root = web_contents()->GetFrameTree()->root();\n+  FrameTreeNode* subframe = root->child_at(0);\n+\n+  // Create a blob URL in the subframe, and navigate to it.\n+  TestNavigationObserver observer(shell()->web_contents());\n+  std::string blob_script =\n+      \""var blob = new Blob(['foo'], {type : 'text/html'});\""\n+      \""var url = URL.createObjectURL(blob);\""\n+      \""location = url;\"";\n+  EXPECT_TRUE(ExecuteScript(subframe, blob_script));\n+  observer.Wait();\n+  RenderFrameHostImpl* subframe_rfh = subframe->current_frame_host();\n+  EXPECT_TRUE(subframe_rfh->GetLastCommittedURL().SchemeIsBlob());\n+\n+  // Open a cross-site popup and repeat these steps.\n+  GURL popup_url(embedded_test_server()->GetURL(\n+      \""b.com\"", \""/navigation_controller/page_with_data_iframe.html\""));\n+  Shell* new_shell = OpenPopup(root, popup_url, \""\"");\n+  FrameTreeNode* popup_root =\n+      static_cast<WebContentsImpl*>(new_shell->web_contents())\n+          ->GetFrameTree()\n+          ->root();\n+  FrameTreeNode* popup_subframe = popup_root->child_at(0);\n+\n+  TestNavigationObserver popup_observer(new_shell->web_contents());\n+  EXPECT_TRUE(ExecuteScript(popup_subframe, blob_script));\n+  popup_observer.Wait();\n+  RenderFrameHostImpl* popup_subframe_rfh =\n+      popup_subframe->current_frame_host();\n+  EXPECT_TRUE(popup_subframe_rfh->GetLastCommittedURL().SchemeIsBlob());\n+\n+  // Ensure that the two blob subframes don't share a process or SiteInstance.\n+  EXPECT_NE(subframe->current_frame_host()->GetSiteInstance(),\n+            popup_subframe->current_frame_host()->GetSiteInstance());\n+  EXPECT_NE(\n+      subframe->current_frame_host()->GetSiteInstance()->GetProcess(),\n+      popup_subframe->current_frame_host()->GetSiteInstance()->GetProcess());\n+  EXPECT_NE(\n+      subframe->current_frame_host()->GetSiteInstance()->GetSiteURL(),\n+      popup_subframe->current_frame_host()->GetSiteInstance()->GetSiteURL());\n+}\n+\n }  // namespace content""}","GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
+                                 const GURL& real_url) {
+  if (real_url.SchemeIs(kGuestScheme))
+    return real_url;
+
+  GURL url = SiteInstanceImpl::GetEffectiveURL(browser_context, real_url);
+  url::Origin origin = url::Origin::Create(url);
+
+  auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
+  url::Origin isolated_origin;
+  if (policy->GetMatchingIsolatedOrigin(origin, &isolated_origin))
+    return isolated_origin.GetURL();
+
+  if (!origin.host().empty() && origin.scheme() != url::kFileScheme) {
+    std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+        origin.host(),
+        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    std::string site = origin.scheme();
+    site += url::kStandardSchemeSeparator;
+    site += domain.empty() ? origin.host() : domain;
+    return GURL(site);
+  }
+
+   if (!origin.unique()) {
+    // cover blob:file: and filesystem:file: URIs (see also
+    // https://crbug.com/697111).
+     DCHECK(!origin.scheme().empty());
+     return GURL(origin.scheme() + "":"");
+   } else if (url.has_scheme()) {
+    // In some cases, it is not safe to use just the scheme as a site URL, as
+    // that might allow two URLs created by different sites to to share a
+    // process.  See https://crbug.com/863623.
+    //
+    // TODO(alexmos,creis): This should eventually be expanded to certain other
+    // schemes, such as data: and file:.
+    if (url.SchemeIsBlob()) {
+      // We get here for blob URLs of form blob:null/guid.  Use the full URL
+      // with the guid in that case, which isolates all blob URLs with unique
+      // origins from each other.  Remove hash from the URL, since
+      // same-document navigations shouldn't use a different site URL.
+      if (url.has_ref()) {
+        GURL::Replacements replacements;
+        replacements.ClearRef();
+        url = url.ReplaceComponents(replacements);
+      }
+      return url;
+    }
+
+     DCHECK(!url.scheme().empty());
+     return GURL(url.scheme() + "":"");
+   }
+
+  DCHECK(!url.is_valid()) << url;
+  return GURL();
+}
+","GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
+                                 const GURL& real_url) {
+  if (real_url.SchemeIs(kGuestScheme))
+    return real_url;
+
+  GURL url = SiteInstanceImpl::GetEffectiveURL(browser_context, real_url);
+  url::Origin origin = url::Origin::Create(url);
+
+  auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
+  url::Origin isolated_origin;
+  if (policy->GetMatchingIsolatedOrigin(origin, &isolated_origin))
+    return isolated_origin.GetURL();
+
+  if (!origin.host().empty() && origin.scheme() != url::kFileScheme) {
+    std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+        origin.host(),
+        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    std::string site = origin.scheme();
+    site += url::kStandardSchemeSeparator;
+    site += domain.empty() ? origin.host() : domain;
+    return GURL(site);
+  }
+
+   if (!origin.unique()) {
+     DCHECK(!origin.scheme().empty());
+     return GURL(origin.scheme() + "":"");
+   } else if (url.has_scheme()) {
+     DCHECK(!url.scheme().empty());
+     return GURL(url.scheme() + "":"");
+   }
+
+  DCHECK(!url.is_valid()) << url;
+  return GURL();
+}
+",C,"    // cover blob:file: and filesystem:file: URIs (see also
+    // https://crbug.com/697111).
+    // In some cases, it is not safe to use just the scheme as a site URL, as
+    // that might allow two URLs created by different sites to to share a
+    // process.  See https://crbug.com/863623.
+    //
+    // TODO(alexmos,creis): This should eventually be expanded to certain other
+    // schemes, such as data: and file:.
+    if (url.SchemeIsBlob()) {
+      // We get here for blob URLs of form blob:null/guid.  Use the full URL
+      // with the guid in that case, which isolates all blob URLs with unique
+      // origins from each other.  Remove hash from the URL, since
+      // same-document navigations shouldn't use a different site URL.
+      if (url.has_ref()) {
+        GURL::Replacements replacements;
+        replacements.ClearRef();
+        url = url.ReplaceComponents(replacements);
+      }
+      return url;
+    }
+
+",,,"@@ -449,10 +449,30 @@ GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
+   // This is useful for cases like file URLs.
+   if (!origin.unique()) {
+     // Prefer to use the scheme of |origin| rather than |url|, to correctly
+-    // cover blob: and filesystem: URIs (see also https://crbug.com/697111).
++    // cover blob:file: and filesystem:file: URIs (see also
++    // https://crbug.com/697111).
+     DCHECK(!origin.scheme().empty());
+     return GURL(origin.scheme() + "":"");
+   } else if (url.has_scheme()) {
++    // In some cases, it is not safe to use just the scheme as a site URL, as
++    // that might allow two URLs created by different sites to to share a
++    // process.  See https://crbug.com/863623.
++    //
++    // TODO(alexmos,creis): This should eventually be expanded to certain other
++    // schemes, such as data: and file:.
++    if (url.SchemeIsBlob()) {
++      // We get here for blob URLs of form blob:null/guid.  Use the full URL
++      // with the guid in that case, which isolates all blob URLs with unique
++      // origins from each other.  Remove hash from the URL, since
++      // same-document navigations shouldn't use a different site URL.
++      if (url.has_ref()) {
++        GURL::Replacements replacements;
++        replacements.ClearRef();
++        url = url.ReplaceComponents(replacements);
++      }
++      return url;
++    }
++
+     DCHECK(!url.scheme().empty());
+     return GURL(url.scheme() + "":"");
+   }",Chrome,b1f87486936ca0d6d9abf4d3b9b423a9c976fd59,0ea138d60b5c616ac59cd0561022a3105fd35f01,1,"GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
+                                 const GURL& real_url) {
+  // TODO(fsamuel, creis): For some reason appID is not recognized as a host.
+  if (real_url.SchemeIs(kGuestScheme))
+    return real_url;
+
+  GURL url = SiteInstanceImpl::GetEffectiveURL(browser_context, real_url);
+  url::Origin origin = url::Origin::Create(url);
+
+  // Isolated origins should use the full origin as their site URL. A subdomain
+  // of an isolated origin should also use that isolated origin's site URL. It
+  // is important to check |url| rather than |real_url| here, since some
+  // effective URLs (such as for NTP) need to be resolved prior to the isolated
+  // origin lookup.
+  auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
+  url::Origin isolated_origin;
+  if (policy->GetMatchingIsolatedOrigin(origin, &isolated_origin))
+    return isolated_origin.GetURL();
+
+  // If the url has a host, then determine the site.  Skip file URLs to avoid a
+  // situation where site URL of file://localhost/ would mismatch Blink's origin
+  // (which ignores the hostname in this case - see https://crbug.com/776160).
+  if (!origin.host().empty() && origin.scheme() != url::kFileScheme) {
+    // Only keep the scheme and registered domain of |origin|.
+    std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+        origin.host(),
+        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    std::string site = origin.scheme();
+    site += url::kStandardSchemeSeparator;
+    site += domain.empty() ? origin.host() : domain;
+    return GURL(site);
+  }
+
+  // If there is no host but there is a scheme, return the scheme.
+   // This is useful for cases like file URLs.
+   if (!origin.unique()) {
+     // Prefer to use the scheme of |origin| rather than |url|, to correctly
+//flaw_line_below:
+    // cover blob: and filesystem: URIs (see also https://crbug.com/697111).
+//fix_flaw_line_below:
+//    // cover blob:file: and filesystem:file: URIs (see also
+//fix_flaw_line_below:
+//    // https://crbug.com/697111).
+     DCHECK(!origin.scheme().empty());
+     return GURL(origin.scheme() + "":"");
+   } else if (url.has_scheme()) {
+//fix_flaw_line_below:
+//    // In some cases, it is not safe to use just the scheme as a site URL, as
+//fix_flaw_line_below:
+//    // that might allow two URLs created by different sites to to share a
+//fix_flaw_line_below:
+//    // process.  See https://crbug.com/863623.
+//fix_flaw_line_below:
+//    //
+//fix_flaw_line_below:
+//    // TODO(alexmos,creis): This should eventually be expanded to certain other
+//fix_flaw_line_below:
+//    // schemes, such as data: and file:.
+//fix_flaw_line_below:
+//    if (url.SchemeIsBlob()) {
+//fix_flaw_line_below:
+//      // We get here for blob URLs of form blob:null/guid.  Use the full URL
+//fix_flaw_line_below:
+//      // with the guid in that case, which isolates all blob URLs with unique
+//fix_flaw_line_below:
+//      // origins from each other.  Remove hash from the URL, since
+//fix_flaw_line_below:
+//      // same-document navigations shouldn't use a different site URL.
+//fix_flaw_line_below:
+//      if (url.has_ref()) {
+//fix_flaw_line_below:
+//        GURL::Replacements replacements;
+//fix_flaw_line_below:
+//        replacements.ClearRef();
+//fix_flaw_line_below:
+//        url = url.ReplaceComponents(replacements);
+//fix_flaw_line_below:
+//      }
+//fix_flaw_line_below:
+//      return url;
+//fix_flaw_line_below:
+//    }
+//fix_flaw_line_below:
+//
+     DCHECK(!url.scheme().empty());
+     return GURL(url.scheme() + "":"");
+   }
+
+  // Otherwise the URL should be invalid; return an empty site.
+  DCHECK(!url.is_valid()) << url;
+  return GURL();
+}
+",187175,"GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
+                                 const GURL& real_url) {
+  if (real_url.SchemeIs(kGuestScheme))
+    return real_url;
+
+  GURL url = SiteInstanceImpl::GetEffectiveURL(browser_context, real_url);
+  url::Origin origin = url::Origin::Create(url);
+
+  auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
+  url::Origin isolated_origin;
+  if (policy->GetMatchingIsolatedOrigin(origin, &isolated_origin))
+    return isolated_origin.GetURL();
+
+  if (!origin.host().empty() && origin.scheme() != url::kFileScheme) {
+    std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+        origin.host(),
+        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    std::string site = origin.scheme();
+    site += url::kStandardSchemeSeparator;
+    site += domain.empty() ? origin.host() : domain;
+    return GURL(site);
+  }
+
+   if (!origin.unique()) {
+     DCHECK(!origin.scheme().empty());
+     return GURL(origin.scheme() + "":"");
+   } else if (url.has_scheme()) {
+     DCHECK(!url.scheme().empty());
+     return GURL(url.scheme() + "":"");
+   }
+
+  DCHECK(!url.is_valid()) << url;
+  return GURL();
+}
+","GURL SiteInstance::GetSiteForURL(BrowserContext* browser_context,
+                                 const GURL& real_url) {
+  if (real_url.SchemeIs(kGuestScheme))
+    return real_url;
+
+  GURL url = SiteInstanceImpl::GetEffectiveURL(browser_context, real_url);
+  url::Origin origin = url::Origin::Create(url);
+
+  auto* policy = ChildProcessSecurityPolicyImpl::GetInstance();
+  url::Origin isolated_origin;
+  if (policy->GetMatchingIsolatedOrigin(origin, &isolated_origin))
+    return isolated_origin.GetURL();
+
+  if (!origin.host().empty() && origin.scheme() != url::kFileScheme) {
+    std::string domain = net::registry_controlled_domains::GetDomainAndRegistry(
+        origin.host(),
+        net::registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
+    std::string site = origin.scheme();
+    site += url::kStandardSchemeSeparator;
+    site += domain.empty() ? origin.host() : domain;
+    return GURL(site);
+  }
+
+   if (!origin.unique()) {
+    // cover blob:file: and filesystem:file: URIs (see also
+    // https://crbug.com/697111).
+     DCHECK(!origin.scheme().empty());
+     return GURL(origin.scheme() + "":"");
+   } else if (url.has_scheme()) {
+    // In some cases, it is not safe to use just the scheme as a site URL, as
+    // that might allow two URLs created by different sites to to share a
+    // process.  See https://crbug.com/863623.
+    //
+    // TODO(alexmos,creis): This should eventually be expanded to certain other
+    // schemes, such as data: and file:.
+    if (url.SchemeIsBlob()) {
+      // We get here for blob URLs of form blob:null/guid.  Use the full URL
+      // with the guid in that case, which isolates all blob URLs with unique
+      // origins from each other.  Remove hash from the URL, since
+      // same-document navigations shouldn't use a different site URL.
+      if (url.has_ref()) {
+        GURL::Replacements replacements;
+        replacements.ClearRef();
+        url = url.ReplaceComponents(replacements);
+      }
+      return url;
+    }
+
+     DCHECK(!url.scheme().empty());
+     return GURL(url.scheme() + "":"");
+   }
+
+  DCHECK(!url.is_valid()) << url;
+  return GURL();
+}
+","The provided code defines a function `GetSiteForURL` that determines the site associated with a given URL in a browser context. It first checks if the URL uses a guest scheme, returning it directly if so. For other URLs, it retrieves an effective URL and its origin. The function then checks for any matching isolated origins based on security policies. If the origin has a valid host and is not a file scheme, it constructs a site string using the scheme and the domain. Finally, it handles cases for unique origins and invalid URLs, ensuring a valid GURL is returned or an empty GURL if none is applicable.","The code defines a function that determines the site associated with a given URL within a browser context. It first checks if the URL belongs to a specific scheme, returning it directly if it does. For other URLs, it retrieves an effective version and its origin, then checks for any isolated origins based on security policies. If the origin has a valid host and is not a file type, it constructs a site string using the scheme and domain. The function also handles cases for unique origins and invalid URLs, ensuring a valid output or an empty result when necessary.","The vulnerability in the original code stemmed from the potential for different URLs to share the same process, which could lead to security issues, particularly with certain schemes. Specifically, the handling of unique origins was inadequate, allowing URLs like blob and filesystem types to be treated similarly, risking cross-origin data exposure. The fixed code addresses this by explicitly checking for blob URLs and ensuring that they are treated uniquely by using the full URL with a GUID, while also removing any hash components to prevent same-document navigations from compromising isolation. This enhances security by preventing unintended sharing of processes among different origins.","The vulnerability in the original code arose from the inadequate handling of certain URL schemes, which could allow different origins to share the same process, leading to potential security risks. This was particularly concerning for blob and filesystem URLs, as they could inadvertently expose data across different contexts. The fixed code addresses this issue by implementing specific checks for blob URLs, ensuring they are treated uniquely by utilizing their full structure, including unique identifiers, while also removing any hash components. This change enhances security by preventing cross-origin data exposure and ensuring proper isolation between different origins.","The vulnerability was fixed by introducing specific handling for blob URLs within the code. When a URL is identified as a blob type, the code now checks for the presence of a reference and, if found, removes it to prevent same-document navigations from affecting site isolation. By using the full URL with a GUID, the code ensures that blob URLs are treated as unique origins, thus preventing different origins from sharing the same process. This adjustment enhances security by isolating blob URLs from one another, addressing the risks highlighted in the original implementation.","The vulnerability was fixed by implementing specific checks for certain URL types that could compromise security through process sharing. The updated code ensures that blob URLs are treated uniquely by utilizing their complete structure, including unique identifiers, which prevents different origins from inadvertently sharing the same process. Additionally, it removes any reference components from these URLs to maintain proper isolation during same-document navigations. This approach enhances security by ensuring that potentially sensitive data remains isolated between different contexts, effectively mitigating the risks associated with cross-origin data exposure.","CWE-346, CWE-269, CWE-267, CWE-610, CWE-668, CWE-441, CWE-200, CWE-266, CWE-284, CWE-264",N,-1.0,"4,4","4, 4","4, 3","4,4"
+3,3,187201,187201,,Remote,Not required,,CVE-2018-16086,https://www.cvedetails.com/cve/CVE-2018-16086/,CWE-285,Medium,Partial,Partial,,2019-06-27,5.8,Insufficient policy enforcement in extensions API in Google Chrome prior to 69.0.3497.81 allowed an attacker who convinced a user to install a malicious extension to bypass navigation restrictions via a crafted Chrome Extension.,2019-07-01,Bypass ,2,https://github.com/chromium/chromium/commit/8247b125c7b6888dc1c3932e19d6d8fe5a74a460,8247b125c7b6888dc1c3932e19d6d8fe5a74a460,"Extensions: Prevent content script injection in the New tab Page.
+
+r487664 disallowed content script injection in the New Tab Page. However, the
+check in RendererPermissionsPolicyDelegate::IsRestrictedUrl for the same, might
+not work due to the following reasons:
+  - There might be a race between checking if the extension can inject the
+    script and setting the new tab url in the renderer (SearchBouncer).
+  - The New Tab page url in the SearchBouncer might be set incorrectly due to
+    incorrect handling of multiple profiles by InstantService.
+
+Fix this by checking if the current renderer process is an Instant (NTP)
+renderer. This should work since the NTP renderer process should not be shared
+with other sites.
+
+BUG=844428, 662610
+
+Change-Id: I45f6b27fb2680d3b8df6e1da223452ffee09b0d8
+Reviewed-on: https://chromium-review.googlesource.com/1068607
+Reviewed-by: Devlin <rdevlin.cronin@chromium.org>
+Commit-Queue: Karan Bhatia <karandeepb@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#563031}",1,chrome/renderer/extensions/renderer_permissions_policy_delegate.cc,"{""sha"": ""28fcf0e428f5f70b3fc85ccf1706aa699b534547"", ""filename"": ""chrome/browser/extensions/content_script_apitest.cc"", ""status"": ""modified"", ""additions"": 61, ""deletions"": 0, ""changes"": 61, ""blob_url"": ""https://github.com/chromium/chromium/blob/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/browser/extensions/content_script_apitest.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/browser/extensions/content_script_apitest.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/browser/extensions/content_script_apitest.cc?ref=8247b125c7b6888dc1c3932e19d6d8fe5a74a460"", ""patch"": ""@@ -20,8 +20,10 @@\n #include \""chrome/browser/search/search.h\""\n #include \""chrome/browser/ui/browser.h\""\n #include \""chrome/browser/ui/javascript_dialogs/javascript_dialog_tab_helper.h\""\n+#include \""chrome/browser/ui/search/local_ntp_test_utils.h\""\n #include \""chrome/browser/ui/tabs/tab_strip_model.h\""\n #include \""chrome/common/chrome_switches.h\""\n+#include \""chrome/common/webui_url_constants.h\""\n #include \""chrome/test/base/ui_test_utils.h\""\n #include \""content/public/browser/javascript_dialog_manager.h\""\n #include \""content/public/browser/render_frame_host.h\""\n@@ -798,4 +800,63 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptBypassingSandbox) {\n   ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();\n }\n \n+// Test fixture which sets a custom NTP Page.\n+// TODO(karandeepb): Similar logic to set up a custom NTP is used elsewhere as\n+// well. Abstract this away into a reusable test fixture class.\n+class NTPInterceptionTest : public ExtensionApiTest {\n+ public:\n+  NTPInterceptionTest()\n+      : https_test_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}\n+\n+  // ExtensionApiTest override:\n+  void SetUpOnMainThread() override {\n+    ExtensionApiTest::SetUpOnMainThread();\n+    test_data_dir_ = test_data_dir_.AppendASCII(\""ntp_content_script\"");\n+    https_test_server_.ServeFilesFromDirectory(test_data_dir_);\n+    ASSERT_TRUE(https_test_server_.Start());\n+\n+    GURL ntp_url = https_test_server_.GetURL(\""/fake_ntp.html\"");\n+    local_ntp_test_utils::SetUserSelectedDefaultSearchProvider(\n+        profile(), https_test_server_.base_url().spec(), ntp_url.spec());\n+  }\n+\n+  const net::EmbeddedTestServer* https_test_server() const {\n+    return &https_test_server_;\n+  }\n+\n+ private:\n+  net::EmbeddedTestServer https_test_server_;\n+  DISALLOW_COPY_AND_ASSIGN(NTPInterceptionTest);\n+};\n+\n+// Ensure extensions can't inject a content script into the New Tab page.\n+// Regression test for crbug.com/844428.\n+IN_PROC_BROWSER_TEST_F(NTPInterceptionTest, ContentScript) {\n+  // Load an extension which tries to inject a script into every frame.\n+  ExtensionTestMessageListener listener(\""ready\"", false /*will_reply*/);\n+  const Extension* extension = LoadExtension(test_data_dir_);\n+  ASSERT_TRUE(extension);\n+  ASSERT_TRUE(listener.WaitUntilSatisfied());\n+\n+  // Create a corresponding off the record profile for the current profile. This\n+  // is necessary to reproduce crbug.com/844428, which occurs in part due to\n+  // incorrect handling of multiple profiles by the NTP code.\n+  Browser* incognito_browser = CreateIncognitoBrowser(profile());\n+  ASSERT_TRUE(incognito_browser);\n+\n+  // Ensure that the extension isn't able to inject the script into the New Tab\n+  // Page.\n+  ui_test_utils::NavigateToURL(browser(), GURL(chrome::kChromeUINewTabURL));\n+  content::WebContents* web_contents =\n+      browser()->tab_strip_model()->GetActiveWebContents();\n+  ASSERT_TRUE(search::IsInstantNTP(web_contents));\n+\n+  bool script_injected_in_ntp = false;\n+  ASSERT_TRUE(ExecuteScriptAndExtractBool(\n+      web_contents,\n+      \""window.domAutomationController.send(document.title !== 'Fake NTP');\"",\n+      &script_injected_in_ntp));\n+  EXPECT_FALSE(script_injected_in_ntp);\n+}\n+\n }  // namespace extensions""}<_**next**_>{""sha"": ""22fcfa02bd9589a462e2d404ebea98a4e9ad8ca2"", ""filename"": ""chrome/renderer/extensions/renderer_permissions_policy_delegate.cc"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 2, ""changes"": 6, ""blob_url"": ""https://github.com/chromium/chromium/blob/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/renderer/extensions/renderer_permissions_policy_delegate.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/renderer/extensions/renderer_permissions_policy_delegate.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/renderer/extensions/renderer_permissions_policy_delegate.cc?ref=8247b125c7b6888dc1c3932e19d6d8fe5a74a460"", ""patch"": ""@@ -4,8 +4,9 @@\n \n #include \""chrome/renderer/extensions/renderer_permissions_policy_delegate.h\""\n \n+#include \""base/command_line.h\""\n+#include \""chrome/common/chrome_switches.h\""\n #include \""chrome/common/extensions/extension_constants.h\""\n-#include \""chrome/renderer/searchbox/search_bouncer.h\""\n #include \""extensions/common/constants.h\""\n #include \""extensions/common/extensions_client.h\""\n #include \""extensions/common/manifest_constants.h\""\n@@ -33,7 +34,8 @@ bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(\n     return true;\n   }\n \n-  if (SearchBouncer::GetInstance()->IsNewTabPage(document_url)) {\n+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(\n+          ::switches::kInstantProcess)) {\n     if (error)\n       *error = errors::kCannotScriptNtp;\n     return true;""}<_**next**_>{""sha"": ""558f3ed4b5027c73094ec0118f3fda2793022be1"", ""filename"": ""chrome/test/data/extensions/api_test/ntp_content_script/background.js"", ""status"": ""added"", ""additions"": 5, ""deletions"": 0, ""changes"": 5, ""blob_url"": ""https://github.com/chromium/chromium/blob/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/background.js"", ""raw_url"": ""https://github.com/chromium/chromium/raw/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/background.js"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/test/data/extensions/api_test/ntp_content_script/background.js?ref=8247b125c7b6888dc1c3932e19d6d8fe5a74a460"", ""patch"": ""@@ -0,0 +1,5 @@\n+// Copyright 2018 The Chromium Authors. All rights reserved.\n+// Use of this source code is governed by a BSD-style license that can be\n+// found in the LICENSE file.\n+\n+chrome.test.sendMessage('ready');""}<_**next**_>{""sha"": ""b8a5a02f13fb19e4fdd03f0c176f4c79cdaf5379"", ""filename"": ""chrome/test/data/extensions/api_test/ntp_content_script/content_script.js"", ""status"": ""added"", ""additions"": 7, ""deletions"": 0, ""changes"": 7, ""blob_url"": ""https://github.com/chromium/chromium/blob/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/content_script.js"", ""raw_url"": ""https://github.com/chromium/chromium/raw/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/content_script.js"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/test/data/extensions/api_test/ntp_content_script/content_script.js?ref=8247b125c7b6888dc1c3932e19d6d8fe5a74a460"", ""patch"": ""@@ -0,0 +1,7 @@\n+// Copyright 2018 The Chromium Authors. All rights reserved.\n+// Use of this source code is governed by a BSD-style license that can be\n+// found in the LICENSE file.\n+\n+document.addEventListener('DOMContentLoaded', function() {\n+  document.title = 'injected';\n+});""}<_**next**_>{""sha"": ""2a39a503af9fbc28778166b6b3ae9d2b4114f8e3"", ""filename"": ""chrome/test/data/extensions/api_test/ntp_content_script/fake_ntp.html"", ""status"": ""added"", ""additions"": 8, ""deletions"": 0, ""changes"": 8, ""blob_url"": ""https://github.com/chromium/chromium/blob/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/fake_ntp.html"", ""raw_url"": ""https://github.com/chromium/chromium/raw/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/fake_ntp.html"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/test/data/extensions/api_test/ntp_content_script/fake_ntp.html?ref=8247b125c7b6888dc1c3932e19d6d8fe5a74a460"", ""patch"": ""@@ -0,0 +1,8 @@\n+<!DOCTYPE html>\n+<html>\n+<head>\n+  <title>Fake NTP</title>\n+</head>\n+<body>\n+</body>\n+</html>""}<_**next**_>{""sha"": ""efa8cc384007b32738737fdfa336623d3a22493c"", ""filename"": ""chrome/test/data/extensions/api_test/ntp_content_script/manifest.json"", ""status"": ""added"", ""additions"": 23, ""deletions"": 0, ""changes"": 23, ""blob_url"": ""https://github.com/chromium/chromium/blob/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/manifest.json"", ""raw_url"": ""https://github.com/chromium/chromium/raw/8247b125c7b6888dc1c3932e19d6d8fe5a74a460/chrome/test/data/extensions/api_test/ntp_content_script/manifest.json"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/test/data/extensions/api_test/ntp_content_script/manifest.json?ref=8247b125c7b6888dc1c3932e19d6d8fe5a74a460"", ""patch"": ""@@ -0,0 +1,23 @@\n+{\n+  \""manifest_version\"": 2,\n+  \""name\"": \""NTP content script injection\"",\n+  \""version\"": \""1\"",\n+  \""description\"": \""Test for crbug.com/844428\"",\n+  \""content_scripts\"": [\n+    {\n+      \""matches\"": [\n+        \""<all_urls>\""\n+      ],\n+      \""js\"": [\n+        \""content_script.js\""\n+      ],\n+      \""run_at\"": \""document_start\"",\n+      \""all_frames\"": true\n+    }\n+  ],\n+  \""background\"": {\n+    \""scripts\"": [\n+      \""background.js\""\n+    ]\n+  }\n+}""}","bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(
+    const GURL& document_url,
+    std::string* error) {
+  if (dispatcher_->IsExtensionActive(kWebStoreAppId)) {
+    if (error)
+      *error = errors::kCannotScriptGallery;
+     return true;
+   }
+ 
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kInstantProcess)) {
+     if (error)
+       *error = errors::kCannotScriptNtp;
+     return true;
+  }
+
+  return false;
+}
+","bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(
+    const GURL& document_url,
+    std::string* error) {
+  if (dispatcher_->IsExtensionActive(kWebStoreAppId)) {
+    if (error)
+      *error = errors::kCannotScriptGallery;
+     return true;
+   }
+ 
+  if (SearchBouncer::GetInstance()->IsNewTabPage(document_url)) {
+     if (error)
+       *error = errors::kCannotScriptNtp;
+     return true;
+  }
+
+  return false;
+}
+",C,"  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kInstantProcess)) {
+","  if (SearchBouncer::GetInstance()->IsNewTabPage(document_url)) {
+",,"@@ -4,8 +4,9 @@
+ 
+ #include ""chrome/renderer/extensions/renderer_permissions_policy_delegate.h""
+ 
++#include ""base/command_line.h""
++#include ""chrome/common/chrome_switches.h""
+ #include ""chrome/common/extensions/extension_constants.h""
+-#include ""chrome/renderer/searchbox/search_bouncer.h""
+ #include ""extensions/common/constants.h""
+ #include ""extensions/common/extensions_client.h""
+ #include ""extensions/common/manifest_constants.h""
+@@ -33,7 +34,8 @@ bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(
+     return true;
+   }
+ 
+-  if (SearchBouncer::GetInstance()->IsNewTabPage(document_url)) {
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          ::switches::kInstantProcess)) {
+     if (error)
+       *error = errors::kCannotScriptNtp;
+     return true;",Chrome,8247b125c7b6888dc1c3932e19d6d8fe5a74a460,3d1cba08168abe3a7c51639e49659b8381dfb66f,1,"bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(
+    const GURL& document_url,
+    std::string* error) {
+  if (dispatcher_->IsExtensionActive(kWebStoreAppId)) {
+    if (error)
+      *error = errors::kCannotScriptGallery;
+     return true;
+   }
+ 
+//flaw_line_below:
+  if (SearchBouncer::GetInstance()->IsNewTabPage(document_url)) {
+//fix_flaw_line_below:
+//  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+//fix_flaw_line_below:
+//          ::switches::kInstantProcess)) {
+     if (error)
+       *error = errors::kCannotScriptNtp;
+     return true;
+  }
+
+  return false;
+}
+",187201,"bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(
+    const GURL& document_url,
+    std::string* error) {
+  if (dispatcher_->IsExtensionActive(kWebStoreAppId)) {
+    if (error)
+      *error = errors::kCannotScriptGallery;
+     return true;
+   }
+ 
+  if (SearchBouncer::GetInstance()->IsNewTabPage(document_url)) {
+     if (error)
+       *error = errors::kCannotScriptNtp;
+     return true;
+  }
+
+  return false;
+}
+","bool RendererPermissionsPolicyDelegate::IsRestrictedUrl(
+    const GURL& document_url,
+    std::string* error) {
+  if (dispatcher_->IsExtensionActive(kWebStoreAppId)) {
+    if (error)
+      *error = errors::kCannotScriptGallery;
+     return true;
+   }
+ 
+  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+          ::switches::kInstantProcess)) {
+     if (error)
+       *error = errors::kCannotScriptNtp;
+     return true;
+  }
+
+  return false;
+}
+","The `IsRestrictedUrl` function in the `RendererPermissionsPolicyDelegate` class checks if a given URL, represented by `document_url`, is restricted from scripting based on specific conditions. It first verifies if an extension identified by `kWebStoreAppId` is active; if so, it sets an error message and returns true, indicating the URL is restricted. Next, it checks if the URL corresponds to a new tab page using the `SearchBouncer` instance; if true, it also sets an error message and returns true. If neither condition is met, the function returns false, indicating no restrictions apply.","The provided code defines a function that determines whether a specific URL is restricted from being scripted based on certain criteria. It first checks if a particular extension is active; if it is, the function indicates that scripting is not allowed and sets an appropriate error message. Next, it assesses whether the URL corresponds to a new tab page, and if so, it similarly restricts scripting and sets a relevant error message. If neither condition is met, the function concludes that the URL is not restricted, allowing for scripting to proceed without any errors.","The vulnerability in the original code stemmed from its reliance on a specific condition to restrict scripting for new tab pages, which could be bypassed if the URL did not match that condition. The fixed code addresses this by replacing the previous check with a more robust verification that looks for a command-line switch indicating the process type. This change enhances security by ensuring that scripting is restricted not only based on the URL but also on the execution context of the process, thereby preventing potential exploitation through unverified URLs that could have previously been allowed.","The vulnerability in the original code arose from its insufficient checks for restricting scripting on new tab pages, which could allow unauthorized access if certain conditions were not met. This lack of a comprehensive validation mechanism made it possible for malicious scripts to execute in contexts that should have been protected. The revised code mitigates this issue by implementing a more stringent check that considers the execution context of the process, ensuring that scripting is appropriately restricted based on the command-line parameters. This enhancement significantly reduces the risk of exploitation by providing a more reliable safeguard against unauthorized scripting.","The vulnerability was fixed by replacing the previous check for new tab pages with a more robust condition that examines the command-line switches of the current process. In the updated code, the function now verifies if the command line has a specific switch indicating the process type, using `base::CommandLine::ForCurrentProcess()->HasSwitch(::switches::kInstantProcess)`. This change ensures that scripting is restricted not only based on the URL but also on the context in which the process is running. As a result, this enhancement effectively prevents unauthorized scripting in scenarios that were previously vulnerable.","The vulnerability was addressed by enhancing the conditions under which scripting is restricted. The revised code introduces a more comprehensive check that evaluates the execution context of the process, rather than relying solely on specific URL conditions. By incorporating a mechanism that assesses command-line parameters, the updated implementation ensures that scripting is prohibited in scenarios that should be protected, regardless of the URL. This improvement effectively closes the loophole that allowed unauthorized access, thereby strengthening the overall security posture and preventing potential exploitation through unverified or malicious scripts.","CWE-95, CWE-79, CWE-74, CWE-78, CWE-434, CWE-73, CWE-94, CWE-20, CWE-434, CWE-269",N,-1.0,"4,4","5,5","4,4","4, 5"

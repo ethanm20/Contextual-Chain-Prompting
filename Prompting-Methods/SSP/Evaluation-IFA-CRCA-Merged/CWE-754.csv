@@ -1,0 +1,1690 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5
+0,0,177927,177927,,Remote,Not required,Partial,CVE-2017-11144,https://www.cvedetails.com/cve/CVE-2017-11144/,CWE-754,Low,,,,2017-07-10,5.0,"In PHP before 5.6.31, 7.x before 7.0.21, and 7.1.x before 7.1.7, the openssl extension PEM sealing code did not check the return value of the OpenSSL sealing function, which could lead to a crash of the PHP interpreter, related to an interpretation conflict for a negative number in ext/openssl/openssl.c, and an OpenSSL documentation omission.",2018-05-03,,1,https://git.php.net/?p=php-src.git;a=commit;h=73cabfedf519298e1a11192699f44d53c529315e,73cabfedf519298e1a11192699f44d53c529315e,,1,,,"PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                RETVAL_FALSE;
+		efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+","PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                RETVAL_FALSE;
+		efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+",C,"       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+","       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+",4b38feabe745b553703cd53f37615b955502f4e7,"@@ -5421,7 +5421,7 @@ PHP_FUNCTION(openssl_seal)
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+-       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
++       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                RETVAL_FALSE;",php,https://git.php.net/?p=php-src.git;a=blob;f=ext/openssl/openssl.c;h=2107b9ba5905b5e880dc5f31117e25ee15c6f79b;hb=2107b9ba5905b5e880dc5f31117e25ee15c6f79b,https://git.php.net/?p=php-src.git;a=blob;f=ext/openssl/openssl.c;h=6203267a0579350372304f69f601c6022c251bc1;hb=6203267a0579350372304f69f601c6022c251bc1,1,"PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+//flaw_line_below:
+       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+//fix_flaw_line_below:
+//       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                RETVAL_FALSE;
+		efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+",177927,"PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                RETVAL_FALSE;
+		efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+","PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                RETVAL_FALSE;
+		efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+","The vulnerability in the original `openssl_seal` function arises from the improper handling of the return value from `EVP_SealInit`. If this function fails, the subsequent calls to `EVP_SealUpdate` and `EVP_SealFinal` could still execute, potentially leading to memory corruption or data leakage. In the fixed code, the condition for checking the success of `EVP_SealInit` was changed from a logical OR (`||`) to a comparison with `<= 0`, ensuring that if `EVP_SealInit` fails, the function will immediately return false, preventing further execution and mitigating the risk of exploitation.","The vulnerability in the original code stems from inadequate error handling after a critical initialization step, which could lead to subsequent operations executing even if the initialization fails. This oversight allows for potential memory corruption or data leakage, as the program may attempt to process invalid or uninitialized data. In the revised code, the error handling was improved by explicitly checking the return value of the initialization step. If the initialization fails, the function now correctly terminates early, preventing any further operations that could compromise the integrity and security of the data being processed.","CWE-391,CWE-665,CWE-754,CWE-457,CWE-456,CWE-252,CWE-253,CWE-755,CWE-690,CWE-909",Y,3.0,2.0,5.0,4.0,5.0
+1,1,177928,177928,,Remote,Not required,Partial,CVE-2017-11144,https://www.cvedetails.com/cve/CVE-2017-11144/,CWE-754,Low,,,,2017-07-10,5.0,"In PHP before 5.6.31, 7.x before 7.0.21, and 7.1.x before 7.1.7, the openssl extension PEM sealing code did not check the return value of the OpenSSL sealing function, which could lead to a crash of the PHP interpreter, related to an interpretation conflict for a negative number in ext/openssl/openssl.c, and an OpenSSL documentation omission.",2018-05-03,,1,https://git.php.net/?p=php-src.git;a=commit;h=91826a311dd37f4c4e5d605fa7af331e80ddd4c3,91826a311dd37f4c4e5d605fa7af331e80ddd4c3,,1,,,"PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+","PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+",C,"       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+","       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+",ec664bd26dff421dec09e05ae27f4e1031613348,"@@ -5926,7 +5926,7 @@ PHP_FUNCTION(openssl_seal)
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+-       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
++       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                efree(buf);",php,https://git.php.net/?p=php-src.git;a=blob;f=ext/openssl/openssl.c;h=8a925ceba5a5fe2c9f8043642c6521d1de9d5629;hb=8a925ceba5a5fe2c9f8043642c6521d1de9d5629,https://git.php.net/?p=php-src.git;a=blob;f=ext/openssl/openssl.c;h=47bafaf66030a50252ec579054acbe61fef43d9d;hb=47bafaf66030a50252ec579054acbe61fef43d9d,1,"PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+//flaw_line_below:
+       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+//fix_flaw_line_below:
+//       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+",177928,"PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (!EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+","PHP_FUNCTION(openssl_seal)
+{
+	zval *pubkeys, *pubkey, *sealdata, *ekeys, *iv = NULL;
+	HashTable *pubkeysht;
+	EVP_PKEY **pkeys;
+	zend_resource ** key_resources;	/* so we know what to cleanup */
+	int i, len1, len2, *eksl, nkeys, iv_len;
+	unsigned char iv_buf[EVP_MAX_IV_LENGTH + 1], *buf = NULL, **eks;
+	char * data;
+	size_t data_len;
+	char *method =NULL;
+	size_t method_len = 0;
+	const EVP_CIPHER *cipher;
+	EVP_CIPHER_CTX *ctx;
+
+	if (zend_parse_parameters(ZEND_NUM_ARGS(), ""sz/z/a/|sz/"", &data, &data_len,
+				&sealdata, &ekeys, &pubkeys, &method, &method_len, &iv) == FAILURE) {
+		return;
+	}
+	pubkeysht = Z_ARRVAL_P(pubkeys);
+	nkeys = pubkeysht ? zend_hash_num_elements(pubkeysht) : 0;
+	if (!nkeys) {
+		php_error_docref(NULL, E_WARNING, ""Fourth argument to openssl_seal() must be a non-empty array"");
+		RETURN_FALSE;
+	}
+
+	PHP_OPENSSL_CHECK_SIZE_T_TO_INT(data_len, data);
+
+	if (method) {
+		cipher = EVP_get_cipherbyname(method);
+		if (!cipher) {
+			php_error_docref(NULL, E_WARNING, ""Unknown signature algorithm."");
+			RETURN_FALSE;
+		}
+	} else {
+		cipher = EVP_rc4();
+	}
+
+	iv_len = EVP_CIPHER_iv_length(cipher);
+	if (!iv && iv_len > 0) {
+		php_error_docref(NULL, E_WARNING,
+				""Cipher algorithm requires an IV to be supplied as a sixth parameter"");
+		RETURN_FALSE;
+	}
+
+	pkeys = safe_emalloc(nkeys, sizeof(*pkeys), 0);
+	eksl = safe_emalloc(nkeys, sizeof(*eksl), 0);
+	eks = safe_emalloc(nkeys, sizeof(*eks), 0);
+	memset(eks, 0, sizeof(*eks) * nkeys);
+	key_resources = safe_emalloc(nkeys, sizeof(zend_resource*), 0);
+	memset(key_resources, 0, sizeof(zend_resource*) * nkeys);
+	memset(pkeys, 0, sizeof(*pkeys) * nkeys);
+
+	/* get the public keys we are using to seal this data */
+	i = 0;
+	ZEND_HASH_FOREACH_VAL(pubkeysht, pubkey) {
+		pkeys[i] = php_openssl_evp_from_zval(pubkey, 1, NULL, 0, 0, &key_resources[i]);
+		if (pkeys[i] == NULL) {
+			php_error_docref(NULL, E_WARNING, ""not a public key (%dth member of pubkeys)"", i+1);
+			RETVAL_FALSE;
+			goto clean_exit;
+		}
+		eks[i] = emalloc(EVP_PKEY_size(pkeys[i]) + 1);
+		i++;
+	} ZEND_HASH_FOREACH_END();
+
+	ctx = EVP_CIPHER_CTX_new();
+	if (ctx == NULL || !EVP_EncryptInit(ctx,cipher,NULL,NULL)) {
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	/* allocate one byte extra to make room for \0 */
+        buf = emalloc(data_len + EVP_CIPHER_CTX_block_size(ctx));
+        EVP_CIPHER_CTX_cleanup(ctx);
+ 
+       if (EVP_SealInit(ctx, cipher, eks, eksl, &iv_buf[0], pkeys, nkeys) <= 0 ||
+                        !EVP_SealUpdate(ctx, buf, &len1, (unsigned char *)data, (int)data_len) ||
+                        !EVP_SealFinal(ctx, buf + len1, &len2)) {
+                efree(buf);
+		EVP_CIPHER_CTX_free(ctx);
+		php_openssl_store_errors();
+		RETVAL_FALSE;
+		goto clean_exit;
+	}
+
+	if (len1 + len2 > 0) {
+		zval_dtor(sealdata);
+		ZVAL_NEW_STR(sealdata, zend_string_init((char*)buf, len1 + len2, 0));
+		efree(buf);
+
+		zval_dtor(ekeys);
+		array_init(ekeys);
+		for (i=0; i<nkeys; i++) {
+			eks[i][eksl[i]] = '\0';
+			add_next_index_stringl(ekeys, (const char*)eks[i], eksl[i]);
+			efree(eks[i]);
+			eks[i] = NULL;
+		}
+
+		if (iv) {
+			zval_dtor(iv);
+			iv_buf[iv_len] = '\0';
+			ZVAL_NEW_STR(iv, zend_string_init((char*)iv_buf, iv_len, 0));
+		}
+	} else {
+		efree(buf);
+	}
+	RETVAL_LONG(len1 + len2);
+	EVP_CIPHER_CTX_free(ctx);
+
+clean_exit:
+	for (i=0; i<nkeys; i++) {
+		if (key_resources[i] == NULL && pkeys[i] != NULL) {
+			EVP_PKEY_free(pkeys[i]);
+		}
+		if (eks[i]) {
+			efree(eks[i]);
+		}
+	}
+	efree(eks);
+	efree(eksl);
+	efree(pkeys);
+	efree(key_resources);
+}
+","The vulnerability in the original `openssl_seal` function arises from the improper handling of the return value from `EVP_SealInit`. If this function fails, the subsequent calls to `EVP_SealUpdate` and `EVP_SealFinal` could still execute, leading to potential memory corruption or data leakage. The fix in the updated code addresses this by changing the condition to check if `EVP_SealInit` returns a value less than or equal to zero, ensuring that the function exits early if initialization fails, thus preventing any further processing of potentially uninitialized or invalid data.","The vulnerability in the original code stems from inadequate error handling after a critical initialization step, which could lead to subsequent operations being executed with uninitialized or invalid data. This oversight could result in memory corruption or unintended data exposure. The fix in the revised code enhances error checking by ensuring that if the initialization fails, the function exits immediately, preventing any further processing. This change effectively mitigates the risk of executing operations on potentially compromised data, thereby improving the overall security and stability of the function.","CWE-908, CWE-665, CWE-456, CWE-457, CWE-824, CWE-909, CWE-415, CWE-119, CWE-754, CWE-391",N,-1.0,2.0,5.0,4.0,4.0
+2,2,182172,182172,,Local,Not required,Complete,CVE-2018-18690,https://www.cvedetails.com/cve/CVE-2018-18690/,CWE-754,Low,,,,2018-10-26,4.9,"In the Linux kernel before 4.17, a local attacker able to set attributes on an xfs filesystem could make this filesystem non-operational until the next mount by triggering an unchecked error condition during an xfs attribute change, because xfs_attr_shortform_addname in fs/xfs/libxfs/xfs_attr.c mishandles ATTR_REPLACE operations with conversion of an attr from short to long form.",2019-10-02,,8,https://github.com/torvalds/linux/commit/7b38460dc8e4eafba06c78f8e37099d3b34d473c,7b38460dc8e4eafba06c78f8e37099d3b34d473c,"xfs: don't fail when converting shortform attr to long form during ATTR_REPLACE
+
+Kanda Motohiro reported that expanding a tiny xattr into a large xattr
+fails on XFS because we remove the tiny xattr from a shortform fork and
+then try to re-add it after converting the fork to extents format having
+not removed the ATTR_REPLACE flag.  This fails because the attr is no
+longer present, causing a fs shutdown.
+
+This is derived from the patch in his bug report, but we really
+shouldn't ignore a nonzero retval from the remove call.
+
+Bugzilla: https://bugzilla.kernel.org/show_bug.cgi?id=199119
+Reported-by: kanda.motohiro@gmail.com
+Reviewed-by: Dave Chinner <dchinner@redhat.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>",1,fs/xfs/libxfs/xfs_attr.c,"{""sha"": ""35a124400d60a11a468ec298335835a2666f087c"", ""filename"": ""fs/xfs/libxfs/xfs_attr.c"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 1, ""changes"": 9, ""blob_url"": ""https://github.com/torvalds/linux/blob/7b38460dc8e4eafba06c78f8e37099d3b34d473c/fs/xfs/libxfs/xfs_attr.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/7b38460dc8e4eafba06c78f8e37099d3b34d473c/fs/xfs/libxfs/xfs_attr.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/fs/xfs/libxfs/xfs_attr.c?ref=7b38460dc8e4eafba06c78f8e37099d3b34d473c"", ""patch"": ""@@ -511,7 +511,14 @@ xfs_attr_shortform_addname(xfs_da_args_t *args)\n \t\tif (args->flags & ATTR_CREATE)\n \t\t\treturn retval;\n \t\tretval = xfs_attr_shortform_remove(args);\n-\t\tASSERT(retval == 0);\n+\t\tif (retval)\n+\t\t\treturn retval;\n+\t\t/*\n+\t\t * Since we have removed the old attr, clear ATTR_REPLACE so\n+\t\t * that the leaf format add routine won't trip over the attr\n+\t\t * not being around.\n+\t\t */\n+\t\targs->flags &= ~ATTR_REPLACE;\n \t}\n \n \tif (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||""}","xfs_attr_shortform_addname(xfs_da_args_t *args)
+{
+	int newsize, forkoff, retval;
+
+	trace_xfs_attr_sf_addname(args);
+
+	retval = xfs_attr_shortform_lookup(args);
+	if ((args->flags & ATTR_REPLACE) && (retval == -ENOATTR)) {
+		return retval;
+	} else if (retval == -EEXIST) {
+ 		if (args->flags & ATTR_CREATE)
+ 			return retval;
+ 		retval = xfs_attr_shortform_remove(args);
+		if (retval)
+			return retval;
+		/*
+		 * Since we have removed the old attr, clear ATTR_REPLACE so
+		 * that the leaf format add routine won't trip over the attr
+		 * not being around.
+		 */
+		args->flags &= ~ATTR_REPLACE;
+ 	}
+ 
+ 	if (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||
+	    args->valuelen >= XFS_ATTR_SF_ENTSIZE_MAX)
+		return -ENOSPC;
+
+	newsize = XFS_ATTR_SF_TOTSIZE(args->dp);
+	newsize += XFS_ATTR_SF_ENTSIZE_BYNAME(args->namelen, args->valuelen);
+
+	forkoff = xfs_attr_shortform_bytesfit(args->dp, newsize);
+	if (!forkoff)
+		return -ENOSPC;
+
+	xfs_attr_shortform_add(args, forkoff);
+	return 0;
+}
+","xfs_attr_shortform_addname(xfs_da_args_t *args)
+{
+	int newsize, forkoff, retval;
+
+	trace_xfs_attr_sf_addname(args);
+
+	retval = xfs_attr_shortform_lookup(args);
+	if ((args->flags & ATTR_REPLACE) && (retval == -ENOATTR)) {
+		return retval;
+	} else if (retval == -EEXIST) {
+ 		if (args->flags & ATTR_CREATE)
+ 			return retval;
+ 		retval = xfs_attr_shortform_remove(args);
+		ASSERT(retval == 0);
+ 	}
+ 
+ 	if (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||
+	    args->valuelen >= XFS_ATTR_SF_ENTSIZE_MAX)
+		return -ENOSPC;
+
+	newsize = XFS_ATTR_SF_TOTSIZE(args->dp);
+	newsize += XFS_ATTR_SF_ENTSIZE_BYNAME(args->namelen, args->valuelen);
+
+	forkoff = xfs_attr_shortform_bytesfit(args->dp, newsize);
+	if (!forkoff)
+		return -ENOSPC;
+
+	xfs_attr_shortform_add(args, forkoff);
+	return 0;
+}
+",C,"		if (retval)
+			return retval;
+		/*
+		 * Since we have removed the old attr, clear ATTR_REPLACE so
+		 * that the leaf format add routine won't trip over the attr
+		 * not being around.
+		 */
+		args->flags &= ~ATTR_REPLACE;
+","		ASSERT(retval == 0);
+",,"@@ -511,7 +511,14 @@ xfs_attr_shortform_addname(xfs_da_args_t *args)
+ 		if (args->flags & ATTR_CREATE)
+ 			return retval;
+ 		retval = xfs_attr_shortform_remove(args);
+-		ASSERT(retval == 0);
++		if (retval)
++			return retval;
++		/*
++		 * Since we have removed the old attr, clear ATTR_REPLACE so
++		 * that the leaf format add routine won't trip over the attr
++		 * not being around.
++		 */
++		args->flags &= ~ATTR_REPLACE;
+ 	}
+ 
+ 	if (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||",linux,7b38460dc8e4eafba06c78f8e37099d3b34d473c,7d83fb14258b9961920cd86f0b921caaeb3ebe85,1,"xfs_attr_shortform_addname(xfs_da_args_t *args)
+{
+	int newsize, forkoff, retval;
+
+	trace_xfs_attr_sf_addname(args);
+
+	retval = xfs_attr_shortform_lookup(args);
+	if ((args->flags & ATTR_REPLACE) && (retval == -ENOATTR)) {
+		return retval;
+	} else if (retval == -EEXIST) {
+ 		if (args->flags & ATTR_CREATE)
+ 			return retval;
+ 		retval = xfs_attr_shortform_remove(args);
+//flaw_line_below:
+		ASSERT(retval == 0);
+//fix_flaw_line_below:
+//		if (retval)
+//fix_flaw_line_below:
+//			return retval;
+//fix_flaw_line_below:
+//		/*
+//fix_flaw_line_below:
+//		 * Since we have removed the old attr, clear ATTR_REPLACE so
+//fix_flaw_line_below:
+//		 * that the leaf format add routine won't trip over the attr
+//fix_flaw_line_below:
+//		 * not being around.
+//fix_flaw_line_below:
+//		 */
+//fix_flaw_line_below:
+//		args->flags &= ~ATTR_REPLACE;
+ 	}
+ 
+ 	if (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||
+	    args->valuelen >= XFS_ATTR_SF_ENTSIZE_MAX)
+		return -ENOSPC;
+
+	newsize = XFS_ATTR_SF_TOTSIZE(args->dp);
+	newsize += XFS_ATTR_SF_ENTSIZE_BYNAME(args->namelen, args->valuelen);
+
+	forkoff = xfs_attr_shortform_bytesfit(args->dp, newsize);
+	if (!forkoff)
+		return -ENOSPC;
+
+	xfs_attr_shortform_add(args, forkoff);
+	return 0;
+}
+",182172,"xfs_attr_shortform_addname(xfs_da_args_t *args)
+{
+	int newsize, forkoff, retval;
+
+	trace_xfs_attr_sf_addname(args);
+
+	retval = xfs_attr_shortform_lookup(args);
+	if ((args->flags & ATTR_REPLACE) && (retval == -ENOATTR)) {
+		return retval;
+	} else if (retval == -EEXIST) {
+ 		if (args->flags & ATTR_CREATE)
+ 			return retval;
+ 		retval = xfs_attr_shortform_remove(args);
+		ASSERT(retval == 0);
+ 	}
+ 
+ 	if (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||
+	    args->valuelen >= XFS_ATTR_SF_ENTSIZE_MAX)
+		return -ENOSPC;
+
+	newsize = XFS_ATTR_SF_TOTSIZE(args->dp);
+	newsize += XFS_ATTR_SF_ENTSIZE_BYNAME(args->namelen, args->valuelen);
+
+	forkoff = xfs_attr_shortform_bytesfit(args->dp, newsize);
+	if (!forkoff)
+		return -ENOSPC;
+
+	xfs_attr_shortform_add(args, forkoff);
+	return 0;
+}
+","xfs_attr_shortform_addname(xfs_da_args_t *args)
+{
+	int newsize, forkoff, retval;
+
+	trace_xfs_attr_sf_addname(args);
+
+	retval = xfs_attr_shortform_lookup(args);
+	if ((args->flags & ATTR_REPLACE) && (retval == -ENOATTR)) {
+		return retval;
+	} else if (retval == -EEXIST) {
+ 		if (args->flags & ATTR_CREATE)
+ 			return retval;
+ 		retval = xfs_attr_shortform_remove(args);
+		if (retval)
+			return retval;
+		/*
+		 * Since we have removed the old attr, clear ATTR_REPLACE so
+		 * that the leaf format add routine won't trip over the attr
+		 * not being around.
+		 */
+		args->flags &= ~ATTR_REPLACE;
+ 	}
+ 
+ 	if (args->namelen >= XFS_ATTR_SF_ENTSIZE_MAX ||
+	    args->valuelen >= XFS_ATTR_SF_ENTSIZE_MAX)
+		return -ENOSPC;
+
+	newsize = XFS_ATTR_SF_TOTSIZE(args->dp);
+	newsize += XFS_ATTR_SF_ENTSIZE_BYNAME(args->namelen, args->valuelen);
+
+	forkoff = xfs_attr_shortform_bytesfit(args->dp, newsize);
+	if (!forkoff)
+		return -ENOSPC;
+
+	xfs_attr_shortform_add(args, forkoff);
+	return 0;
+}
+","The vulnerability in the original code lies in the handling of the `ATTR_REPLACE` flag when an attribute already exists. If `retval` is `-EEXIST` and `ATTR_CREATE` is not set, the code removes the existing attribute but does not clear the `ATTR_REPLACE` flag, which could lead to incorrect behavior in subsequent operations. The fixed code addresses this by checking the return value of `xfs_attr_shortform_remove(args)` and clearing the `ATTR_REPLACE` flag after successfully removing the attribute. This ensures that the attribute addition logic operates correctly without being affected by stale flags.","The vulnerability in the original code arises from improper handling of a specific flag when an existing attribute is encountered. If an attempt is made to replace an attribute that does not exist, the code allows for the removal of the existing attribute but fails to reset the flag that indicates a replacement operation. This oversight can lead to incorrect behavior in subsequent attribute operations, potentially causing unexpected errors. The revised code rectifies this issue by ensuring that the flag is cleared after successfully removing the attribute, thereby preventing any unintended consequences in later processing.","CWE-665, CWE-459, CWE-456, CWE-642, CWE-911, CWE-457, CWE-915, CWE-667, CWE-662, CWE-909",N,-1.0,2.0,4.0,4.0,2.0
+3,3,182652,182652,,Remote,Not required,Partial,CVE-2019-1010239,https://www.cvedetails.com/cve/CVE-2019-1010239/,CWE-754,Low,,,,2019-07-19,5.0,"DaveGamble/cJSON cJSON 1.7.8 is affected by: Improper Check for Unusual or Exceptional Conditions. The impact is: Null dereference, so attack can cause denial of service. The component is: cJSON_GetObjectItemCaseSensitive() function. The attack vector is: crafted json file. The fixed version is: 1.7.9 and later.",2019-07-29,DoS ,5,https://github.com/DaveGamble/cJSON/commit/be749d7efa7c9021da746e685bd6dec79f9dd99b,be749d7efa7c9021da746e685bd6dec79f9dd99b,Fix crash of cJSON_GetObjectItemCaseSensitive when calling it on arrays,1,cJSON.c,"{""sha"": ""c9c5b61f8ba6ec47a333c9f0495822be0aa8fe94"", ""filename"": ""cJSON.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 1, ""changes"": 6, ""blob_url"": ""https://github.com/DaveGamble/cJSON/blob/be749d7efa7c9021da746e685bd6dec79f9dd99b/cJSON.c"", ""raw_url"": ""https://github.com/DaveGamble/cJSON/raw/be749d7efa7c9021da746e685bd6dec79f9dd99b/cJSON.c"", ""contents_url"": ""https://api.github.com/repos/DaveGamble/cJSON/contents/cJSON.c?ref=be749d7efa7c9021da746e685bd6dec79f9dd99b"", ""patch"": ""@@ -1781,7 +1781,7 @@ static cJSON *get_object_item(const cJSON * const object, const char * const nam\n     current_element = object->child;\n     if (case_sensitive)\n     {\n-        while ((current_element != NULL) && (strcmp(name, current_element->string) != 0))\n+        while ((current_element != NULL) && (current_element->string != NULL) && (strcmp(name, current_element->string) != 0))\n         {\n             current_element = current_element->next;\n         }\n@@ -1794,6 +1794,10 @@ static cJSON *get_object_item(const cJSON * const object, const char * const nam\n         }\n     }\n \n+    if ((current_element == NULL) || (current_element->string == NULL)) {\n+        return NULL;\n+    }\n+\n     return current_element;\n }\n ""}<_**next**_>{""sha"": ""1635fa30ae9f7d85fedb32be021807d689f79864"", ""filename"": ""tests/misc_tests.c"", ""status"": ""modified"", ""additions"": 24, ""deletions"": 0, ""changes"": 24, ""blob_url"": ""https://github.com/DaveGamble/cJSON/blob/be749d7efa7c9021da746e685bd6dec79f9dd99b/tests/misc_tests.c"", ""raw_url"": ""https://github.com/DaveGamble/cJSON/raw/be749d7efa7c9021da746e685bd6dec79f9dd99b/tests/misc_tests.c"", ""contents_url"": ""https://api.github.com/repos/DaveGamble/cJSON/contents/tests/misc_tests.c?ref=be749d7efa7c9021da746e685bd6dec79f9dd99b"", ""patch"": ""@@ -127,6 +127,28 @@ static void cjson_get_object_item_case_sensitive_should_get_object_items(void)\n     cJSON_Delete(item);\n }\n \n+static void cjson_get_object_item_should_not_crash_with_array(void) {\n+    cJSON *array = NULL;\n+    cJSON *found = NULL;\n+    array = cJSON_Parse(\""[1]\"");\n+\n+    found = cJSON_GetObjectItem(array, \""name\"");\n+    TEST_ASSERT_NULL(found);\n+\n+    cJSON_Delete(array);\n+}\n+\n+static void cjson_get_object_item_case_sensitive_should_not_crash_with_array(void) {\n+    cJSON *array = NULL;\n+    cJSON *found = NULL;\n+    array = cJSON_Parse(\""[1]\"");\n+\n+    found = cJSON_GetObjectItemCaseSensitive(array, \""name\"");\n+    TEST_ASSERT_NULL(found);\n+\n+    cJSON_Delete(array);\n+}\n+\n static void typecheck_functions_should_check_type(void)\n {\n     cJSON invalid[1];\n@@ -535,6 +557,8 @@ int CJSON_CDECL main(void)\n     RUN_TEST(cjson_array_foreach_should_not_dereference_null_pointer);\n     RUN_TEST(cjson_get_object_item_should_get_object_items);\n     RUN_TEST(cjson_get_object_item_case_sensitive_should_get_object_items);\n+    RUN_TEST(cjson_get_object_item_should_not_crash_with_array);\n+    RUN_TEST(cjson_get_object_item_case_sensitive_should_not_crash_with_array);\n     RUN_TEST(typecheck_functions_should_check_type);\n     RUN_TEST(cjson_should_not_parse_to_deeply_nested_jsons);\n     RUN_TEST(cjson_set_number_value_should_set_numbers);""}","static cJSON *get_object_item(const cJSON * const object, const char * const name, const cJSON_bool case_sensitive)
+{
+    cJSON *current_element = NULL;
+
+    if ((object == NULL) || (name == NULL))
+    {
+        return NULL;
+    }
+
+     current_element = object->child;
+     if (case_sensitive)
+     {
+        while ((current_element != NULL) && (current_element->string != NULL) && (strcmp(name, current_element->string) != 0))
+         {
+             current_element = current_element->next;
+         }
+    }
+    else
+    {
+        while ((current_element != NULL) && (case_insensitive_strcmp((const unsigned char*)name, (const unsigned char*)(current_element->string)) != 0))
+        {
+            current_element = current_element->next;
+         }
+     }
+ 
+    if ((current_element == NULL) || (current_element->string == NULL)) {
+        return NULL;
+    }
+
+     return current_element;
+ }
+","static cJSON *get_object_item(const cJSON * const object, const char * const name, const cJSON_bool case_sensitive)
+{
+    cJSON *current_element = NULL;
+
+    if ((object == NULL) || (name == NULL))
+    {
+        return NULL;
+    }
+
+     current_element = object->child;
+     if (case_sensitive)
+     {
+        while ((current_element != NULL) && (strcmp(name, current_element->string) != 0))
+         {
+             current_element = current_element->next;
+         }
+    }
+    else
+    {
+        while ((current_element != NULL) && (case_insensitive_strcmp((const unsigned char*)name, (const unsigned char*)(current_element->string)) != 0))
+        {
+            current_element = current_element->next;
+         }
+     }
+ 
+     return current_element;
+ }
+",C,"        while ((current_element != NULL) && (current_element->string != NULL) && (strcmp(name, current_element->string) != 0))
+    if ((current_element == NULL) || (current_element->string == NULL)) {
+        return NULL;
+    }
+
+","        while ((current_element != NULL) && (strcmp(name, current_element->string) != 0))
+",,"@@ -1781,7 +1781,7 @@ static cJSON *get_object_item(const cJSON * const object, const char * const nam
+     current_element = object->child;
+     if (case_sensitive)
+     {
+-        while ((current_element != NULL) && (strcmp(name, current_element->string) != 0))
++        while ((current_element != NULL) && (current_element->string != NULL) && (strcmp(name, current_element->string) != 0))
+         {
+             current_element = current_element->next;
+         }
+@@ -1794,6 +1794,10 @@ static cJSON *get_object_item(const cJSON * const object, const char * const nam
+         }
+     }
+ 
++    if ((current_element == NULL) || (current_element->string == NULL)) {
++        return NULL;
++    }
++
+     return current_element;
+ }
+ ",cJSON,be749d7efa7c9021da746e685bd6dec79f9dd99b,cb1df2f88c0d335e031ade0d52fd6a59528c622f,1,"static cJSON *get_object_item(const cJSON * const object, const char * const name, const cJSON_bool case_sensitive)
+{
+    cJSON *current_element = NULL;
+
+    if ((object == NULL) || (name == NULL))
+    {
+        return NULL;
+    }
+
+     current_element = object->child;
+     if (case_sensitive)
+     {
+//flaw_line_below:
+        while ((current_element != NULL) && (strcmp(name, current_element->string) != 0))
+//fix_flaw_line_below:
+//        while ((current_element != NULL) && (current_element->string != NULL) && (strcmp(name, current_element->string) != 0))
+         {
+             current_element = current_element->next;
+         }
+    }
+    else
+    {
+        while ((current_element != NULL) && (case_insensitive_strcmp((const unsigned char*)name, (const unsigned char*)(current_element->string)) != 0))
+        {
+            current_element = current_element->next;
+         }
+     }
+ 
+//fix_flaw_line_below:
+//    if ((current_element == NULL) || (current_element->string == NULL)) {
+//fix_flaw_line_below:
+//        return NULL;
+//fix_flaw_line_below:
+//    }
+//fix_flaw_line_below:
+//
+     return current_element;
+ }
+",182652,"static cJSON *get_object_item(const cJSON * const object, const char * const name, const cJSON_bool case_sensitive)
+{
+    cJSON *current_element = NULL;
+
+    if ((object == NULL) || (name == NULL))
+    {
+        return NULL;
+    }
+
+     current_element = object->child;
+     if (case_sensitive)
+     {
+        while ((current_element != NULL) && (strcmp(name, current_element->string) != 0))
+         {
+             current_element = current_element->next;
+         }
+    }
+    else
+    {
+        while ((current_element != NULL) && (case_insensitive_strcmp((const unsigned char*)name, (const unsigned char*)(current_element->string)) != 0))
+        {
+            current_element = current_element->next;
+         }
+     }
+ 
+     return current_element;
+ }
+","static cJSON *get_object_item(const cJSON * const object, const char * const name, const cJSON_bool case_sensitive)
+{
+    cJSON *current_element = NULL;
+
+    if ((object == NULL) || (name == NULL))
+    {
+        return NULL;
+    }
+
+     current_element = object->child;
+     if (case_sensitive)
+     {
+        while ((current_element != NULL) && (current_element->string != NULL) && (strcmp(name, current_element->string) != 0))
+         {
+             current_element = current_element->next;
+         }
+    }
+    else
+    {
+        while ((current_element != NULL) && (case_insensitive_strcmp((const unsigned char*)name, (const unsigned char*)(current_element->string)) != 0))
+        {
+            current_element = current_element->next;
+         }
+     }
+ 
+    if ((current_element == NULL) || (current_element->string == NULL)) {
+        return NULL;
+    }
+
+     return current_element;
+ }
+","The vulnerability in the original code lies in the potential dereferencing of a null pointer when accessing `current_element->string`, which could lead to undefined behavior if `current_element` is not properly checked before use. Specifically, if `current_element` is NULL, the code would attempt to compare `name` with `current_element->string`, resulting in a crash. The fixed code addresses this by adding a check for `current_element->string` within the case-sensitive while loop and also includes a final check to ensure that `current_element` and its `string` are not NULL before returning, thus preventing potential null dereference issues.","The vulnerability in the original code arises from the lack of proper null checks before dereferencing pointers, which can lead to undefined behavior or crashes if the pointers are NULL. Specifically, if a pointer to an object is NULL, the code may attempt to access its properties, resulting in a null dereference. The fixed code addresses this issue by introducing additional checks to ensure that pointers are not NULL before they are accessed. This prevents potential crashes and enhances the robustness of the code by ensuring that all necessary conditions are validated before proceeding with operations on the pointers.","CWE-476,CWE-690,CWE-754,CWE-628,CWE-822,CWE-825,CWE-824,CWE-685,CWE-119,CWE-465",Y,3.0,4.0,4.0,3.0,2.0

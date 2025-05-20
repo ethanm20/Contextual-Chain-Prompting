@@ -1,0 +1,107 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,186937,186937,,Remote,Not required,Partial,CVE-2017-15393,https://www.cvedetails.com/cve/CVE-2017-15393/,CWE-668,Medium,Partial,Partial,,2018-02-07,6.8,"Insufficient Policy Enforcement in Devtools remote debugging in Google Chrome prior to 62.0.3202.62 allowed a remote attacker to obtain access to remote debugging functionality via a crafted HTML page, aka a Referer leak.",2019-10-02,,5,https://github.com/chromium/chromium/commit/a8ef19900d003ff7078fe4fcec8f63496b18f0dc,a8ef19900d003ff7078fe4fcec8f63496b18f0dc,"[DevTools] Use no-referrer for DevTools links
+
+Bug: 732751
+Change-Id: I77753120e2424203dedcc7bc0847fb67f87fe2b2
+Reviewed-on: https://chromium-review.googlesource.com/615021
+Reviewed-by: Andrey Kosyakov <caseq@chromium.org>
+Commit-Queue: Dmitry Gozman <dgozman@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#494413}",2,chrome/browser/devtools/devtools_window.cc,"{""sha"": ""1eaec03ec63ad99835933a59b908294d9daa0701"", ""filename"": ""chrome/browser/devtools/devtools_window.cc"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 2, ""changes"": 7, ""blob_url"": ""https://github.com/chromium/chromium/blob/a8ef19900d003ff7078fe4fcec8f63496b18f0dc/chrome/browser/devtools/devtools_window.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/a8ef19900d003ff7078fe4fcec8f63496b18f0dc/chrome/browser/devtools/devtools_window.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/browser/devtools/devtools_window.cc?ref=a8ef19900d003ff7078fe4fcec8f63496b18f0dc"", ""patch"": ""@@ -991,8 +991,11 @@ WebContents* DevToolsWindow::OpenURLFromTab(\n   DCHECK(source == main_web_contents_);\n   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {\n     WebContents* inspected_web_contents = GetInspectedWebContents();\n-    return inspected_web_contents ?\n-        inspected_web_contents->OpenURL(params) : NULL;\n+    if (!inspected_web_contents)\n+      return nullptr;\n+    content::OpenURLParams modified = params;\n+    modified.referrer = content::Referrer();\n+    return inspected_web_contents->OpenURL(modified);\n   }\n   bindings_->Reload();\n   return main_web_contents_;""}<_**next**_>{""sha"": ""0798c34a35bc9430cac581f838a37b2a9b1872f8"", ""filename"": ""third_party/WebKit/Source/devtools/front_end/inspector.html"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/chromium/chromium/blob/a8ef19900d003ff7078fe4fcec8f63496b18f0dc/third_party/WebKit/Source/devtools/front_end/inspector.html"", ""raw_url"": ""https://github.com/chromium/chromium/raw/a8ef19900d003ff7078fe4fcec8f63496b18f0dc/third_party/WebKit/Source/devtools/front_end/inspector.html"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/devtools/front_end/inspector.html?ref=a8ef19900d003ff7078fe4fcec8f63496b18f0dc"", ""patch"": ""@@ -8,6 +8,7 @@\n <head>\n     <meta http-equiv=\""content-type\"" content=\""text/html; charset=utf-8\"">\n     <meta http-equiv=\""Content-Security-Policy\"" content=\""object-src 'none'; script-src 'self' 'unsafe-eval' https://chrome-devtools-frontend.appspot.com\"">\n+    <meta name=\""referrer\"" content=\""no-referrer\"">\n     <script type=\""text/javascript\"" src=\""Runtime.js\""></script>\n     <script type=\""text/javascript\"" src=\""inspector.js\""></script>\n </head>""}","WebContents* DevToolsWindow::OpenURLFromTab(
+    WebContents* source,
+    const content::OpenURLParams& params) {
+   DCHECK(source == main_web_contents_);
+   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {
+     WebContents* inspected_web_contents = GetInspectedWebContents();
+    if (!inspected_web_contents)
+      return nullptr;
+    content::OpenURLParams modified = params;
+    modified.referrer = content::Referrer();
+    return inspected_web_contents->OpenURL(modified);
+   }
+   bindings_->Reload();
+   return main_web_contents_;
+}
+","WebContents* DevToolsWindow::OpenURLFromTab(
+    WebContents* source,
+    const content::OpenURLParams& params) {
+   DCHECK(source == main_web_contents_);
+   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {
+     WebContents* inspected_web_contents = GetInspectedWebContents();
+    return inspected_web_contents ?
+        inspected_web_contents->OpenURL(params) : NULL;
+   }
+   bindings_->Reload();
+   return main_web_contents_;
+}
+",C,"    if (!inspected_web_contents)
+      return nullptr;
+    content::OpenURLParams modified = params;
+    modified.referrer = content::Referrer();
+    return inspected_web_contents->OpenURL(modified);
+","    return inspected_web_contents ?
+        inspected_web_contents->OpenURL(params) : NULL;
+",,"@@ -991,8 +991,11 @@ WebContents* DevToolsWindow::OpenURLFromTab(
+   DCHECK(source == main_web_contents_);
+   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {
+     WebContents* inspected_web_contents = GetInspectedWebContents();
+-    return inspected_web_contents ?
+-        inspected_web_contents->OpenURL(params) : NULL;
++    if (!inspected_web_contents)
++      return nullptr;
++    content::OpenURLParams modified = params;
++    modified.referrer = content::Referrer();
++    return inspected_web_contents->OpenURL(modified);
+   }
+   bindings_->Reload();
+   return main_web_contents_;",Chrome,a8ef19900d003ff7078fe4fcec8f63496b18f0dc,f4d90f1e136d6def1ea88f0cc8e3c8eb4c924927,1,"WebContents* DevToolsWindow::OpenURLFromTab(
+    WebContents* source,
+    const content::OpenURLParams& params) {
+   DCHECK(source == main_web_contents_);
+   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {
+     WebContents* inspected_web_contents = GetInspectedWebContents();
+//flaw_line_below:
+    return inspected_web_contents ?
+//flaw_line_below:
+        inspected_web_contents->OpenURL(params) : NULL;
+//fix_flaw_line_below:
+//    if (!inspected_web_contents)
+//fix_flaw_line_below:
+//      return nullptr;
+//fix_flaw_line_below:
+//    content::OpenURLParams modified = params;
+//fix_flaw_line_below:
+//    modified.referrer = content::Referrer();
+//fix_flaw_line_below:
+//    return inspected_web_contents->OpenURL(modified);
+   }
+   bindings_->Reload();
+   return main_web_contents_;
+}
+",186937,"WebContents* DevToolsWindow::OpenURLFromTab(
+    WebContents* source,
+    const content::OpenURLParams& params) {
+   DCHECK(source == main_web_contents_);
+   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {
+     WebContents* inspected_web_contents = GetInspectedWebContents();
+    return inspected_web_contents ?
+        inspected_web_contents->OpenURL(params) : NULL;
+   }
+   bindings_->Reload();
+   return main_web_contents_;
+}
+","WebContents* DevToolsWindow::OpenURLFromTab(
+    WebContents* source,
+    const content::OpenURLParams& params) {
+   DCHECK(source == main_web_contents_);
+   if (!params.url.SchemeIs(content::kChromeDevToolsScheme)) {
+     WebContents* inspected_web_contents = GetInspectedWebContents();
+    if (!inspected_web_contents)
+      return nullptr;
+    content::OpenURLParams modified = params;
+    modified.referrer = content::Referrer();
+    return inspected_web_contents->OpenURL(modified);
+   }
+   bindings_->Reload();
+   return main_web_contents_;
+}
+","The vulnerability in the original code arises from the lack of validation for the `inspected_web_contents` pointer before calling `OpenURL(params)`, which could lead to a null pointer dereference if `GetInspectedWebContents()` returns null. This could potentially crash the application or lead to undefined behavior. In the fixed code, an additional check is introduced to ensure that `inspected_web_contents` is not null before proceeding. Furthermore, the `params` are modified to set a safe `referrer`, enhancing security by preventing potential misuse of the URL parameters. This ensures safer handling of URLs and prevents crashes.","The vulnerability in the original code stems from the lack of a null check for a critical pointer before invoking a method on it, which could lead to a null pointer dereference. This oversight could result in application crashes or unpredictable behavior if the pointer is null. The fixed code addresses this issue by introducing a validation step to ensure that the pointer is not null before proceeding with the method call. Additionally, it modifies the parameters to include a safe reference, enhancing security and preventing potential misuse of the input data, thereby improving overall robustness.","CWE-476,CWE-754,CWE-690,CWE-989,CWE-824,CWE-628,CWE-119,CWE-825,CWE-822,CWE-20",N,-1

@@ -1,0 +1,1457 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,182057,182057,,Remote,Not required,Partial,CVE-2015-3886,https://www.cvedetails.com/cve/CVE-2015-3886/,CWE-295,Low,Partial,Partial,,2017-07-21,7.5,"libinfinity before 0.6.6-1 does not validate expired SSL certificates, which allows remote attackers to have unspecified impact via unknown vectors.",2017-07-25,,4,https://github.com/gobby/libinfinity/commit/c97f870f5ae13112988d9f8ad464b4f679903706,c97f870f5ae13112988d9f8ad464b4f679903706,Fix expired certificate validation (gobby #61),2,libinfgtk/inf-gtk-certificate-manager.c,"{""sha"": ""cd36632bef90205d9fff7afcc8f45233e4f53776"", ""filename"": ""libinfgtk/inf-gtk-certificate-manager.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 2, ""changes"": 6, ""blob_url"": ""https://github.com/gobby/libinfinity/blob/c97f870f5ae13112988d9f8ad464b4f679903706/libinfgtk/inf-gtk-certificate-manager.c"", ""raw_url"": ""https://github.com/gobby/libinfinity/raw/c97f870f5ae13112988d9f8ad464b4f679903706/libinfgtk/inf-gtk-certificate-manager.c"", ""contents_url"": ""https://api.github.com/repos/gobby/libinfinity/contents/libinfgtk/inf-gtk-certificate-manager.c?ref=c97f870f5ae13112988d9f8ad464b4f679903706"", ""patch"": ""@@ -709,9 +709,11 @@ inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,\n \n       if(ret != GNUTLS_E_SUCCESS)\n         inf_gnutls_set_error(&error, ret);\n-      else if(verify & GNUTLS_CERT_INVALID)\n-        inf_gnutls_certificate_verification_set_error(&error, verify);\n     }\n+\n+    if(error == NULL)\n+      if(verify & GNUTLS_CERT_INVALID)\n+        inf_gnutls_certificate_verification_set_error(&error, verify);\n   }\n \n   /* Look up the host in our database of pinned certificates if we could not""}","inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,
+                                             gnutls_session_t session,
+                                             InfCertificateChain* chain,
+                                             gpointer user_data)
+{
+  InfGtkCertificateManager* manager;
+  InfGtkCertificateManagerPrivate* priv;
+
+  InfGtkCertificateDialogFlags flags;
+  gnutls_x509_crt_t presented_cert;
+  gnutls_x509_crt_t known_cert;
+  gchar* hostname;
+
+  gboolean match_hostname;
+  gboolean issuer_known;
+  gnutls_x509_crt_t root_cert;
+
+  int ret;
+  unsigned int verify;
+  GHashTable* table;
+  gboolean cert_equal;
+  time_t expiration_time;
+
+  InfGtkCertificateManagerQuery* query;
+  gchar* text;
+  GtkWidget* vbox;
+  GtkWidget* label;
+
+  GError* error;
+
+  manager = INF_GTK_CERTIFICATE_MANAGER(user_data);
+  priv = INF_GTK_CERTIFICATE_MANAGER_PRIVATE(manager);
+
+  g_object_get(G_OBJECT(connection), ""remote-hostname"", &hostname, NULL);
+  presented_cert = inf_certificate_chain_get_own_certificate(chain);
+
+  match_hostname = gnutls_x509_crt_check_hostname(presented_cert, hostname);
+
+  /* First, validate the certificate */
+  ret = gnutls_certificate_verify_peers2(session, &verify);
+  error = NULL;
+
+  if(ret != GNUTLS_E_SUCCESS)
+    inf_gnutls_set_error(&error, ret);
+
+  /* Remove the GNUTLS_CERT_ISSUER_NOT_KNOWN flag from the verification
+   * result, and if the certificate is still invalid, then set an error. */
+  if(error == NULL)
+  {
+    issuer_known = TRUE;
+    if(verify & GNUTLS_CERT_SIGNER_NOT_FOUND)
+    {
+      issuer_known = FALSE;
+
+      /* Re-validate the certificate for other failure reasons --
+       * unfortunately the gnutls_certificate_verify_peers2() call
+       * does not tell us whether the certificate is otherwise invalid
+       * if a signer is not found already. */
+      /* TODO: Here it would be good to use the verify flags from the
+       * certificate credentials, but GnuTLS does not have API to
+       * retrieve them. */
+      root_cert = inf_certificate_chain_get_root_certificate(chain);
+
+      ret = gnutls_x509_crt_list_verify(
+        inf_certificate_chain_get_raw(chain),
+        inf_certificate_chain_get_n_certificates(chain),
+        &root_cert,
+        1,
+        NULL,
+        0,
+        GNUTLS_VERIFY_ALLOW_X509_V1_CA_CRT,
+        &verify
+      );
+ 
+       if(ret != GNUTLS_E_SUCCESS)
+         inf_gnutls_set_error(&error, ret);
+     }
+
+    if(error == NULL)
+      if(verify & GNUTLS_CERT_INVALID)
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+   }
+ 
+   /* Look up the host in our database of pinned certificates if we could not
+   * fully verify the certificate, i.e. if either the issuer is not known or
+   * the hostname of the connection does not match the certificate. */
+  table = NULL;
+  if(error == NULL)
+  {
+    known_cert = NULL;
+    if(!match_hostname || !issuer_known)
+    {
+      /* If we cannot load the known host file, then cancel the connection.
+       * Otherwise it might happen that someone shows us a certificate that we
+       * tell the user we don't know, if though actually for that host we expect
+       * a different certificate. */
+      table = inf_gtk_certificate_manager_ref_known_hosts(manager, &error);
+      if(table != NULL)
+        known_cert = g_hash_table_lookup(table, hostname);
+    }
+  }
+
+  /* Next, configure the flags for the dialog to be shown based on the
+   * verification result, and on whether the pinned certificate matches
+   * the one presented by the host or not. */
+  flags = 0;
+  if(error == NULL)
+  {
+    if(known_cert != NULL)
+    {
+      cert_equal = inf_gtk_certificate_manager_compare_fingerprint(
+        known_cert,
+        presented_cert,
+        &error
+      );
+
+      if(error == NULL && cert_equal == FALSE)
+      {
+        if(!match_hostname)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+        if(!issuer_known)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_UNEXPECTED;
+        expiration_time = gnutls_x509_crt_get_expiration_time(known_cert);
+        if(expiration_time != (time_t)(-1))
+        {
+          expiration_time -= INF_GTK_CERTIFICATE_MANAGER_EXPIRATION_TOLERANCE;
+          if(time(NULL) > expiration_time)
+          {
+            flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_OLD_EXPIRED;
+          }
+        }
+      }
+    }
+    else
+    {
+      if(!match_hostname)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+      if(!issuer_known)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+    }
+  }
+
+  /* Now proceed either by accepting the connection, rejecting it, or
+   * bothering the user with an annoying dialog. */
+  if(error == NULL)
+  {
+    if(flags == 0)
+    {
+      if(match_hostname && issuer_known)
+      {
+        /* Remove the pinned entry if we now have a valid certificate for
+         * this host. */
+        if(table != NULL && g_hash_table_remove(table, hostname) == TRUE)
+        {
+          inf_gtk_certificate_manager_write_known_hosts_with_warning(
+            manager,
+            table
+          );
+        }
+      }
+
+      inf_xmpp_connection_certificate_verify_continue(connection);
+    }
+    else
+    {
+      query = g_slice_new(InfGtkCertificateManagerQuery);
+      query->manager = manager;
+      query->known_hosts = table;
+      query->connection = connection;
+      query->dialog = inf_gtk_certificate_dialog_new(
+        priv->parent_window,
+        0,
+        flags,
+        hostname,
+        chain
+      );
+      query->certificate_chain = chain;
+
+      table = NULL;
+
+      g_object_ref(query->connection);
+      inf_certificate_chain_ref(chain);
+
+      g_signal_connect(
+        G_OBJECT(connection),
+        ""notify::status"",
+        G_CALLBACK(inf_gtk_certificate_manager_notify_status_cb),
+        query
+      );
+
+      g_signal_connect(
+        G_OBJECT(query->dialog),
+        ""response"",
+        G_CALLBACK(inf_gtk_certificate_manager_response_cb),
+        query
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""_Cancel connection""),
+        GTK_RESPONSE_REJECT
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""C_ontinue connection""),
+        GTK_RESPONSE_ACCEPT
+      );
+
+      text = g_strdup_printf(
+        _(""Do you want to continue the connection to host \""%s\""? If you ""
+          ""choose to continue, this certificate will be trusted in the ""
+          ""future when connecting to this host.""),
+        hostname
+      );
+
+      label = gtk_label_new(text);
+      gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+      gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+      gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
+      gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.0);
+      gtk_widget_show(label);
+      g_free(text);
+
+      vbox = gtk_dialog_get_content_area(GTK_DIALOG(query->dialog));
+      gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 0);
+
+      priv->queries = g_slist_prepend(priv->queries, query);
+      gtk_window_present(GTK_WINDOW(query->dialog));
+    }
+  }
+  else
+  {
+    inf_xmpp_connection_certificate_verify_cancel(connection, error);
+    g_error_free(error);
+  }
+
+  if(table != NULL) g_hash_table_unref(table);
+  g_free(hostname);
+}
+","inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,
+                                             gnutls_session_t session,
+                                             InfCertificateChain* chain,
+                                             gpointer user_data)
+{
+  InfGtkCertificateManager* manager;
+  InfGtkCertificateManagerPrivate* priv;
+
+  InfGtkCertificateDialogFlags flags;
+  gnutls_x509_crt_t presented_cert;
+  gnutls_x509_crt_t known_cert;
+  gchar* hostname;
+
+  gboolean match_hostname;
+  gboolean issuer_known;
+  gnutls_x509_crt_t root_cert;
+
+  int ret;
+  unsigned int verify;
+  GHashTable* table;
+  gboolean cert_equal;
+  time_t expiration_time;
+
+  InfGtkCertificateManagerQuery* query;
+  gchar* text;
+  GtkWidget* vbox;
+  GtkWidget* label;
+
+  GError* error;
+
+  manager = INF_GTK_CERTIFICATE_MANAGER(user_data);
+  priv = INF_GTK_CERTIFICATE_MANAGER_PRIVATE(manager);
+
+  g_object_get(G_OBJECT(connection), ""remote-hostname"", &hostname, NULL);
+  presented_cert = inf_certificate_chain_get_own_certificate(chain);
+
+  match_hostname = gnutls_x509_crt_check_hostname(presented_cert, hostname);
+
+  /* First, validate the certificate */
+  ret = gnutls_certificate_verify_peers2(session, &verify);
+  error = NULL;
+
+  if(ret != GNUTLS_E_SUCCESS)
+    inf_gnutls_set_error(&error, ret);
+
+  /* Remove the GNUTLS_CERT_ISSUER_NOT_KNOWN flag from the verification
+   * result, and if the certificate is still invalid, then set an error. */
+  if(error == NULL)
+  {
+    issuer_known = TRUE;
+    if(verify & GNUTLS_CERT_SIGNER_NOT_FOUND)
+    {
+      issuer_known = FALSE;
+
+      /* Re-validate the certificate for other failure reasons --
+       * unfortunately the gnutls_certificate_verify_peers2() call
+       * does not tell us whether the certificate is otherwise invalid
+       * if a signer is not found already. */
+      /* TODO: Here it would be good to use the verify flags from the
+       * certificate credentials, but GnuTLS does not have API to
+       * retrieve them. */
+      root_cert = inf_certificate_chain_get_root_certificate(chain);
+
+      ret = gnutls_x509_crt_list_verify(
+        inf_certificate_chain_get_raw(chain),
+        inf_certificate_chain_get_n_certificates(chain),
+        &root_cert,
+        1,
+        NULL,
+        0,
+        GNUTLS_VERIFY_ALLOW_X509_V1_CA_CRT,
+        &verify
+      );
+ 
+       if(ret != GNUTLS_E_SUCCESS)
+         inf_gnutls_set_error(&error, ret);
+      else if(verify & GNUTLS_CERT_INVALID)
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+     }
+   }
+ 
+   /* Look up the host in our database of pinned certificates if we could not
+   * fully verify the certificate, i.e. if either the issuer is not known or
+   * the hostname of the connection does not match the certificate. */
+  table = NULL;
+  if(error == NULL)
+  {
+    known_cert = NULL;
+    if(!match_hostname || !issuer_known)
+    {
+      /* If we cannot load the known host file, then cancel the connection.
+       * Otherwise it might happen that someone shows us a certificate that we
+       * tell the user we don't know, if though actually for that host we expect
+       * a different certificate. */
+      table = inf_gtk_certificate_manager_ref_known_hosts(manager, &error);
+      if(table != NULL)
+        known_cert = g_hash_table_lookup(table, hostname);
+    }
+  }
+
+  /* Next, configure the flags for the dialog to be shown based on the
+   * verification result, and on whether the pinned certificate matches
+   * the one presented by the host or not. */
+  flags = 0;
+  if(error == NULL)
+  {
+    if(known_cert != NULL)
+    {
+      cert_equal = inf_gtk_certificate_manager_compare_fingerprint(
+        known_cert,
+        presented_cert,
+        &error
+      );
+
+      if(error == NULL && cert_equal == FALSE)
+      {
+        if(!match_hostname)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+        if(!issuer_known)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_UNEXPECTED;
+        expiration_time = gnutls_x509_crt_get_expiration_time(known_cert);
+        if(expiration_time != (time_t)(-1))
+        {
+          expiration_time -= INF_GTK_CERTIFICATE_MANAGER_EXPIRATION_TOLERANCE;
+          if(time(NULL) > expiration_time)
+          {
+            flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_OLD_EXPIRED;
+          }
+        }
+      }
+    }
+    else
+    {
+      if(!match_hostname)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+      if(!issuer_known)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+    }
+  }
+
+  /* Now proceed either by accepting the connection, rejecting it, or
+   * bothering the user with an annoying dialog. */
+  if(error == NULL)
+  {
+    if(flags == 0)
+    {
+      if(match_hostname && issuer_known)
+      {
+        /* Remove the pinned entry if we now have a valid certificate for
+         * this host. */
+        if(table != NULL && g_hash_table_remove(table, hostname) == TRUE)
+        {
+          inf_gtk_certificate_manager_write_known_hosts_with_warning(
+            manager,
+            table
+          );
+        }
+      }
+
+      inf_xmpp_connection_certificate_verify_continue(connection);
+    }
+    else
+    {
+      query = g_slice_new(InfGtkCertificateManagerQuery);
+      query->manager = manager;
+      query->known_hosts = table;
+      query->connection = connection;
+      query->dialog = inf_gtk_certificate_dialog_new(
+        priv->parent_window,
+        0,
+        flags,
+        hostname,
+        chain
+      );
+      query->certificate_chain = chain;
+
+      table = NULL;
+
+      g_object_ref(query->connection);
+      inf_certificate_chain_ref(chain);
+
+      g_signal_connect(
+        G_OBJECT(connection),
+        ""notify::status"",
+        G_CALLBACK(inf_gtk_certificate_manager_notify_status_cb),
+        query
+      );
+
+      g_signal_connect(
+        G_OBJECT(query->dialog),
+        ""response"",
+        G_CALLBACK(inf_gtk_certificate_manager_response_cb),
+        query
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""_Cancel connection""),
+        GTK_RESPONSE_REJECT
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""C_ontinue connection""),
+        GTK_RESPONSE_ACCEPT
+      );
+
+      text = g_strdup_printf(
+        _(""Do you want to continue the connection to host \""%s\""? If you ""
+          ""choose to continue, this certificate will be trusted in the ""
+          ""future when connecting to this host.""),
+        hostname
+      );
+
+      label = gtk_label_new(text);
+      gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+      gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+      gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
+      gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.0);
+      gtk_widget_show(label);
+      g_free(text);
+
+      vbox = gtk_dialog_get_content_area(GTK_DIALOG(query->dialog));
+      gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 0);
+
+      priv->queries = g_slist_prepend(priv->queries, query);
+      gtk_window_present(GTK_WINDOW(query->dialog));
+    }
+  }
+  else
+  {
+    inf_xmpp_connection_certificate_verify_cancel(connection, error);
+    g_error_free(error);
+  }
+
+  if(table != NULL) g_hash_table_unref(table);
+  g_free(hostname);
+}
+",C,"
+    if(error == NULL)
+      if(verify & GNUTLS_CERT_INVALID)
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+","      else if(verify & GNUTLS_CERT_INVALID)
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+",,"@@ -709,9 +709,11 @@ inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,
+ 
+       if(ret != GNUTLS_E_SUCCESS)
+         inf_gnutls_set_error(&error, ret);
+-      else if(verify & GNUTLS_CERT_INVALID)
+-        inf_gnutls_certificate_verification_set_error(&error, verify);
+     }
++
++    if(error == NULL)
++      if(verify & GNUTLS_CERT_INVALID)
++        inf_gnutls_certificate_verification_set_error(&error, verify);
+   }
+ 
+   /* Look up the host in our database of pinned certificates if we could not",libinfinity,c97f870f5ae13112988d9f8ad464b4f679903706,3be299585a2fbf44811e27190435c87a4388c725,1,"inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,
+                                             gnutls_session_t session,
+                                             InfCertificateChain* chain,
+                                             gpointer user_data)
+{
+  InfGtkCertificateManager* manager;
+  InfGtkCertificateManagerPrivate* priv;
+
+  InfGtkCertificateDialogFlags flags;
+  gnutls_x509_crt_t presented_cert;
+  gnutls_x509_crt_t known_cert;
+  gchar* hostname;
+
+  gboolean match_hostname;
+  gboolean issuer_known;
+  gnutls_x509_crt_t root_cert;
+
+  int ret;
+  unsigned int verify;
+  GHashTable* table;
+  gboolean cert_equal;
+  time_t expiration_time;
+
+  InfGtkCertificateManagerQuery* query;
+  gchar* text;
+  GtkWidget* vbox;
+  GtkWidget* label;
+
+  GError* error;
+
+  manager = INF_GTK_CERTIFICATE_MANAGER(user_data);
+  priv = INF_GTK_CERTIFICATE_MANAGER_PRIVATE(manager);
+
+  g_object_get(G_OBJECT(connection), ""remote-hostname"", &hostname, NULL);
+  presented_cert = inf_certificate_chain_get_own_certificate(chain);
+
+  match_hostname = gnutls_x509_crt_check_hostname(presented_cert, hostname);
+
+  /* First, validate the certificate */
+  ret = gnutls_certificate_verify_peers2(session, &verify);
+  error = NULL;
+
+  if(ret != GNUTLS_E_SUCCESS)
+    inf_gnutls_set_error(&error, ret);
+
+  /* Remove the GNUTLS_CERT_ISSUER_NOT_KNOWN flag from the verification
+   * result, and if the certificate is still invalid, then set an error. */
+  if(error == NULL)
+  {
+    issuer_known = TRUE;
+    if(verify & GNUTLS_CERT_SIGNER_NOT_FOUND)
+    {
+      issuer_known = FALSE;
+
+      /* Re-validate the certificate for other failure reasons --
+       * unfortunately the gnutls_certificate_verify_peers2() call
+       * does not tell us whether the certificate is otherwise invalid
+       * if a signer is not found already. */
+      /* TODO: Here it would be good to use the verify flags from the
+       * certificate credentials, but GnuTLS does not have API to
+       * retrieve them. */
+      root_cert = inf_certificate_chain_get_root_certificate(chain);
+
+      ret = gnutls_x509_crt_list_verify(
+        inf_certificate_chain_get_raw(chain),
+        inf_certificate_chain_get_n_certificates(chain),
+        &root_cert,
+        1,
+        NULL,
+        0,
+        GNUTLS_VERIFY_ALLOW_X509_V1_CA_CRT,
+        &verify
+      );
+ 
+       if(ret != GNUTLS_E_SUCCESS)
+         inf_gnutls_set_error(&error, ret);
+//flaw_line_below:
+      else if(verify & GNUTLS_CERT_INVALID)
+//flaw_line_below:
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+     }
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//    if(error == NULL)
+//fix_flaw_line_below:
+//      if(verify & GNUTLS_CERT_INVALID)
+//fix_flaw_line_below:
+//        inf_gnutls_certificate_verification_set_error(&error, verify);
+   }
+ 
+   /* Look up the host in our database of pinned certificates if we could not
+   * fully verify the certificate, i.e. if either the issuer is not known or
+   * the hostname of the connection does not match the certificate. */
+  table = NULL;
+  if(error == NULL)
+  {
+    known_cert = NULL;
+    if(!match_hostname || !issuer_known)
+    {
+      /* If we cannot load the known host file, then cancel the connection.
+       * Otherwise it might happen that someone shows us a certificate that we
+       * tell the user we don't know, if though actually for that host we expect
+       * a different certificate. */
+      table = inf_gtk_certificate_manager_ref_known_hosts(manager, &error);
+      if(table != NULL)
+        known_cert = g_hash_table_lookup(table, hostname);
+    }
+  }
+
+  /* Next, configure the flags for the dialog to be shown based on the
+   * verification result, and on whether the pinned certificate matches
+   * the one presented by the host or not. */
+  flags = 0;
+  if(error == NULL)
+  {
+    if(known_cert != NULL)
+    {
+      cert_equal = inf_gtk_certificate_manager_compare_fingerprint(
+        known_cert,
+        presented_cert,
+        &error
+      );
+
+      if(error == NULL && cert_equal == FALSE)
+      {
+        if(!match_hostname)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+        if(!issuer_known)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_UNEXPECTED;
+        expiration_time = gnutls_x509_crt_get_expiration_time(known_cert);
+        if(expiration_time != (time_t)(-1))
+        {
+          expiration_time -= INF_GTK_CERTIFICATE_MANAGER_EXPIRATION_TOLERANCE;
+          if(time(NULL) > expiration_time)
+          {
+            flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_OLD_EXPIRED;
+          }
+        }
+      }
+    }
+    else
+    {
+      if(!match_hostname)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+      if(!issuer_known)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+    }
+  }
+
+  /* Now proceed either by accepting the connection, rejecting it, or
+   * bothering the user with an annoying dialog. */
+  if(error == NULL)
+  {
+    if(flags == 0)
+    {
+      if(match_hostname && issuer_known)
+      {
+        /* Remove the pinned entry if we now have a valid certificate for
+         * this host. */
+        if(table != NULL && g_hash_table_remove(table, hostname) == TRUE)
+        {
+          inf_gtk_certificate_manager_write_known_hosts_with_warning(
+            manager,
+            table
+          );
+        }
+      }
+
+      inf_xmpp_connection_certificate_verify_continue(connection);
+    }
+    else
+    {
+      query = g_slice_new(InfGtkCertificateManagerQuery);
+      query->manager = manager;
+      query->known_hosts = table;
+      query->connection = connection;
+      query->dialog = inf_gtk_certificate_dialog_new(
+        priv->parent_window,
+        0,
+        flags,
+        hostname,
+        chain
+      );
+      query->certificate_chain = chain;
+
+      table = NULL;
+
+      g_object_ref(query->connection);
+      inf_certificate_chain_ref(chain);
+
+      g_signal_connect(
+        G_OBJECT(connection),
+        ""notify::status"",
+        G_CALLBACK(inf_gtk_certificate_manager_notify_status_cb),
+        query
+      );
+
+      g_signal_connect(
+        G_OBJECT(query->dialog),
+        ""response"",
+        G_CALLBACK(inf_gtk_certificate_manager_response_cb),
+        query
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""_Cancel connection""),
+        GTK_RESPONSE_REJECT
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""C_ontinue connection""),
+        GTK_RESPONSE_ACCEPT
+      );
+
+      text = g_strdup_printf(
+        _(""Do you want to continue the connection to host \""%s\""? If you ""
+          ""choose to continue, this certificate will be trusted in the ""
+          ""future when connecting to this host.""),
+        hostname
+      );
+
+      label = gtk_label_new(text);
+      gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+      gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+      gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
+      gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.0);
+      gtk_widget_show(label);
+      g_free(text);
+
+      vbox = gtk_dialog_get_content_area(GTK_DIALOG(query->dialog));
+      gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 0);
+
+      priv->queries = g_slist_prepend(priv->queries, query);
+      gtk_window_present(GTK_WINDOW(query->dialog));
+    }
+  }
+  else
+  {
+    inf_xmpp_connection_certificate_verify_cancel(connection, error);
+    g_error_free(error);
+  }
+
+  if(table != NULL) g_hash_table_unref(table);
+  g_free(hostname);
+}
+",182057,"inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,
+                                             gnutls_session_t session,
+                                             InfCertificateChain* chain,
+                                             gpointer user_data)
+{
+  InfGtkCertificateManager* manager;
+  InfGtkCertificateManagerPrivate* priv;
+
+  InfGtkCertificateDialogFlags flags;
+  gnutls_x509_crt_t presented_cert;
+  gnutls_x509_crt_t known_cert;
+  gchar* hostname;
+
+  gboolean match_hostname;
+  gboolean issuer_known;
+  gnutls_x509_crt_t root_cert;
+
+  int ret;
+  unsigned int verify;
+  GHashTable* table;
+  gboolean cert_equal;
+  time_t expiration_time;
+
+  InfGtkCertificateManagerQuery* query;
+  gchar* text;
+  GtkWidget* vbox;
+  GtkWidget* label;
+
+  GError* error;
+
+  manager = INF_GTK_CERTIFICATE_MANAGER(user_data);
+  priv = INF_GTK_CERTIFICATE_MANAGER_PRIVATE(manager);
+
+  g_object_get(G_OBJECT(connection), ""remote-hostname"", &hostname, NULL);
+  presented_cert = inf_certificate_chain_get_own_certificate(chain);
+
+  match_hostname = gnutls_x509_crt_check_hostname(presented_cert, hostname);
+
+  /* First, validate the certificate */
+  ret = gnutls_certificate_verify_peers2(session, &verify);
+  error = NULL;
+
+  if(ret != GNUTLS_E_SUCCESS)
+    inf_gnutls_set_error(&error, ret);
+
+  /* Remove the GNUTLS_CERT_ISSUER_NOT_KNOWN flag from the verification
+   * result, and if the certificate is still invalid, then set an error. */
+  if(error == NULL)
+  {
+    issuer_known = TRUE;
+    if(verify & GNUTLS_CERT_SIGNER_NOT_FOUND)
+    {
+      issuer_known = FALSE;
+
+      /* Re-validate the certificate for other failure reasons --
+       * unfortunately the gnutls_certificate_verify_peers2() call
+       * does not tell us whether the certificate is otherwise invalid
+       * if a signer is not found already. */
+      /* TODO: Here it would be good to use the verify flags from the
+       * certificate credentials, but GnuTLS does not have API to
+       * retrieve them. */
+      root_cert = inf_certificate_chain_get_root_certificate(chain);
+
+      ret = gnutls_x509_crt_list_verify(
+        inf_certificate_chain_get_raw(chain),
+        inf_certificate_chain_get_n_certificates(chain),
+        &root_cert,
+        1,
+        NULL,
+        0,
+        GNUTLS_VERIFY_ALLOW_X509_V1_CA_CRT,
+        &verify
+      );
+ 
+       if(ret != GNUTLS_E_SUCCESS)
+         inf_gnutls_set_error(&error, ret);
+      else if(verify & GNUTLS_CERT_INVALID)
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+     }
+   }
+ 
+   /* Look up the host in our database of pinned certificates if we could not
+   * fully verify the certificate, i.e. if either the issuer is not known or
+   * the hostname of the connection does not match the certificate. */
+  table = NULL;
+  if(error == NULL)
+  {
+    known_cert = NULL;
+    if(!match_hostname || !issuer_known)
+    {
+      /* If we cannot load the known host file, then cancel the connection.
+       * Otherwise it might happen that someone shows us a certificate that we
+       * tell the user we don't know, if though actually for that host we expect
+       * a different certificate. */
+      table = inf_gtk_certificate_manager_ref_known_hosts(manager, &error);
+      if(table != NULL)
+        known_cert = g_hash_table_lookup(table, hostname);
+    }
+  }
+
+  /* Next, configure the flags for the dialog to be shown based on the
+   * verification result, and on whether the pinned certificate matches
+   * the one presented by the host or not. */
+  flags = 0;
+  if(error == NULL)
+  {
+    if(known_cert != NULL)
+    {
+      cert_equal = inf_gtk_certificate_manager_compare_fingerprint(
+        known_cert,
+        presented_cert,
+        &error
+      );
+
+      if(error == NULL && cert_equal == FALSE)
+      {
+        if(!match_hostname)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+        if(!issuer_known)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_UNEXPECTED;
+        expiration_time = gnutls_x509_crt_get_expiration_time(known_cert);
+        if(expiration_time != (time_t)(-1))
+        {
+          expiration_time -= INF_GTK_CERTIFICATE_MANAGER_EXPIRATION_TOLERANCE;
+          if(time(NULL) > expiration_time)
+          {
+            flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_OLD_EXPIRED;
+          }
+        }
+      }
+    }
+    else
+    {
+      if(!match_hostname)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+      if(!issuer_known)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+    }
+  }
+
+  /* Now proceed either by accepting the connection, rejecting it, or
+   * bothering the user with an annoying dialog. */
+  if(error == NULL)
+  {
+    if(flags == 0)
+    {
+      if(match_hostname && issuer_known)
+      {
+        /* Remove the pinned entry if we now have a valid certificate for
+         * this host. */
+        if(table != NULL && g_hash_table_remove(table, hostname) == TRUE)
+        {
+          inf_gtk_certificate_manager_write_known_hosts_with_warning(
+            manager,
+            table
+          );
+        }
+      }
+
+      inf_xmpp_connection_certificate_verify_continue(connection);
+    }
+    else
+    {
+      query = g_slice_new(InfGtkCertificateManagerQuery);
+      query->manager = manager;
+      query->known_hosts = table;
+      query->connection = connection;
+      query->dialog = inf_gtk_certificate_dialog_new(
+        priv->parent_window,
+        0,
+        flags,
+        hostname,
+        chain
+      );
+      query->certificate_chain = chain;
+
+      table = NULL;
+
+      g_object_ref(query->connection);
+      inf_certificate_chain_ref(chain);
+
+      g_signal_connect(
+        G_OBJECT(connection),
+        ""notify::status"",
+        G_CALLBACK(inf_gtk_certificate_manager_notify_status_cb),
+        query
+      );
+
+      g_signal_connect(
+        G_OBJECT(query->dialog),
+        ""response"",
+        G_CALLBACK(inf_gtk_certificate_manager_response_cb),
+        query
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""_Cancel connection""),
+        GTK_RESPONSE_REJECT
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""C_ontinue connection""),
+        GTK_RESPONSE_ACCEPT
+      );
+
+      text = g_strdup_printf(
+        _(""Do you want to continue the connection to host \""%s\""? If you ""
+          ""choose to continue, this certificate will be trusted in the ""
+          ""future when connecting to this host.""),
+        hostname
+      );
+
+      label = gtk_label_new(text);
+      gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+      gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+      gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
+      gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.0);
+      gtk_widget_show(label);
+      g_free(text);
+
+      vbox = gtk_dialog_get_content_area(GTK_DIALOG(query->dialog));
+      gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 0);
+
+      priv->queries = g_slist_prepend(priv->queries, query);
+      gtk_window_present(GTK_WINDOW(query->dialog));
+    }
+  }
+  else
+  {
+    inf_xmpp_connection_certificate_verify_cancel(connection, error);
+    g_error_free(error);
+  }
+
+  if(table != NULL) g_hash_table_unref(table);
+  g_free(hostname);
+}
+","inf_gtk_certificate_manager_certificate_func(InfXmppConnection* connection,
+                                             gnutls_session_t session,
+                                             InfCertificateChain* chain,
+                                             gpointer user_data)
+{
+  InfGtkCertificateManager* manager;
+  InfGtkCertificateManagerPrivate* priv;
+
+  InfGtkCertificateDialogFlags flags;
+  gnutls_x509_crt_t presented_cert;
+  gnutls_x509_crt_t known_cert;
+  gchar* hostname;
+
+  gboolean match_hostname;
+  gboolean issuer_known;
+  gnutls_x509_crt_t root_cert;
+
+  int ret;
+  unsigned int verify;
+  GHashTable* table;
+  gboolean cert_equal;
+  time_t expiration_time;
+
+  InfGtkCertificateManagerQuery* query;
+  gchar* text;
+  GtkWidget* vbox;
+  GtkWidget* label;
+
+  GError* error;
+
+  manager = INF_GTK_CERTIFICATE_MANAGER(user_data);
+  priv = INF_GTK_CERTIFICATE_MANAGER_PRIVATE(manager);
+
+  g_object_get(G_OBJECT(connection), ""remote-hostname"", &hostname, NULL);
+  presented_cert = inf_certificate_chain_get_own_certificate(chain);
+
+  match_hostname = gnutls_x509_crt_check_hostname(presented_cert, hostname);
+
+  /* First, validate the certificate */
+  ret = gnutls_certificate_verify_peers2(session, &verify);
+  error = NULL;
+
+  if(ret != GNUTLS_E_SUCCESS)
+    inf_gnutls_set_error(&error, ret);
+
+  /* Remove the GNUTLS_CERT_ISSUER_NOT_KNOWN flag from the verification
+   * result, and if the certificate is still invalid, then set an error. */
+  if(error == NULL)
+  {
+    issuer_known = TRUE;
+    if(verify & GNUTLS_CERT_SIGNER_NOT_FOUND)
+    {
+      issuer_known = FALSE;
+
+      /* Re-validate the certificate for other failure reasons --
+       * unfortunately the gnutls_certificate_verify_peers2() call
+       * does not tell us whether the certificate is otherwise invalid
+       * if a signer is not found already. */
+      /* TODO: Here it would be good to use the verify flags from the
+       * certificate credentials, but GnuTLS does not have API to
+       * retrieve them. */
+      root_cert = inf_certificate_chain_get_root_certificate(chain);
+
+      ret = gnutls_x509_crt_list_verify(
+        inf_certificate_chain_get_raw(chain),
+        inf_certificate_chain_get_n_certificates(chain),
+        &root_cert,
+        1,
+        NULL,
+        0,
+        GNUTLS_VERIFY_ALLOW_X509_V1_CA_CRT,
+        &verify
+      );
+ 
+       if(ret != GNUTLS_E_SUCCESS)
+         inf_gnutls_set_error(&error, ret);
+     }
+
+    if(error == NULL)
+      if(verify & GNUTLS_CERT_INVALID)
+        inf_gnutls_certificate_verification_set_error(&error, verify);
+   }
+ 
+   /* Look up the host in our database of pinned certificates if we could not
+   * fully verify the certificate, i.e. if either the issuer is not known or
+   * the hostname of the connection does not match the certificate. */
+  table = NULL;
+  if(error == NULL)
+  {
+    known_cert = NULL;
+    if(!match_hostname || !issuer_known)
+    {
+      /* If we cannot load the known host file, then cancel the connection.
+       * Otherwise it might happen that someone shows us a certificate that we
+       * tell the user we don't know, if though actually for that host we expect
+       * a different certificate. */
+      table = inf_gtk_certificate_manager_ref_known_hosts(manager, &error);
+      if(table != NULL)
+        known_cert = g_hash_table_lookup(table, hostname);
+    }
+  }
+
+  /* Next, configure the flags for the dialog to be shown based on the
+   * verification result, and on whether the pinned certificate matches
+   * the one presented by the host or not. */
+  flags = 0;
+  if(error == NULL)
+  {
+    if(known_cert != NULL)
+    {
+      cert_equal = inf_gtk_certificate_manager_compare_fingerprint(
+        known_cert,
+        presented_cert,
+        &error
+      );
+
+      if(error == NULL && cert_equal == FALSE)
+      {
+        if(!match_hostname)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+        if(!issuer_known)
+          flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_UNEXPECTED;
+        expiration_time = gnutls_x509_crt_get_expiration_time(known_cert);
+        if(expiration_time != (time_t)(-1))
+        {
+          expiration_time -= INF_GTK_CERTIFICATE_MANAGER_EXPIRATION_TOLERANCE;
+          if(time(NULL) > expiration_time)
+          {
+            flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_OLD_EXPIRED;
+          }
+        }
+      }
+    }
+    else
+    {
+      if(!match_hostname)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_HOSTNAME_MISMATCH;
+      if(!issuer_known)
+        flags |= INF_GTK_CERTIFICATE_DIALOG_CERT_ISSUER_NOT_KNOWN;
+    }
+  }
+
+  /* Now proceed either by accepting the connection, rejecting it, or
+   * bothering the user with an annoying dialog. */
+  if(error == NULL)
+  {
+    if(flags == 0)
+    {
+      if(match_hostname && issuer_known)
+      {
+        /* Remove the pinned entry if we now have a valid certificate for
+         * this host. */
+        if(table != NULL && g_hash_table_remove(table, hostname) == TRUE)
+        {
+          inf_gtk_certificate_manager_write_known_hosts_with_warning(
+            manager,
+            table
+          );
+        }
+      }
+
+      inf_xmpp_connection_certificate_verify_continue(connection);
+    }
+    else
+    {
+      query = g_slice_new(InfGtkCertificateManagerQuery);
+      query->manager = manager;
+      query->known_hosts = table;
+      query->connection = connection;
+      query->dialog = inf_gtk_certificate_dialog_new(
+        priv->parent_window,
+        0,
+        flags,
+        hostname,
+        chain
+      );
+      query->certificate_chain = chain;
+
+      table = NULL;
+
+      g_object_ref(query->connection);
+      inf_certificate_chain_ref(chain);
+
+      g_signal_connect(
+        G_OBJECT(connection),
+        ""notify::status"",
+        G_CALLBACK(inf_gtk_certificate_manager_notify_status_cb),
+        query
+      );
+
+      g_signal_connect(
+        G_OBJECT(query->dialog),
+        ""response"",
+        G_CALLBACK(inf_gtk_certificate_manager_response_cb),
+        query
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""_Cancel connection""),
+        GTK_RESPONSE_REJECT
+      );
+
+      gtk_dialog_add_button(
+        GTK_DIALOG(query->dialog),
+        _(""C_ontinue connection""),
+        GTK_RESPONSE_ACCEPT
+      );
+
+      text = g_strdup_printf(
+        _(""Do you want to continue the connection to host \""%s\""? If you ""
+          ""choose to continue, this certificate will be trusted in the ""
+          ""future when connecting to this host.""),
+        hostname
+      );
+
+      label = gtk_label_new(text);
+      gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+      gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+      gtk_label_set_max_width_chars(GTK_LABEL(label), 60);
+      gtk_misc_set_alignment(GTK_MISC(label), 0.0, 0.0);
+      gtk_widget_show(label);
+      g_free(text);
+
+      vbox = gtk_dialog_get_content_area(GTK_DIALOG(query->dialog));
+      gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 0);
+
+      priv->queries = g_slist_prepend(priv->queries, query);
+      gtk_window_present(GTK_WINDOW(query->dialog));
+    }
+  }
+  else
+  {
+    inf_xmpp_connection_certificate_verify_cancel(connection, error);
+    g_error_free(error);
+  }
+
+  if(table != NULL) g_hash_table_unref(table);
+  g_free(hostname);
+}
+","The `inf_gtk_certificate_manager_certificate_func` function manages the verification of SSL/TLS certificates during an XMPP connection. It retrieves the hostname and presented certificate, checks if the hostname matches the certificate, and validates the certificate's issuer. If the certificate cannot be fully verified, it checks against a database of known certificates. Based on the verification results, it configures flags to indicate issues like hostname mismatches or unknown issuers. If errors are found, it prompts the user with a dialog to accept or reject the connection, while also handling the addition of trusted certificates for future connections.","The function manages the verification of SSL/TLS certificates during an XMPP connection by checking the presented certificate against the expected hostname and validating its issuer. It assesses whether the certificate is trusted and matches known certificates, handling cases where the issuer is unknown or the hostname does not align. If verification fails, it prompts the user with a dialog to decide whether to continue the connection or cancel it. The function also allows for the addition of trusted certificates for future connections, ensuring secure communication while addressing potential security issues.","The vulnerability in the original code, identified as CWE-295, arises from the lack of validation for expired SSL certificates, allowing attackers to exploit this oversight and potentially intercept or manipulate secure communications. In the fixed code, the validation process was enhanced by checking the expiration time of known certificates using the `gnutls_x509_crt_get_expiration_time` function. If the expiration time indicates that the certificate is outdated, the code sets a flag to indicate that the certificate is old or expired, thereby preventing the acceptance of insecure connections and ensuring that only valid, non-expired certificates are trusted.","The vulnerability in the original code, classified as CWE-295, stems from the failure to validate expired SSL certificates, which could allow attackers to exploit this weakness and compromise secure communications. In the revised code, this issue was addressed by implementing a check for the expiration status of certificates. The updated logic ensures that if a certificate is found to be expired, it is flagged appropriately, preventing the acceptance of potentially insecure connections. This enhancement significantly strengthens the security posture by ensuring that only valid, non-expired certificates are trusted during the connection process.","The vulnerability was fixed by incorporating a check for the expiration time of known certificates using the `gnutls_x509_crt_get_expiration_time` function. In the updated code, after comparing the presented certificate with known certificates, the expiration time is retrieved and adjusted for a tolerance period. If the current time exceeds this adjusted expiration time, a flag is set to indicate that the certificate is old or expired. This ensures that any expired certificates are not accepted, thereby enhancing the security of the connection by preventing the use of potentially compromised or outdated certificates.","The vulnerability was fixed by implementing a mechanism to check the expiration status of certificates during the verification process. The updated code retrieves the expiration time of known certificates and compares it to the current time, allowing for a tolerance period. If the certificate is found to be expired, a flag is set to indicate its invalidity. This enhancement ensures that expired certificates cannot be accepted, thereby preventing potential security risks associated with using outdated or compromised certificates and reinforcing the overall integrity of secure connections.","5,5","5,5","4,3","4,4","CWE-296, CWE-297, CWE-295, CWE-299, CWE-298, CWE-324, CWE-370, CWE-288, CWE-347, CWE-287",N,-1
+1,1,1,182441,182441,,Remote,Not required,,CVE-2018-8970,https://www.cvedetails.com/cve/CVE-2018-8970/,CWE-295,Medium,Partial,Partial,,2018-03-24,5.8,"The int_x509_param_set_hosts function in lib/libcrypto/x509/x509_vpm.c in LibreSSL 2.7.0 before 2.7.1 does not support a certain special case of a zero name length, which causes silent omission of hostname verification, and consequently allows man-in-the-middle attackers to spoof servers and obtain sensitive information via a crafted certificate. NOTE: the LibreSSL documentation indicates that this special case is supported, but the BoringSSL documentation does not.",2018-04-24,+Info ,2,https://github.com/libressl-portable/openbsd/commit/0654414afcce51a16d35d05060190a3ec4618d42,0654414afcce51a16d35d05060190a3ec4618d42,"Call strlen() if name length provided is 0, like OpenSSL does.
+Issue notice by Christian Heimes <christian@python.org>
+ok deraadt@ jsing@",0,src/lib/libcrypto/x509/x509_vpm.c,"{""sha"": ""0897137697a35c9b75587d2d5512a09d331e6495"", ""filename"": ""src/lib/libcrypto/x509/x509_vpm.c"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 1, ""changes"": 4, ""blob_url"": ""https://github.com/libressl-portable/openbsd/blob/0654414afcce51a16d35d05060190a3ec4618d42/src/lib/libcrypto/x509/x509_vpm.c"", ""raw_url"": ""https://github.com/libressl-portable/openbsd/raw/0654414afcce51a16d35d05060190a3ec4618d42/src/lib/libcrypto/x509/x509_vpm.c"", ""contents_url"": ""https://api.github.com/repos/libressl-portable/openbsd/contents/src/lib/libcrypto/x509/x509_vpm.c?ref=0654414afcce51a16d35d05060190a3ec4618d42"", ""patch"": ""@@ -1,4 +1,4 @@\n-/* $OpenBSD: x509_vpm.c,v 1.16 2017/12/09 07:09:25 deraadt Exp $ */\n+/* $OpenBSD: x509_vpm.c,v 1.17 2018/03/22 15:54:46 beck Exp $ */\n /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL\n  * project 2004.\n  */\n@@ -130,6 +130,8 @@ int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,\n {\n \tchar *copy;\n \n+\tif (name != NULL && namelen == 0)\n+\t\tnamelen = strlen(name);\n \t/*\n \t * Refuse names with embedded NUL bytes.\n \t * XXX: Do we need to push an error onto the error stack?""}","int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,
+    const char *name, size_t namelen)
+ {
+ 	char *copy;
+ 
+	if (name != NULL && namelen == 0)
+		namelen = strlen(name);
+ 	/*
+ 	 * Refuse names with embedded NUL bytes.
+ 	 * XXX: Do we need to push an error onto the error stack?
+	 */
+	if (name && memchr(name, '\0', namelen))
+		return 0;
+
+	if (mode == SET_HOST && id->hosts) {
+		string_stack_free(id->hosts);
+		id->hosts = NULL;
+	}
+	if (name == NULL || namelen == 0)
+		return 1;
+	copy = strndup(name, namelen);
+	if (copy == NULL)
+		return 0;
+
+	if (id->hosts == NULL &&
+	    (id->hosts = sk_OPENSSL_STRING_new_null()) == NULL) {
+		free(copy);
+		return 0;
+	}
+
+	if (!sk_OPENSSL_STRING_push(id->hosts, copy)) {
+		free(copy);
+		if (sk_OPENSSL_STRING_num(id->hosts) == 0) {
+			sk_OPENSSL_STRING_free(id->hosts);
+			id->hosts = NULL;
+		}
+		return 0;
+	}
+
+	return 1;
+}
+","int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,
+    const char *name, size_t namelen)
+ {
+ 	char *copy;
+ 
+ 	/*
+ 	 * Refuse names with embedded NUL bytes.
+ 	 * XXX: Do we need to push an error onto the error stack?
+	 */
+	if (name && memchr(name, '\0', namelen))
+		return 0;
+
+	if (mode == SET_HOST && id->hosts) {
+		string_stack_free(id->hosts);
+		id->hosts = NULL;
+	}
+	if (name == NULL || namelen == 0)
+		return 1;
+	copy = strndup(name, namelen);
+	if (copy == NULL)
+		return 0;
+
+	if (id->hosts == NULL &&
+	    (id->hosts = sk_OPENSSL_STRING_new_null()) == NULL) {
+		free(copy);
+		return 0;
+	}
+
+	if (!sk_OPENSSL_STRING_push(id->hosts, copy)) {
+		free(copy);
+		if (sk_OPENSSL_STRING_num(id->hosts) == 0) {
+			sk_OPENSSL_STRING_free(id->hosts);
+			id->hosts = NULL;
+		}
+		return 0;
+	}
+
+	return 1;
+}
+",C,"	if (name != NULL && namelen == 0)
+		namelen = strlen(name);
+",,,"@@ -1,4 +1,4 @@
+-/* $OpenBSD: x509_vpm.c,v 1.16 2017/12/09 07:09:25 deraadt Exp $ */
++/* $OpenBSD: x509_vpm.c,v 1.17 2018/03/22 15:54:46 beck Exp $ */
+ /* Written by Dr Stephen N Henson (steve@openssl.org) for the OpenSSL
+  * project 2004.
+  */
+@@ -130,6 +130,8 @@ int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,
+ {
+ 	char *copy;
+ 
++	if (name != NULL && namelen == 0)
++		namelen = strlen(name);
+ 	/*
+ 	 * Refuse names with embedded NUL bytes.
+ 	 * XXX: Do we need to push an error onto the error stack?",openbsd,0654414afcce51a16d35d05060190a3ec4618d42,1771af47613bd6cf5ae8109b1205a5e08859749d,1,"int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,
+    const char *name, size_t namelen)
+ {
+ 	char *copy;
+ 
+//fix_flaw_line_below:
+//	if (name != NULL && namelen == 0)
+//fix_flaw_line_below:
+//		namelen = strlen(name);
+ 	/*
+ 	 * Refuse names with embedded NUL bytes.
+ 	 * XXX: Do we need to push an error onto the error stack?
+	 */
+	if (name && memchr(name, '\0', namelen))
+		return 0;
+
+	if (mode == SET_HOST && id->hosts) {
+		string_stack_free(id->hosts);
+		id->hosts = NULL;
+	}
+	if (name == NULL || namelen == 0)
+		return 1;
+	copy = strndup(name, namelen);
+	if (copy == NULL)
+		return 0;
+
+	if (id->hosts == NULL &&
+	    (id->hosts = sk_OPENSSL_STRING_new_null()) == NULL) {
+		free(copy);
+		return 0;
+	}
+
+	if (!sk_OPENSSL_STRING_push(id->hosts, copy)) {
+		free(copy);
+		if (sk_OPENSSL_STRING_num(id->hosts) == 0) {
+			sk_OPENSSL_STRING_free(id->hosts);
+			id->hosts = NULL;
+		}
+		return 0;
+	}
+
+	return 1;
+}
+",182441,"int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,
+    const char *name, size_t namelen)
+ {
+ 	char *copy;
+ 
+ 	/*
+ 	 * Refuse names with embedded NUL bytes.
+ 	 * XXX: Do we need to push an error onto the error stack?
+	 */
+	if (name && memchr(name, '\0', namelen))
+		return 0;
+
+	if (mode == SET_HOST && id->hosts) {
+		string_stack_free(id->hosts);
+		id->hosts = NULL;
+	}
+	if (name == NULL || namelen == 0)
+		return 1;
+	copy = strndup(name, namelen);
+	if (copy == NULL)
+		return 0;
+
+	if (id->hosts == NULL &&
+	    (id->hosts = sk_OPENSSL_STRING_new_null()) == NULL) {
+		free(copy);
+		return 0;
+	}
+
+	if (!sk_OPENSSL_STRING_push(id->hosts, copy)) {
+		free(copy);
+		if (sk_OPENSSL_STRING_num(id->hosts) == 0) {
+			sk_OPENSSL_STRING_free(id->hosts);
+			id->hosts = NULL;
+		}
+		return 0;
+	}
+
+	return 1;
+}
+","int_x509_param_set_hosts(X509_VERIFY_PARAM_ID *id, int mode,
+    const char *name, size_t namelen)
+ {
+ 	char *copy;
+ 
+	if (name != NULL && namelen == 0)
+		namelen = strlen(name);
+ 	/*
+ 	 * Refuse names with embedded NUL bytes.
+ 	 * XXX: Do we need to push an error onto the error stack?
+	 */
+	if (name && memchr(name, '\0', namelen))
+		return 0;
+
+	if (mode == SET_HOST && id->hosts) {
+		string_stack_free(id->hosts);
+		id->hosts = NULL;
+	}
+	if (name == NULL || namelen == 0)
+		return 1;
+	copy = strndup(name, namelen);
+	if (copy == NULL)
+		return 0;
+
+	if (id->hosts == NULL &&
+	    (id->hosts = sk_OPENSSL_STRING_new_null()) == NULL) {
+		free(copy);
+		return 0;
+	}
+
+	if (!sk_OPENSSL_STRING_push(id->hosts, copy)) {
+		free(copy);
+		if (sk_OPENSSL_STRING_num(id->hosts) == 0) {
+			sk_OPENSSL_STRING_free(id->hosts);
+			id->hosts = NULL;
+		}
+		return 0;
+	}
+
+	return 1;
+}
+","The function `int_x509_param_set_hosts` is designed to manage hostnames associated with an `X509_VERIFY_PARAM_ID` structure, specifically for setting or updating the list of hosts. It first checks for embedded null bytes in the provided hostname, returning an error if found. If the mode is set to `SET_HOST` and there are existing hosts, it frees that list. The function then duplicates the hostname string and initializes a new string stack if necessary. Finally, it attempts to add the new hostname to the stack, handling memory management appropriately, and returns success or failure based on the operations performed.","The provided code manages a list of hostnames associated with a verification parameter structure. It begins by checking for invalid input, specifically looking for null bytes within the hostname. If the mode indicates a need to set a new hostname and there are existing entries, it clears the previous list. The code then duplicates the hostname string and initializes a new list if it doesn't already exist. Finally, it attempts to add the new hostname to the list, ensuring proper memory management, and returns a success or failure status based on the outcome of these operations.","The vulnerability in the original code arises from the lack of handling for a zero-length hostname, which could lead to silent omission of hostname verification. This oversight allows attackers to exploit the system by spoofing servers, potentially leading to man-in-the-middle attacks. In the fixed code, the check for a zero-length hostname is addressed by setting `namelen` to the length of the name if it is initially zero. This ensures that valid hostnames are processed correctly, thereby enforcing hostname verification and mitigating the risk of spoofing and sensitive information exposure.","The vulnerability in the original code stems from its failure to properly handle cases where the hostname length is zero, leading to a lack of hostname verification. This oversight could allow attackers to exploit the system by impersonating servers, resulting in potential man-in-the-middle attacks and the exposure of sensitive information through malicious certificates. The fixed code addresses this issue by explicitly checking for a zero-length hostname and setting the length to the actual string length when necessary. This ensures that valid hostnames are always processed, thereby reinforcing hostname verification and mitigating the associated security risks.","The vulnerability was fixed by adding a check for a zero-length hostname in the updated code. Specifically, if the `name` is not NULL and `namelen` is zero, the code now sets `namelen` to the length of the `name` using `strlen(name)`. This adjustment ensures that valid hostnames are processed correctly, preventing silent omission of hostname verification. By ensuring that `namelen` reflects the actual length of the hostname, the code enforces proper verification, thereby mitigating the risk of man-in-the-middle attacks and enhancing overall security in handling hostnames.","The vulnerability was addressed by implementing a check that ensures the length of the hostname is correctly determined, even when it is initially set to zero. By adjusting the length to reflect the actual string length when necessary, the code guarantees that valid hostnames are always processed. This change prevents the silent omission of hostname verification, which could have allowed attackers to spoof servers. As a result, the fix reinforces the verification process, enhancing security against potential man-in-the-middle attacks and ensuring that sensitive information remains protected.","4,4","4, 4","4,5","4,4","CWE-295, CWE-297, CWE-296, CWE-20, CWE-326, CWE-299, CWE-287, CWE-346, CWE-322, CWE-300",Y,1

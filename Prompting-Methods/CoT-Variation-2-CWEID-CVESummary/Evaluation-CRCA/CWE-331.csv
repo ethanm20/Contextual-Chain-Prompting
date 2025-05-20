@@ -1,0 +1,318 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,178643,178643,,Local,Not required,,CVE-2017-2626,https://www.cvedetails.com/cve/CVE-2017-2626/,CWE-331,Low,Partial,,,2018-07-27,2.1,It was discovered that libICE before 1.0.9-8 used a weak entropy to generate keys. A local attacker could potentially use this flaw for session hijacking using the information available from the process list.,2019-07-14,,5,https://cgit.freedesktop.org/xorg/lib/libICE/commit/?id=ff5e59f32255913bb1cdf51441b98c9107ae165b,ff5e59f32255913bb1cdf51441b98c9107ae165b,,10,,,"IceGenerateMagicCookie (
+static void
+emulate_getrandom_buf (
+	char *auth,
+ 	int len
+ )
+ {
+     long    ldata[2];
+     int	    seed;
+     int	    value;
+     int	    i;
+ 
+ #ifdef ITIMER_REAL
+     {
+ 	struct timeval  now;
+    int	    i;
+ 	ldata[0] = now.tv_sec;
+ 	ldata[1] = now.tv_usec;
+     }
+#else /* ITIMER_REAL */
+     {
+ 	long    time ();
+ 	ldata[0] = time ((long *) 0);
+ 	ldata[1] = getpid ();
+     }
+#endif /* ITIMER_REAL */
+     seed = (ldata[0]) + (ldata[1] << 16);
+     srand (seed);
+     for (i = 0; i < len; i++)
+	ldata[1] = now.tv_usec;
+ 	value = rand ();
+ 	auth[i] = value & 0xff;
+     }
+","IceGenerateMagicCookie (
+ 	int len
+ )
+ {
+    char    *auth;
+#ifndef HAVE_ARC4RANDOM_BUF
+     long    ldata[2];
+     int	    seed;
+     int	    value;
+     int	    i;
+#endif
+ 
+    if ((auth = malloc (len + 1)) == NULL)
+	return (NULL);
+#ifdef HAVE_ARC4RANDOM_BUF
+    arc4random_buf(auth, len);
+#else
+ #ifdef ITIMER_REAL
+     {
+ 	struct timeval  now;
+    int	    i;
+ 	ldata[0] = now.tv_sec;
+ 	ldata[1] = now.tv_usec;
+     }
+#else
+     {
+ 	long    time ();
+ 	ldata[0] = time ((long *) 0);
+ 	ldata[1] = getpid ();
+     }
+#endif
+     seed = (ldata[0]) + (ldata[1] << 16);
+     srand (seed);
+     for (i = 0; i < len; i++)
+	ldata[1] = now.tv_usec;
+ 	value = rand ();
+ 	auth[i] = value & 0xff;
+     }
+",C,"static void
+emulate_getrandom_buf (
+	char *auth,
+#else /* ITIMER_REAL */
+#endif /* ITIMER_REAL */
+","    char    *auth;
+#ifndef HAVE_ARC4RANDOM_BUF
+#endif
+    if ((auth = malloc (len + 1)) == NULL)
+	return (NULL);
+#ifdef HAVE_ARC4RANDOM_BUF
+    arc4random_buf(auth, len);
+#else
+#else
+#endif
+",1746abbb1ae1c41ba29c14895c5bd3f1334faef5,"@@ -44,31 +44,19 @@ Author: Ralph Mor, X Consortium
+ 
+ static int was_called_state;
+ 
+-/*
+- * MIT-MAGIC-COOKIE-1 is a sample authentication method implemented by
+- * the SI.  It is not part of standard ICElib.
+- */
++#ifndef HAVE_ARC4RANDOM_BUF
+ 
+-
+-char *
+-IceGenerateMagicCookie (
++static void
++emulate_getrandom_buf (
++	char *auth,
+ 	int len
+ )
+ {
+-    char    *auth;
+-#ifndef HAVE_ARC4RANDOM_BUF
+     long    ldata[2];
+     int	    seed;
+     int	    value;
+     int	    i;
+-#endif
+ 
+-    if ((auth = malloc (len + 1)) == NULL)
+-	return (NULL);
+-
+-#ifdef HAVE_ARC4RANDOM_BUF
+-    arc4random_buf(auth, len);
+-#else
+ #ifdef ITIMER_REAL
+     {
+ 	struct timeval  now;
+@@ -76,13 +64,13 @@ IceGenerateMagicCookie (
+ 	ldata[0] = now.tv_sec;
+ 	ldata[1] = now.tv_usec;
+     }
+-#else
++#else /* ITIMER_REAL */
+     {
+ 	long    time ();
+ 	ldata[0] = time ((long *) 0);
+ 	ldata[1] = getpid ();
+     }
+-#endif
++#endif /* ITIMER_REAL */
+     seed = (ldata[0]) + (ldata[1] << 16);
+     srand (seed);
+     for (i = 0; i < len; i++)
+@@ -90,7 +78,46 @@ IceGenerateMagicCookie (
+ 	value = rand ();
+ 	auth[i] = value & 0xff;
+     }
+-#endif
++}
++
++static void
++arc4random_buf (
++	char *auth,
++	int len
++)
++{
++    int	    ret;
++
++#if HAVE_GETENTROPY
++    /* weak emulation of arc4random through the entropy libc */
++    ret = getentropy (auth, len);
++    if (ret == 0)
++	return;
++#endif /* HAVE_GETENTROPY */
++
++    emulate_getrandom_buf (auth, len);
++}
++
++#endif /* !defined(HAVE_ARC4RANDOM_BUF) */
++
++/*
++ * MIT-MAGIC-COOKIE-1 is a sample authentication method implemented by
++ * the SI.  It is not part of standard ICElib.
++ */
++
++
++char *
++IceGenerateMagicCookie (
++	int len
++)
++{
++    char    *auth;
++
++    if ((auth = malloc (len + 1)) == NULL)
++	return (NULL);
++
++    arc4random_buf (auth, len);
++
+     auth[len] = '\0';
+     return (auth);
+ }",libICE,https://cgit.freedesktop.org/xorg/lib/libICE/tree/src/iceauth.c?id=ff5e59f32255913bb1cdf51441b98c9107ae165b,https://cgit.freedesktop.org/xorg/lib/libICE/tree/src/iceauth.c?id=1746abbb1ae1c41ba29c14895c5bd3f1334faef5,1,"IceGenerateMagicCookie (
+//fix_flaw_line_below:
+//static void
+//fix_flaw_line_below:
+//emulate_getrandom_buf (
+//fix_flaw_line_below:
+//	char *auth,
+ 	int len
+ )
+ {
+//flaw_line_below:
+    char    *auth;
+//flaw_line_below:
+#ifndef HAVE_ARC4RANDOM_BUF
+     long    ldata[2];
+     int	    seed;
+     int	    value;
+     int	    i;
+//flaw_line_below:
+#endif
+ 
+//flaw_line_below:
+    if ((auth = malloc (len + 1)) == NULL)
+//flaw_line_below:
+	return (NULL);
+//flaw_line_below:
+
+//flaw_line_below:
+#ifdef HAVE_ARC4RANDOM_BUF
+//flaw_line_below:
+    arc4random_buf(auth, len);
+//flaw_line_below:
+#else
+ #ifdef ITIMER_REAL
+     {
+ 	struct timeval  now;
+    int	    i;
+ 	ldata[0] = now.tv_sec;
+ 	ldata[1] = now.tv_usec;
+     }
+//flaw_line_below:
+#else
+//fix_flaw_line_below:
+//#else /* ITIMER_REAL */
+     {
+ 	long    time ();
+ 	ldata[0] = time ((long *) 0);
+ 	ldata[1] = getpid ();
+     }
+//flaw_line_below:
+#endif
+//fix_flaw_line_below:
+//#endif /* ITIMER_REAL */
+     seed = (ldata[0]) + (ldata[1] << 16);
+     srand (seed);
+     for (i = 0; i < len; i++)
+	ldata[1] = now.tv_usec;
+ 	value = rand ();
+ 	auth[i] = value & 0xff;
+     }
+",178643,"IceGenerateMagicCookie (
+ 	int len
+ )
+ {
+    char    *auth;
+#ifndef HAVE_ARC4RANDOM_BUF
+     long    ldata[2];
+     int	    seed;
+     int	    value;
+     int	    i;
+#endif
+ 
+    if ((auth = malloc (len + 1)) == NULL)
+	return (NULL);
+#ifdef HAVE_ARC4RANDOM_BUF
+    arc4random_buf(auth, len);
+#else
+ #ifdef ITIMER_REAL
+     {
+ 	struct timeval  now;
+    int	    i;
+ 	ldata[0] = now.tv_sec;
+ 	ldata[1] = now.tv_usec;
+     }
+#else
+     {
+ 	long    time ();
+ 	ldata[0] = time ((long *) 0);
+ 	ldata[1] = getpid ();
+     }
+#endif
+     seed = (ldata[0]) + (ldata[1] << 16);
+     srand (seed);
+     for (i = 0; i < len; i++)
+	ldata[1] = now.tv_usec;
+ 	value = rand ();
+ 	auth[i] = value & 0xff;
+     }
+","IceGenerateMagicCookie (
+static void
+emulate_getrandom_buf (
+	char *auth,
+ 	int len
+ )
+ {
+     long    ldata[2];
+     int	    seed;
+     int	    value;
+     int	    i;
+ 
+ #ifdef ITIMER_REAL
+     {
+ 	struct timeval  now;
+    int	    i;
+ 	ldata[0] = now.tv_sec;
+ 	ldata[1] = now.tv_usec;
+     }
+#else /* ITIMER_REAL */
+     {
+ 	long    time ();
+ 	ldata[0] = time ((long *) 0);
+ 	ldata[1] = getpid ();
+     }
+#endif /* ITIMER_REAL */
+     seed = (ldata[0]) + (ldata[1] << 16);
+     srand (seed);
+     for (i = 0; i < len; i++)
+	ldata[1] = now.tv_usec;
+ 	value = rand ();
+ 	auth[i] = value & 0xff;
+     }
+","The `IceGenerateMagicCookie` function generates a random authentication cookie of a specified length (`len`). It allocates memory for the cookie and, depending on the availability of the `arc4random_buf` function, either uses it to fill the cookie with random bytes or falls back on a pseudo-random number generator. In the latter case, it seeds the random number generator using the current time and process ID, then populates the cookie by repeatedly generating random values. The function ultimately returns a pointer to the generated cookie or `NULL` if memory allocation fails.","The provided code defines a function that generates a random authentication cookie of a specified length. It begins by allocating memory for the cookie and checks for successful allocation. If a specific random number generation function is available, it uses that to fill the cookie with random bytes. If not, it falls back on a pseudo-random number generator, seeding it with the current time and process identifier. The function then populates the cookie with random values derived from the generator. Finally, it returns a pointer to the generated cookie or indicates failure if memory allocation was unsuccessful.","The vulnerability in the original code arises from the use of weak entropy sources, specifically the current time and process ID, to seed the random number generator. This approach allows an attacker to predict the generated authentication cookie, potentially leading to session hijacking. In the fixed code, the function has been modified to use a more secure method for generating random bytes, which includes a dedicated function for random number generation that likely incorporates better entropy sources. This change enhances the unpredictability of the generated values, thereby mitigating the risk of exploitation by local attackers.","The vulnerability in the original code stems from the use of weak entropy sources, such as the current time and process ID, to generate random values for authentication cookies. This predictability allows local attackers to potentially hijack sessions by guessing the generated keys. In the revised code, the approach to random number generation has been improved by utilizing a more secure method that incorporates stronger entropy sources. This enhancement significantly increases the unpredictability of the generated values, thereby reducing the risk of exploitation and protecting against session hijacking attacks.","The vulnerability was fixed by replacing the weak entropy sources used for seeding the random number generator with a more secure method. In the revised code, the function now utilizes `emulate_getrandom_buf` to generate random bytes, which likely incorporates better entropy sources than just the current time and process ID. The original seeding method, which combined the current time and process ID, has been replaced with a more robust approach that enhances randomness. This change ensures that the generated authentication cookie is less predictable, thereby mitigating the risk of session hijacking by local attackers.","The vulnerability was fixed by enhancing the method of generating random values for authentication cookies. The revised code eliminates the reliance on weak entropy sources, such as the current time and process ID, which made the generated values predictable. Instead, it employs a more secure approach that utilizes stronger entropy sources, significantly improving the randomness and unpredictability of the generated keys. This change effectively reduces the risk of session hijacking by ensuring that the authentication cookies are not easily guessable by local attackers, thereby strengthening the overall security of the system.","4,4","5,4","4,4","4, 4"

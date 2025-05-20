@@ -1,0 +1,972 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,177930,177930,,Remote,Not required,Partial,CVE-2017-11143,https://www.cvedetails.com/cve/CVE-2017-11143/,CWE-502,Low,,,,2017-07-10,5.0,"In PHP before 5.6.31, an invalid free in the WDDX deserialization of boolean parameters could be used by attackers able to inject XML for deserialization to crash the PHP interpreter, related to an invalid free for an empty boolean element in ext/wddx/wddx.c.",2018-05-03,,6,https://git.php.net/?p=php-src.git;a=commit;h=2aae60461c2ff7b7fbcdd194c789ac841d0747d7,2aae60461c2ff7b7fbcdd194c789ac841d0747d7,,8,,,"static void php_wddx_push_element(void *user_data, const XML_Char *name, const XML_Char **atts)
+{
+	st_entry ent;
+	wddx_stack *stack = (wddx_stack *)user_data;
+
+	if (!strcmp(name, EL_PACKET)) {
+		int i;
+
+		if (atts) for (i=0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_VERSION)) {
+				/* nothing for now */
+			}
+		}
+	} else if (!strcmp(name, EL_STRING)) {
+		ent.type = ST_STRING;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_BINARY)) {
+		ent.type = ST_BINARY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_CHAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_CHAR_CODE) && atts[i+1] && atts[i+1][0]) {
+				char tmp_buf[2];
+
+				snprintf(tmp_buf, sizeof(tmp_buf), ""%c"", (char)strtol(atts[i+1], NULL, 16));
+				php_wddx_process_data(user_data, tmp_buf, strlen(tmp_buf));
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_NUMBER)) {
+		ent.type = ST_NUMBER;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		Z_LVAL_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+        } else if (!strcmp(name, EL_BOOLEAN)) {
+                int i;
+ 
+               ALLOC_ZVAL(ent.data);
+               INIT_PZVAL(ent.data);
+               Z_TYPE_P(ent.data) = IS_BOOL;
+               ent.type = ST_BOOLEAN;
+               SET_STACK_VARNAME;
+                if (atts) for (i = 0; atts[i]; i++) {
+                        if (!strcmp(atts[i], EL_VALUE) && atts[i+1] && atts[i+1][0]) {
+                                wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                                php_wddx_process_data(user_data, atts[i+1], strlen(atts[i+1]));
+                                break;
+                        }
+                } else {
+                       ZVAL_FALSE(ent.data);
+                        wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                }
+        } else if (!strcmp(name, EL_NULL)) {
+			wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+		}
+	} else if (!strcmp(name, EL_NULL)) {
+		ent.type = ST_NULL;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		ZVAL_NULL(ent.data);
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_ARRAY)) {
+		ent.type = ST_ARRAY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_STRUCT)) {
+		ent.type = ST_STRUCT;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_VAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				if (stack->varname) efree(stack->varname);
+				stack->varname = estrdup(atts[i+1]);
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_RECORDSET)) {
+		int i;
+
+		ent.type = ST_RECORDSET;
+		SET_STACK_VARNAME;
+		MAKE_STD_ZVAL(ent.data);
+		array_init(ent.data);
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], ""fieldNames"") && atts[i+1] && atts[i+1][0]) {
+				zval *tmp;
+				char *key;
+				char *p1, *p2, *endp;
+
+				i++;
+				endp = (char *)atts[i] + strlen(atts[i]);
+				p1 = (char *)atts[i];
+				while ((p2 = php_memnstr(p1, "","", sizeof("","")-1, endp)) != NULL) {
+					key = estrndup(p1, p2 - p1);
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, key, p2 - p1 + 1, tmp);
+					p1 = p2 + sizeof("","")-1;
+					efree(key);
+				}
+
+				if (p1 <= endp) {
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, p1, endp - p1 + 1, tmp);
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_FIELD)) {
+		int i;
+		st_entry ent;
+
+		ent.type = ST_FIELD;
+		ent.varname = NULL;
+		ent.data = NULL;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				st_entry *recordset;
+				zval **field;
+
+				if (wddx_stack_top(stack, (void**)&recordset) == SUCCESS &&
+					recordset->type == ST_RECORDSET &&
+					zend_hash_find(Z_ARRVAL_P(recordset->data), (char*)atts[i+1], strlen(atts[i+1])+1, (void**)&field) == SUCCESS) {
+					ent.data = *field;
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_DATETIME)) {
+		ent.type = ST_DATETIME;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	}
+","static void php_wddx_push_element(void *user_data, const XML_Char *name, const XML_Char **atts)
+{
+	st_entry ent;
+	wddx_stack *stack = (wddx_stack *)user_data;
+
+	if (!strcmp(name, EL_PACKET)) {
+		int i;
+
+		if (atts) for (i=0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_VERSION)) {
+				/* nothing for now */
+			}
+		}
+	} else if (!strcmp(name, EL_STRING)) {
+		ent.type = ST_STRING;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_BINARY)) {
+		ent.type = ST_BINARY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_CHAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_CHAR_CODE) && atts[i+1] && atts[i+1][0]) {
+				char tmp_buf[2];
+
+				snprintf(tmp_buf, sizeof(tmp_buf), ""%c"", (char)strtol(atts[i+1], NULL, 16));
+				php_wddx_process_data(user_data, tmp_buf, strlen(tmp_buf));
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_NUMBER)) {
+		ent.type = ST_NUMBER;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		Z_LVAL_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+        } else if (!strcmp(name, EL_BOOLEAN)) {
+                int i;
+ 
+                if (atts) for (i = 0; atts[i]; i++) {
+                        if (!strcmp(atts[i], EL_VALUE) && atts[i+1] && atts[i+1][0]) {
+                               ent.type = ST_BOOLEAN;
+                               SET_STACK_VARNAME;
+                               ALLOC_ZVAL(ent.data);
+                               INIT_PZVAL(ent.data);
+                               Z_TYPE_P(ent.data) = IS_BOOL;
+                                wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                                php_wddx_process_data(user_data, atts[i+1], strlen(atts[i+1]));
+                                break;
+                        }
+                } else {
+                       ent.type = ST_BOOLEAN;
+                       SET_STACK_VARNAME;
+                       ZVAL_FALSE(&ent.data);
+                        wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                }
+        } else if (!strcmp(name, EL_NULL)) {
+			wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+		}
+	} else if (!strcmp(name, EL_NULL)) {
+		ent.type = ST_NULL;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		ZVAL_NULL(ent.data);
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_ARRAY)) {
+		ent.type = ST_ARRAY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_STRUCT)) {
+		ent.type = ST_STRUCT;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_VAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				if (stack->varname) efree(stack->varname);
+				stack->varname = estrdup(atts[i+1]);
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_RECORDSET)) {
+		int i;
+
+		ent.type = ST_RECORDSET;
+		SET_STACK_VARNAME;
+		MAKE_STD_ZVAL(ent.data);
+		array_init(ent.data);
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], ""fieldNames"") && atts[i+1] && atts[i+1][0]) {
+				zval *tmp;
+				char *key;
+				char *p1, *p2, *endp;
+
+				i++;
+				endp = (char *)atts[i] + strlen(atts[i]);
+				p1 = (char *)atts[i];
+				while ((p2 = php_memnstr(p1, "","", sizeof("","")-1, endp)) != NULL) {
+					key = estrndup(p1, p2 - p1);
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, key, p2 - p1 + 1, tmp);
+					p1 = p2 + sizeof("","")-1;
+					efree(key);
+				}
+
+				if (p1 <= endp) {
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, p1, endp - p1 + 1, tmp);
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_FIELD)) {
+		int i;
+		st_entry ent;
+
+		ent.type = ST_FIELD;
+		ent.varname = NULL;
+		ent.data = NULL;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				st_entry *recordset;
+				zval **field;
+
+				if (wddx_stack_top(stack, (void**)&recordset) == SUCCESS &&
+					recordset->type == ST_RECORDSET &&
+					zend_hash_find(Z_ARRVAL_P(recordset->data), (char*)atts[i+1], strlen(atts[i+1])+1, (void**)&field) == SUCCESS) {
+					ent.data = *field;
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_DATETIME)) {
+		ent.type = ST_DATETIME;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	}
+",C,"               ALLOC_ZVAL(ent.data);
+               INIT_PZVAL(ent.data);
+               Z_TYPE_P(ent.data) = IS_BOOL;
+               ent.type = ST_BOOLEAN;
+               SET_STACK_VARNAME;
+                       ZVAL_FALSE(ent.data);
+","                               ent.type = ST_BOOLEAN;
+                               SET_STACK_VARNAME;
+                               ALLOC_ZVAL(ent.data);
+                               INIT_PZVAL(ent.data);
+                               Z_TYPE_P(ent.data) = IS_BOOL;
+                       ent.type = ST_BOOLEAN;
+                       SET_STACK_VARNAME;
+                       ZVAL_FALSE(&ent.data);
+",f8c514ba6b7962a219296a837b2dbc22f749e736,"@@ -799,22 +799,19 @@ static void php_wddx_push_element(void *user_data, const XML_Char *name, const X
+        } else if (!strcmp(name, EL_BOOLEAN)) {
+                int i;
+ 
++               ALLOC_ZVAL(ent.data);
++               INIT_PZVAL(ent.data);
++               Z_TYPE_P(ent.data) = IS_BOOL;
++               ent.type = ST_BOOLEAN;
++               SET_STACK_VARNAME;
+                if (atts) for (i = 0; atts[i]; i++) {
+                        if (!strcmp(atts[i], EL_VALUE) && atts[i+1] && atts[i+1][0]) {
+-                               ent.type = ST_BOOLEAN;
+-                               SET_STACK_VARNAME;
+-
+-                               ALLOC_ZVAL(ent.data);
+-                               INIT_PZVAL(ent.data);
+-                               Z_TYPE_P(ent.data) = IS_BOOL;
+                                wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                                php_wddx_process_data(user_data, atts[i+1], strlen(atts[i+1]));
+                                break;
+                        }
+                } else {
+-                       ent.type = ST_BOOLEAN;
+-                       SET_STACK_VARNAME;
+-                       ZVAL_FALSE(&ent.data);
++                       ZVAL_FALSE(ent.data);
+                        wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                }
+        } else if (!strcmp(name, EL_NULL)) {",php,https://git.php.net/?p=php-src.git;a=blob;f=ext/wddx/wddx.c;h=41fdd3d7954a94a4ff2353c96d81672d640223b4;hb=41fdd3d7954a94a4ff2353c96d81672d640223b4,https://git.php.net/?p=php-src.git;a=blob;f=ext/wddx/wddx.c;h=72d2408c1f990f641a66f44c32977e86c06440c7;hb=72d2408c1f990f641a66f44c32977e86c06440c7,1,"static void php_wddx_push_element(void *user_data, const XML_Char *name, const XML_Char **atts)
+{
+	st_entry ent;
+	wddx_stack *stack = (wddx_stack *)user_data;
+
+	if (!strcmp(name, EL_PACKET)) {
+		int i;
+
+		if (atts) for (i=0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_VERSION)) {
+				/* nothing for now */
+			}
+		}
+	} else if (!strcmp(name, EL_STRING)) {
+		ent.type = ST_STRING;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_BINARY)) {
+		ent.type = ST_BINARY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_CHAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_CHAR_CODE) && atts[i+1] && atts[i+1][0]) {
+				char tmp_buf[2];
+
+				snprintf(tmp_buf, sizeof(tmp_buf), ""%c"", (char)strtol(atts[i+1], NULL, 16));
+				php_wddx_process_data(user_data, tmp_buf, strlen(tmp_buf));
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_NUMBER)) {
+		ent.type = ST_NUMBER;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		Z_LVAL_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+        } else if (!strcmp(name, EL_BOOLEAN)) {
+                int i;
+ 
+//fix_flaw_line_below:
+//               ALLOC_ZVAL(ent.data);
+//fix_flaw_line_below:
+//               INIT_PZVAL(ent.data);
+//fix_flaw_line_below:
+//               Z_TYPE_P(ent.data) = IS_BOOL;
+//fix_flaw_line_below:
+//               ent.type = ST_BOOLEAN;
+//fix_flaw_line_below:
+//               SET_STACK_VARNAME;
+                if (atts) for (i = 0; atts[i]; i++) {
+                        if (!strcmp(atts[i], EL_VALUE) && atts[i+1] && atts[i+1][0]) {
+//flaw_line_below:
+                               ent.type = ST_BOOLEAN;
+//flaw_line_below:
+                               SET_STACK_VARNAME;
+//flaw_line_below:
+
+//flaw_line_below:
+                               ALLOC_ZVAL(ent.data);
+//flaw_line_below:
+                               INIT_PZVAL(ent.data);
+//flaw_line_below:
+                               Z_TYPE_P(ent.data) = IS_BOOL;
+                                wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                                php_wddx_process_data(user_data, atts[i+1], strlen(atts[i+1]));
+                                break;
+                        }
+                } else {
+//flaw_line_below:
+                       ent.type = ST_BOOLEAN;
+//flaw_line_below:
+                       SET_STACK_VARNAME;
+//flaw_line_below:
+                       ZVAL_FALSE(&ent.data);
+//fix_flaw_line_below:
+//                       ZVAL_FALSE(ent.data);
+                        wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                }
+        } else if (!strcmp(name, EL_NULL)) {
+			wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+		}
+	} else if (!strcmp(name, EL_NULL)) {
+		ent.type = ST_NULL;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		ZVAL_NULL(ent.data);
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_ARRAY)) {
+		ent.type = ST_ARRAY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_STRUCT)) {
+		ent.type = ST_STRUCT;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_VAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				if (stack->varname) efree(stack->varname);
+				stack->varname = estrdup(atts[i+1]);
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_RECORDSET)) {
+		int i;
+
+		ent.type = ST_RECORDSET;
+		SET_STACK_VARNAME;
+		MAKE_STD_ZVAL(ent.data);
+		array_init(ent.data);
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], ""fieldNames"") && atts[i+1] && atts[i+1][0]) {
+				zval *tmp;
+				char *key;
+				char *p1, *p2, *endp;
+
+				i++;
+				endp = (char *)atts[i] + strlen(atts[i]);
+				p1 = (char *)atts[i];
+				while ((p2 = php_memnstr(p1, "","", sizeof("","")-1, endp)) != NULL) {
+					key = estrndup(p1, p2 - p1);
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, key, p2 - p1 + 1, tmp);
+					p1 = p2 + sizeof("","")-1;
+					efree(key);
+				}
+
+				if (p1 <= endp) {
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, p1, endp - p1 + 1, tmp);
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_FIELD)) {
+		int i;
+		st_entry ent;
+
+		ent.type = ST_FIELD;
+		ent.varname = NULL;
+		ent.data = NULL;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				st_entry *recordset;
+				zval **field;
+
+				if (wddx_stack_top(stack, (void**)&recordset) == SUCCESS &&
+					recordset->type == ST_RECORDSET &&
+					zend_hash_find(Z_ARRVAL_P(recordset->data), (char*)atts[i+1], strlen(atts[i+1])+1, (void**)&field) == SUCCESS) {
+					ent.data = *field;
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_DATETIME)) {
+		ent.type = ST_DATETIME;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	}
+",177930,"static void php_wddx_push_element(void *user_data, const XML_Char *name, const XML_Char **atts)
+{
+	st_entry ent;
+	wddx_stack *stack = (wddx_stack *)user_data;
+
+	if (!strcmp(name, EL_PACKET)) {
+		int i;
+
+		if (atts) for (i=0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_VERSION)) {
+				/* nothing for now */
+			}
+		}
+	} else if (!strcmp(name, EL_STRING)) {
+		ent.type = ST_STRING;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_BINARY)) {
+		ent.type = ST_BINARY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_CHAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_CHAR_CODE) && atts[i+1] && atts[i+1][0]) {
+				char tmp_buf[2];
+
+				snprintf(tmp_buf, sizeof(tmp_buf), ""%c"", (char)strtol(atts[i+1], NULL, 16));
+				php_wddx_process_data(user_data, tmp_buf, strlen(tmp_buf));
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_NUMBER)) {
+		ent.type = ST_NUMBER;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		Z_LVAL_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+        } else if (!strcmp(name, EL_BOOLEAN)) {
+                int i;
+ 
+                if (atts) for (i = 0; atts[i]; i++) {
+                        if (!strcmp(atts[i], EL_VALUE) && atts[i+1] && atts[i+1][0]) {
+                               ent.type = ST_BOOLEAN;
+                               SET_STACK_VARNAME;
+                               ALLOC_ZVAL(ent.data);
+                               INIT_PZVAL(ent.data);
+                               Z_TYPE_P(ent.data) = IS_BOOL;
+                                wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                                php_wddx_process_data(user_data, atts[i+1], strlen(atts[i+1]));
+                                break;
+                        }
+                } else {
+                       ent.type = ST_BOOLEAN;
+                       SET_STACK_VARNAME;
+                       ZVAL_FALSE(&ent.data);
+                        wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                }
+        } else if (!strcmp(name, EL_NULL)) {
+			wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+		}
+	} else if (!strcmp(name, EL_NULL)) {
+		ent.type = ST_NULL;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		ZVAL_NULL(ent.data);
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_ARRAY)) {
+		ent.type = ST_ARRAY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_STRUCT)) {
+		ent.type = ST_STRUCT;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_VAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				if (stack->varname) efree(stack->varname);
+				stack->varname = estrdup(atts[i+1]);
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_RECORDSET)) {
+		int i;
+
+		ent.type = ST_RECORDSET;
+		SET_STACK_VARNAME;
+		MAKE_STD_ZVAL(ent.data);
+		array_init(ent.data);
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], ""fieldNames"") && atts[i+1] && atts[i+1][0]) {
+				zval *tmp;
+				char *key;
+				char *p1, *p2, *endp;
+
+				i++;
+				endp = (char *)atts[i] + strlen(atts[i]);
+				p1 = (char *)atts[i];
+				while ((p2 = php_memnstr(p1, "","", sizeof("","")-1, endp)) != NULL) {
+					key = estrndup(p1, p2 - p1);
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, key, p2 - p1 + 1, tmp);
+					p1 = p2 + sizeof("","")-1;
+					efree(key);
+				}
+
+				if (p1 <= endp) {
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, p1, endp - p1 + 1, tmp);
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_FIELD)) {
+		int i;
+		st_entry ent;
+
+		ent.type = ST_FIELD;
+		ent.varname = NULL;
+		ent.data = NULL;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				st_entry *recordset;
+				zval **field;
+
+				if (wddx_stack_top(stack, (void**)&recordset) == SUCCESS &&
+					recordset->type == ST_RECORDSET &&
+					zend_hash_find(Z_ARRVAL_P(recordset->data), (char*)atts[i+1], strlen(atts[i+1])+1, (void**)&field) == SUCCESS) {
+					ent.data = *field;
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_DATETIME)) {
+		ent.type = ST_DATETIME;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	}
+","static void php_wddx_push_element(void *user_data, const XML_Char *name, const XML_Char **atts)
+{
+	st_entry ent;
+	wddx_stack *stack = (wddx_stack *)user_data;
+
+	if (!strcmp(name, EL_PACKET)) {
+		int i;
+
+		if (atts) for (i=0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_VERSION)) {
+				/* nothing for now */
+			}
+		}
+	} else if (!strcmp(name, EL_STRING)) {
+		ent.type = ST_STRING;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_BINARY)) {
+		ent.type = ST_BINARY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_STRING;
+		Z_STRVAL_P(ent.data) = STR_EMPTY_ALLOC();
+		Z_STRLEN_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_CHAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_CHAR_CODE) && atts[i+1] && atts[i+1][0]) {
+				char tmp_buf[2];
+
+				snprintf(tmp_buf, sizeof(tmp_buf), ""%c"", (char)strtol(atts[i+1], NULL, 16));
+				php_wddx_process_data(user_data, tmp_buf, strlen(tmp_buf));
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_NUMBER)) {
+		ent.type = ST_NUMBER;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		Z_LVAL_P(ent.data) = 0;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+        } else if (!strcmp(name, EL_BOOLEAN)) {
+                int i;
+ 
+               ALLOC_ZVAL(ent.data);
+               INIT_PZVAL(ent.data);
+               Z_TYPE_P(ent.data) = IS_BOOL;
+               ent.type = ST_BOOLEAN;
+               SET_STACK_VARNAME;
+                if (atts) for (i = 0; atts[i]; i++) {
+                        if (!strcmp(atts[i], EL_VALUE) && atts[i+1] && atts[i+1][0]) {
+                                wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                                php_wddx_process_data(user_data, atts[i+1], strlen(atts[i+1]));
+                                break;
+                        }
+                } else {
+                       ZVAL_FALSE(ent.data);
+                        wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+                }
+        } else if (!strcmp(name, EL_NULL)) {
+			wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+		}
+	} else if (!strcmp(name, EL_NULL)) {
+		ent.type = ST_NULL;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		ZVAL_NULL(ent.data);
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_ARRAY)) {
+		ent.type = ST_ARRAY;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_STRUCT)) {
+		ent.type = ST_STRUCT;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		array_init(ent.data);
+		INIT_PZVAL(ent.data);
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_VAR)) {
+		int i;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				if (stack->varname) efree(stack->varname);
+				stack->varname = estrdup(atts[i+1]);
+				break;
+			}
+		}
+	} else if (!strcmp(name, EL_RECORDSET)) {
+		int i;
+
+		ent.type = ST_RECORDSET;
+		SET_STACK_VARNAME;
+		MAKE_STD_ZVAL(ent.data);
+		array_init(ent.data);
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], ""fieldNames"") && atts[i+1] && atts[i+1][0]) {
+				zval *tmp;
+				char *key;
+				char *p1, *p2, *endp;
+
+				i++;
+				endp = (char *)atts[i] + strlen(atts[i]);
+				p1 = (char *)atts[i];
+				while ((p2 = php_memnstr(p1, "","", sizeof("","")-1, endp)) != NULL) {
+					key = estrndup(p1, p2 - p1);
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, key, p2 - p1 + 1, tmp);
+					p1 = p2 + sizeof("","")-1;
+					efree(key);
+				}
+
+				if (p1 <= endp) {
+					MAKE_STD_ZVAL(tmp);
+					array_init(tmp);
+					add_assoc_zval_ex(ent.data, p1, endp - p1 + 1, tmp);
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_FIELD)) {
+		int i;
+		st_entry ent;
+
+		ent.type = ST_FIELD;
+		ent.varname = NULL;
+		ent.data = NULL;
+
+		if (atts) for (i = 0; atts[i]; i++) {
+			if (!strcmp(atts[i], EL_NAME) && atts[i+1] && atts[i+1][0]) {
+				st_entry *recordset;
+				zval **field;
+
+				if (wddx_stack_top(stack, (void**)&recordset) == SUCCESS &&
+					recordset->type == ST_RECORDSET &&
+					zend_hash_find(Z_ARRVAL_P(recordset->data), (char*)atts[i+1], strlen(atts[i+1])+1, (void**)&field) == SUCCESS) {
+					ent.data = *field;
+				}
+
+				break;
+			}
+		}
+
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	} else if (!strcmp(name, EL_DATETIME)) {
+		ent.type = ST_DATETIME;
+		SET_STACK_VARNAME;
+
+		ALLOC_ZVAL(ent.data);
+		INIT_PZVAL(ent.data);
+		Z_TYPE_P(ent.data) = IS_LONG;
+		wddx_stack_push((wddx_stack *)stack, &ent, sizeof(st_entry));
+	}
+","The `php_wddx_push_element` function processes XML elements related to WDDX (Web Distributed Data Exchange) by pushing corresponding data types onto a stack. It identifies various element names such as `EL_PACKET`, `EL_STRING`, `EL_BINARY`, `EL_NUMBER`, and others, initializing and allocating memory for the appropriate data types (e.g., strings, numbers, booleans, arrays, and structs). The function also handles attributes, such as extracting character codes or field names from recordsets. Each identified element is encapsulated in a `st_entry` structure and pushed onto the `wddx_stack`, facilitating the parsing and management of WDDX data structures.","The provided code defines a function that processes XML elements associated with a specific data exchange format. It identifies various element types, such as strings, numbers, booleans, arrays, and structures, and allocates memory for each type accordingly. The function also handles attributes, extracting relevant information like character codes and field names. Each identified element is encapsulated in a structured format and pushed onto a stack for further processing. This functionality enables the effective parsing and management of complex data structures, facilitating data exchange between different systems in a standardized manner.","The vulnerability in the original code stemmed from improper handling of boolean values, particularly when the attributes were not provided. In the vulnerable code, if the attributes were missing, the boolean type was pushed onto the stack without initializing its value, potentially leading to undefined behavior. The fix involved ensuring that the boolean entry is always allocated and initialized correctly, regardless of whether attributes are present. The updated code now explicitly sets the boolean value to false when attributes are absent, thereby preventing any unintended consequences from uninitialized data and enhancing overall stability and security.","The vulnerability in the original code arose from inadequate handling of boolean values, particularly when attributes were missing. This oversight allowed the code to push an uninitialized boolean entry onto the stack, which could lead to unpredictable behavior or crashes. The fix addressed this issue by ensuring that the boolean entry is always properly allocated and initialized, regardless of the presence of attributes. By explicitly setting a default value when attributes are absent, the updated code prevents the risks associated with uninitialized data, thereby enhancing the stability and security of the overall implementation.","The vulnerability was fixed by modifying the handling of boolean values in the code. In the updated version, the boolean entry is always allocated and initialized using `ALLOC_ZVAL(ent.data)` and `INIT_PZVAL(ent.data)`, ensuring that memory is properly allocated for the data. Additionally, when attributes are absent, the code explicitly sets the value to false using `ZVAL_FALSE(ent.data)`, preventing any uninitialized data from being pushed onto the stack. This change ensures that the boolean type is consistently managed, thereby eliminating the risk of undefined behavior associated with uninitialized variables.","The vulnerability was addressed by ensuring that boolean values are consistently allocated and initialized, regardless of whether associated attributes are present. The updated code explicitly allocates memory for the boolean entry and initializes it to a default value when attributes are missing. This prevents the possibility of pushing uninitialized data onto the stack, which could lead to unpredictable behavior or crashes. By implementing these changes, the code now guarantees that all boolean entries are properly managed, enhancing the overall stability and security of the application.","4, 5","5, 5","4,5","3, 4"

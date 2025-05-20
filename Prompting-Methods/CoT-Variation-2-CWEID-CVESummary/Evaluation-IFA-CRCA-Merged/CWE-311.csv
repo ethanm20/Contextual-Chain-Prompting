@@ -1,0 +1,142 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,178310,178310,,Remote,Not required,,CVE-2019-1563,https://www.cvedetails.com/cve/CVE-2019-1563/,CWE-311,Medium,Partial,,,2019-09-10,4.3,"In situations where an attacker receives automated notification of the success or failure of a decryption attempt an attacker, after sending a very large number of messages to be decrypted, can recover a CMS/PKCS7 transported encryption key or decrypt any RSA encrypted message that was encrypted with the public RSA key, using a Bleichenbacher padding oracle attack. Applications are not affected if they use a certificate together with the private RSA key to the CMS_decrypt or PKCS7_decrypt functions to select the correct recipient info to decrypt. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c). Fixed in OpenSSL 1.1.0l (Affected 1.1.0-1.1.0k). Fixed in OpenSSL 1.0.2t (Affected 1.0.2-1.0.2s).",2019-09-12,,4,https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=08229ad838c50f644d7e928e2eef147b4308ad64,08229ad838c50f644d7e928e2eef147b4308ad64,,0,,,"int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert,
+                BIO *dcont, BIO *out, unsigned int flags)
+{
+    int r;
+    BIO *cont;
+    if (OBJ_obj2nid(CMS_get0_type(cms)) != NID_pkcs7_enveloped) {
+        CMSerr(CMS_F_CMS_DECRYPT, CMS_R_TYPE_NOT_ENVELOPED_DATA);
+        return 0;
+    }
+    if (!dcont && !check_content(cms))
+        return 0;
+    if (flags & CMS_DEBUG_DECRYPT)
+         cms->d.envelopedData->encryptedContentInfo->debug = 1;
+     else
+         cms->d.envelopedData->encryptedContentInfo->debug = 0;
+    if (!cert)
+        cms->d.envelopedData->encryptedContentInfo->havenocert = 1;
+    else
+        cms->d.envelopedData->encryptedContentInfo->havenocert = 0;
+     if (!pk && !cert && !dcont && !out)
+         return 1;
+     if (pk && !CMS_decrypt_set1_pkey(cms, pk, cert))
+    r = cms_copy_content(out, cont, flags);
+    do_free_upto(cont, dcont);
+    return r;
+}
+","int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert,
+                BIO *dcont, BIO *out, unsigned int flags)
+{
+    int r;
+    BIO *cont;
+    if (OBJ_obj2nid(CMS_get0_type(cms)) != NID_pkcs7_enveloped) {
+        CMSerr(CMS_F_CMS_DECRYPT, CMS_R_TYPE_NOT_ENVELOPED_DATA);
+        return 0;
+    }
+    if (!dcont && !check_content(cms))
+        return 0;
+    if (flags & CMS_DEBUG_DECRYPT)
+         cms->d.envelopedData->encryptedContentInfo->debug = 1;
+     else
+         cms->d.envelopedData->encryptedContentInfo->debug = 0;
+     if (!pk && !cert && !dcont && !out)
+         return 1;
+     if (pk && !CMS_decrypt_set1_pkey(cms, pk, cert))
+    r = cms_copy_content(out, cont, flags);
+    do_free_upto(cont, dcont);
+    return r;
+}
+",C,"    if (!cert)
+        cms->d.envelopedData->encryptedContentInfo->havenocert = 1;
+    else
+        cms->d.envelopedData->encryptedContentInfo->havenocert = 0;
+",,7ff84d88036237dc36f4c2cf2dc814e4bf611084,"@@ -743,6 +743,10 @@ int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert,
+         cms->d.envelopedData->encryptedContentInfo->debug = 1;
+     else
+         cms->d.envelopedData->encryptedContentInfo->debug = 0;
++    if (!cert)
++        cms->d.envelopedData->encryptedContentInfo->havenocert = 1;
++    else
++        cms->d.envelopedData->encryptedContentInfo->havenocert = 0;
+     if (!pk && !cert && !dcont && !out)
+         return 1;
+     if (pk && !CMS_decrypt_set1_pkey(cms, pk, cert))",openssl,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/cms/cms_smime.c;h=3a26108b8ccb05a22afd2457360a3b823de3eb48;hb=08229ad838c50f644d7e928e2eef147b4308ad64,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/cms/cms_smime.c;h=5dcf803f4bd3c9bdfe1a04d6a7c2fc34f5a0a23d,1,"int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert,
+                BIO *dcont, BIO *out, unsigned int flags)
+{
+    int r;
+    BIO *cont;
+    if (OBJ_obj2nid(CMS_get0_type(cms)) != NID_pkcs7_enveloped) {
+        CMSerr(CMS_F_CMS_DECRYPT, CMS_R_TYPE_NOT_ENVELOPED_DATA);
+        return 0;
+    }
+    if (!dcont && !check_content(cms))
+        return 0;
+    if (flags & CMS_DEBUG_DECRYPT)
+         cms->d.envelopedData->encryptedContentInfo->debug = 1;
+     else
+         cms->d.envelopedData->encryptedContentInfo->debug = 0;
+//fix_flaw_line_below:
+//    if (!cert)
+//fix_flaw_line_below:
+//        cms->d.envelopedData->encryptedContentInfo->havenocert = 1;
+//fix_flaw_line_below:
+//    else
+//fix_flaw_line_below:
+//        cms->d.envelopedData->encryptedContentInfo->havenocert = 0;
+     if (!pk && !cert && !dcont && !out)
+         return 1;
+     if (pk && !CMS_decrypt_set1_pkey(cms, pk, cert))
+    r = cms_copy_content(out, cont, flags);
+    do_free_upto(cont, dcont);
+    return r;
+}
+",178310,"int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert,
+                BIO *dcont, BIO *out, unsigned int flags)
+{
+    int r;
+    BIO *cont;
+    if (OBJ_obj2nid(CMS_get0_type(cms)) != NID_pkcs7_enveloped) {
+        CMSerr(CMS_F_CMS_DECRYPT, CMS_R_TYPE_NOT_ENVELOPED_DATA);
+        return 0;
+    }
+    if (!dcont && !check_content(cms))
+        return 0;
+    if (flags & CMS_DEBUG_DECRYPT)
+         cms->d.envelopedData->encryptedContentInfo->debug = 1;
+     else
+         cms->d.envelopedData->encryptedContentInfo->debug = 0;
+     if (!pk && !cert && !dcont && !out)
+         return 1;
+     if (pk && !CMS_decrypt_set1_pkey(cms, pk, cert))
+    r = cms_copy_content(out, cont, flags);
+    do_free_upto(cont, dcont);
+    return r;
+}
+","int CMS_decrypt(CMS_ContentInfo *cms, EVP_PKEY *pk, X509 *cert,
+                BIO *dcont, BIO *out, unsigned int flags)
+{
+    int r;
+    BIO *cont;
+    if (OBJ_obj2nid(CMS_get0_type(cms)) != NID_pkcs7_enveloped) {
+        CMSerr(CMS_F_CMS_DECRYPT, CMS_R_TYPE_NOT_ENVELOPED_DATA);
+        return 0;
+    }
+    if (!dcont && !check_content(cms))
+        return 0;
+    if (flags & CMS_DEBUG_DECRYPT)
+         cms->d.envelopedData->encryptedContentInfo->debug = 1;
+     else
+         cms->d.envelopedData->encryptedContentInfo->debug = 0;
+    if (!cert)
+        cms->d.envelopedData->encryptedContentInfo->havenocert = 1;
+    else
+        cms->d.envelopedData->encryptedContentInfo->havenocert = 0;
+     if (!pk && !cert && !dcont && !out)
+         return 1;
+     if (pk && !CMS_decrypt_set1_pkey(cms, pk, cert))
+    r = cms_copy_content(out, cont, flags);
+    do_free_upto(cont, dcont);
+    return r;
+}
+","The `CMS_decrypt` function is designed to decrypt CMS (Cryptographic Message Syntax) enveloped data using a specified private key and certificate. It first checks if the provided CMS structure is of the correct type (enveloped data); if not, it returns an error. The function also verifies the presence of necessary parameters, such as the private key, certificate, or output BIO. If debugging is enabled, it sets a debug flag in the encrypted content info. Finally, if the private key is valid, it attempts to decrypt the content and copy it to the specified output BIO, managing memory appropriately throughout the process.","The provided code implements a function that decrypts enveloped data in a cryptographic message format using a private key and an associated certificate. It begins by verifying that the data is indeed in the correct format for decryption; if not, it generates an error. The function checks for the presence of necessary parameters, including the private key and output destination. If debugging is enabled, it sets a flag to facilitate troubleshooting. Finally, if the private key is successfully utilized, the function proceeds to decrypt the content and transfer it to the specified output location while managing memory effectively.","The vulnerability in the original code arises from the lack of proper handling of certificate presence during decryption, which could allow an attacker to exploit timing differences in decryption attempts, leading to a Bleichenbacher padding oracle attack. Specifically, the absence of a certificate could allow an attacker to infer information about the decryption process. The fixed code addresses this by introducing a check for the presence of a certificate, setting a flag to indicate whether a certificate is available. This change helps ensure that decryption operations are more secure and less susceptible to timing attacks, thereby mitigating the vulnerability.","The vulnerability in the original code stems from inadequate handling of decryption attempts, which could allow an attacker to exploit timing differences to infer information about the decryption process. This could lead to the recovery of encryption keys or the decryption of messages through a padding oracle attack, particularly when no certificate is used. The fixed code addresses this issue by ensuring that the presence of a certificate is checked and appropriately flagged, thereby enhancing the security of the decryption process and reducing the risk of successful attacks that rely on timing information.","The vulnerability was fixed by adding a check for the presence of a certificate in the decryption process. In the updated code, if no certificate is provided, a specific flag is set to indicate that a certificate is absent. This change ensures that the decryption function does not proceed without proper certificate validation, which is crucial for securely selecting the correct recipient information. By implementing this check, the code mitigates the risk of timing attacks, as it prevents attackers from inferring information based on the success or failure of decryption attempts when a certificate is not used.","The vulnerability was fixed by introducing a check to ensure that a certificate is present during the decryption process. This enhancement involves setting a specific flag to indicate whether a certificate is available or not. By enforcing this requirement, the code prevents decryption operations from proceeding without proper certificate validation, which is essential for securely determining the correct recipient information. This change effectively mitigates the risk of timing attacks, as it reduces the potential for attackers to exploit differences in decryption success or failure to infer sensitive information about the encryption keys or messages.","CWE-310, CWE-203, CWE-208, CWE-295, CWE-347, CWE-326, CWE-345, CWE-299, CWE-297, CWE-300",N,-1.0,"4,4","5,5","4,3","4,4"

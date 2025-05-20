@@ -1,0 +1,1728 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,182672,182672,,Remote,Not required,Partial,CVE-2019-17113,https://www.cvedetails.com/cve/CVE-2019-17113/,CWE-120,Low,Partial,Partial,,2019-10-03,7.5,"In libopenmpt before 0.3.19 and 0.4.x before 0.4.9, ModPlug_InstrumentName and ModPlug_SampleName in libopenmpt_modplug.c do not restrict the lengths of libmodplug output-buffer strings in the C API, leading to a buffer overflow.",2019-10-10,Overflow ,7,https://github.com/OpenMPT/openmpt/commit/927688ddab43c2b203569de79407a899e734fabe,927688ddab43c2b203569de79407a899e734fabe,"[Fix] libmodplug: C API: Limit the length of strings copied to the output buffer of ModPlug_InstrumentName() and ModPlug_SampleName() to 32 bytes (including terminating null) as is done by original libmodplug. This avoids potential buffer overflows in software relying on this limit instead of querying the required buffer size beforehand. libopenmpt can return strings longer than 32 bytes here beacuse the internal limit of 32 bytes applies to strings encoded in arbitrary character encodings but the API returns them converted to UTF-8, which can be longer. (reported by Antonio Morales Maldonado of Semmle Security Research Team)
+
+git-svn-id: https://source.openmpt.org/svn/openmpt/trunk/OpenMPT@12127 56274372-70c3-4bfc-bfc3-4c3a0b034d27",16,libopenmpt/libopenmpt_modplug.c,"{""sha"": ""da13edc3f46b224ecb223e9316f06825ee4b7e75"", ""filename"": ""libopenmpt/libopenmpt_modplug.c"", ""status"": ""modified"", ""additions"": 14, ""deletions"": 32, ""changes"": 46, ""blob_url"": ""https://github.com/OpenMPT/openmpt/blob/927688ddab43c2b203569de79407a899e734fabe/libopenmpt/libopenmpt_modplug.c"", ""raw_url"": ""https://github.com/OpenMPT/openmpt/raw/927688ddab43c2b203569de79407a899e734fabe/libopenmpt/libopenmpt_modplug.c"", ""contents_url"": ""https://api.github.com/repos/OpenMPT/openmpt/contents/libopenmpt/libopenmpt_modplug.c?ref=927688ddab43c2b203569de79407a899e734fabe"", ""patch"": ""@@ -478,53 +478,35 @@ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_NumChannels(ModPlugFile* file)\n LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)\n {\n \tconst char* str;\n-\tunsigned int retval;\n-\tsize_t tmpretval;\n+\tchar buf[32];\n \tif(!file) return 0;\n \tstr = openmpt_module_get_sample_name(file->mod,qual-1);\n-\tif(!str){\n-\t\tif(buff){\n-\t\t\t*buff = '\\0';\n-\t\t}\n-\t\treturn 0;\n-\t}\n-\ttmpretval = strlen(str);\n-\tif(tmpretval>=INT_MAX){\n-\t\ttmpretval = INT_MAX-1;\n+\tmemset(buf,0,32);\n+\tif(str){\n+\t\tstrncpy(buf,str,31);\n+\t\topenmpt_free_string(str);\n \t}\n-\tretval = (int)tmpretval;\n \tif(buff){\n-\t\tmemcpy(buff,str,retval+1);\n-\t\tbuff[retval] = '\\0';\n+\t\tstrncpy(buff,buf,32);\n \t}\n-\topenmpt_free_string(str);\n-\treturn retval;\n+\treturn (unsigned int)strlen(buf);\n }\n \n LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)\n {\n \tconst char* str;\n-\tunsigned int retval;\n-\tsize_t tmpretval;\n+\tchar buf[32];\n \tif(!file) return 0;\n \tstr = openmpt_module_get_instrument_name(file->mod,qual-1);\n-\tif(!str){\n-\t\tif(buff){\n-\t\t\t*buff = '\\0';\n-\t\t}\n-\t\treturn 0;\n-\t}\n-\ttmpretval = strlen(str);\n-\tif(tmpretval>=INT_MAX){\n-\t\ttmpretval = INT_MAX-1;\n+\tmemset(buf,0,32);\n+\tif(str){\n+\t\tstrncpy(buf,str,31);\n+\t\topenmpt_free_string(str);\n \t}\n-\tretval = (int)tmpretval;\n \tif(buff){\n-\t\tmemcpy(buff,str,retval+1);\n-\t\tbuff[retval] = '\\0';\n+\t\tstrncpy(buff,buf,32);\n \t}\n-\topenmpt_free_string(str);\n-\treturn retval;\n+\treturn (unsigned int)strlen(buf);\n }\n \n LIBOPENMPT_MODPLUG_API ModPlugNote* ModPlug_GetPattern(ModPlugFile* file, int pattern, unsigned int* numrows)""}"," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+	memset(buf,0,32);
+	if(str){
+		strncpy(buf,str,31);
+		openmpt_free_string(str);
+ 	}
+ 	if(buff){
+		strncpy(buff,buf,32);
+ 	}
+	return (unsigned int)strlen(buf);
+ }
+"," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	unsigned int retval;
+	size_t tmpretval;
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+	if(!str){
+		if(buff){
+			*buff = '\0';
+		}
+		return 0;
+	}
+	tmpretval = strlen(str);
+	if(tmpretval>=INT_MAX){
+		tmpretval = INT_MAX-1;
+ 	}
+	retval = (int)tmpretval;
+ 	if(buff){
+		memcpy(buff,str,retval+1);
+		buff[retval] = '\0';
+ 	}
+	openmpt_free_string(str);
+	return retval;
+ }
+",C,"	char buf[32];
+	memset(buf,0,32);
+	if(str){
+		strncpy(buf,str,31);
+		openmpt_free_string(str);
+		strncpy(buff,buf,32);
+	return (unsigned int)strlen(buf);
+","	unsigned int retval;
+	size_t tmpretval;
+	if(!str){
+		if(buff){
+			*buff = '\0';
+		}
+		return 0;
+	}
+	tmpretval = strlen(str);
+	if(tmpretval>=INT_MAX){
+		tmpretval = INT_MAX-1;
+	retval = (int)tmpretval;
+		memcpy(buff,str,retval+1);
+		buff[retval] = '\0';
+	openmpt_free_string(str);
+	return retval;
+",,"@@ -478,53 +478,35 @@ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_NumChannels(ModPlugFile* file)
+ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+-	unsigned int retval;
+-	size_t tmpretval;
++	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+-	if(!str){
+-		if(buff){
+-			*buff = '\0';
+-		}
+-		return 0;
+-	}
+-	tmpretval = strlen(str);
+-	if(tmpretval>=INT_MAX){
+-		tmpretval = INT_MAX-1;
++	memset(buf,0,32);
++	if(str){
++		strncpy(buf,str,31);
++		openmpt_free_string(str);
+ 	}
+-	retval = (int)tmpretval;
+ 	if(buff){
+-		memcpy(buff,str,retval+1);
+-		buff[retval] = '\0';
++		strncpy(buff,buf,32);
+ 	}
+-	openmpt_free_string(str);
+-	return retval;
++	return (unsigned int)strlen(buf);
+ }
+ 
+ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+-	unsigned int retval;
+-	size_t tmpretval;
++	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+-	if(!str){
+-		if(buff){
+-			*buff = '\0';
+-		}
+-		return 0;
+-	}
+-	tmpretval = strlen(str);
+-	if(tmpretval>=INT_MAX){
+-		tmpretval = INT_MAX-1;
++	memset(buf,0,32);
++	if(str){
++		strncpy(buf,str,31);
++		openmpt_free_string(str);
+ 	}
+-	retval = (int)tmpretval;
+ 	if(buff){
+-		memcpy(buff,str,retval+1);
+-		buff[retval] = '\0';
++		strncpy(buff,buf,32);
+ 	}
+-	openmpt_free_string(str);
+-	return retval;
++	return (unsigned int)strlen(buf);
+ }
+ 
+ LIBOPENMPT_MODPLUG_API ModPlugNote* ModPlug_GetPattern(ModPlugFile* file, int pattern, unsigned int* numrows)",openmpt,927688ddab43c2b203569de79407a899e734fabe,47a3b0663202d3e8b3f2f6231052a344cd8134e3,1," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+//flaw_line_below:
+	unsigned int retval;
+//flaw_line_below:
+	size_t tmpretval;
+//fix_flaw_line_below:
+//	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+//flaw_line_below:
+	if(!str){
+//flaw_line_below:
+		if(buff){
+//flaw_line_below:
+			*buff = '\0';
+//flaw_line_below:
+		}
+//flaw_line_below:
+		return 0;
+//flaw_line_below:
+	}
+//flaw_line_below:
+	tmpretval = strlen(str);
+//flaw_line_below:
+	if(tmpretval>=INT_MAX){
+//flaw_line_below:
+		tmpretval = INT_MAX-1;
+//fix_flaw_line_below:
+//	memset(buf,0,32);
+//fix_flaw_line_below:
+//	if(str){
+//fix_flaw_line_below:
+//		strncpy(buf,str,31);
+//fix_flaw_line_below:
+//		openmpt_free_string(str);
+ 	}
+//flaw_line_below:
+	retval = (int)tmpretval;
+ 	if(buff){
+//flaw_line_below:
+		memcpy(buff,str,retval+1);
+//flaw_line_below:
+		buff[retval] = '\0';
+//fix_flaw_line_below:
+//		strncpy(buff,buf,32);
+ 	}
+//flaw_line_below:
+	openmpt_free_string(str);
+//flaw_line_below:
+	return retval;
+//fix_flaw_line_below:
+//	return (unsigned int)strlen(buf);
+ }
+",182672," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	unsigned int retval;
+	size_t tmpretval;
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+	if(!str){
+		if(buff){
+			*buff = '\0';
+		}
+		return 0;
+	}
+	tmpretval = strlen(str);
+	if(tmpretval>=INT_MAX){
+		tmpretval = INT_MAX-1;
+ 	}
+	retval = (int)tmpretval;
+ 	if(buff){
+		memcpy(buff,str,retval+1);
+		buff[retval] = '\0';
+ 	}
+	openmpt_free_string(str);
+	return retval;
+ }
+"," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+	memset(buf,0,32);
+	if(str){
+		strncpy(buf,str,31);
+		openmpt_free_string(str);
+ 	}
+ 	if(buff){
+		strncpy(buff,buf,32);
+ 	}
+	return (unsigned int)strlen(buf);
+ }
+","The `ModPlug_InstrumentName` function retrieves the name of a specified instrument from a given ModPlug file. It takes three parameters: a pointer to a `ModPlugFile`, an unsigned integer `qual` representing the instrument index (1-based), and a character buffer `buff` to store the instrument name. The function first checks if the file is valid, then fetches the instrument name using the OpenMPT library. If the name exists, it copies it to the provided buffer, ensuring it is null-terminated, and returns the length of the name. If the instrument does not exist or the file is invalid, it returns 0.","The provided code defines a function that retrieves the name of a specific instrument from a music file. It checks the validity of the file and then attempts to obtain the instrument's name based on a given index. If the name is found, it copies the name into a provided buffer while ensuring it is properly terminated. The function also handles cases where the name is too long by limiting its length and returns the length of the name. If the file is invalid or the instrument does not exist, it returns zero, indicating failure to retrieve the name.","The vulnerability in the original code arises from the lack of bounds checking when copying the instrument name into the provided buffer, which could lead to buffer overflows if the name exceeds the buffer's capacity. Specifically, the function used `memcpy` without ensuring that the length of the string being copied would not exceed the size of the destination buffer. In the fixed code, the length of the string is limited to 31 bytes using `strncpy`, and a separate buffer of fixed size is introduced to safely hold the instrument name before copying it to the output buffer, thus preventing potential overflows and ensuring that the output remains within the defined limits.","The vulnerability in the original code stems from the potential for buffer overflows due to the absence of checks on the length of strings being copied into an output buffer. This could allow longer strings, particularly those converted to UTF-8, to exceed the buffer's capacity, leading to memory corruption or crashes. The fix implemented a safeguard by limiting the length of the copied strings to a maximum of 32 bytes, including the null terminator. This ensures that any string copied into the output buffer remains within safe bounds, thereby preventing overflow and enhancing the overall security of the code.","The vulnerability was fixed by introducing a fixed-size buffer to safely hold the instrument name before copying it to the output buffer. In the modified code, a local buffer is created with a size of 32 bytes, and the `strncpy` function is used to copy the instrument name into this buffer, ensuring that only up to 31 bytes are copied, leaving space for the null terminator. Additionally, the output buffer is populated using `strncpy`, which also respects the 32-byte limit. This approach prevents buffer overflows by ensuring that the copied string does not exceed the defined size constraints.","The vulnerability was addressed by implementing a fixed-size buffer to safely store the instrument name before transferring it to the output destination. The updated code limits the length of the copied string to a maximum of 31 bytes, ensuring that there is always space for a null terminator. This prevents any possibility of exceeding the buffer's capacity, which could lead to memory corruption. By enforcing these size constraints during the copying process, the code effectively mitigates the risk of buffer overflows, enhancing the overall security and stability of the application.","5,4","5,5","4,4","5,4","CWE-119, CWE-120, CWE-121, CWE-122, CWE-787, CWE-788, CWE-123, CWE-125, CWE-130, CWE-131",N,-1
+1,1,1,182673,182673,,Remote,Not required,Partial,CVE-2019-17113,https://www.cvedetails.com/cve/CVE-2019-17113/,CWE-120,Low,Partial,Partial,,2019-10-03,7.5,"In libopenmpt before 0.3.19 and 0.4.x before 0.4.9, ModPlug_InstrumentName and ModPlug_SampleName in libopenmpt_modplug.c do not restrict the lengths of libmodplug output-buffer strings in the C API, leading to a buffer overflow.",2019-10-10,Overflow ,7,https://github.com/OpenMPT/openmpt/commit/927688ddab43c2b203569de79407a899e734fabe,927688ddab43c2b203569de79407a899e734fabe,"[Fix] libmodplug: C API: Limit the length of strings copied to the output buffer of ModPlug_InstrumentName() and ModPlug_SampleName() to 32 bytes (including terminating null) as is done by original libmodplug. This avoids potential buffer overflows in software relying on this limit instead of querying the required buffer size beforehand. libopenmpt can return strings longer than 32 bytes here beacuse the internal limit of 32 bytes applies to strings encoded in arbitrary character encodings but the API returns them converted to UTF-8, which can be longer. (reported by Antonio Morales Maldonado of Semmle Security Research Team)
+
+git-svn-id: https://source.openmpt.org/svn/openmpt/trunk/OpenMPT@12127 56274372-70c3-4bfc-bfc3-4c3a0b034d27",16,libopenmpt/libopenmpt_modplug.c,"{""sha"": ""da13edc3f46b224ecb223e9316f06825ee4b7e75"", ""filename"": ""libopenmpt/libopenmpt_modplug.c"", ""status"": ""modified"", ""additions"": 14, ""deletions"": 32, ""changes"": 46, ""blob_url"": ""https://github.com/OpenMPT/openmpt/blob/927688ddab43c2b203569de79407a899e734fabe/libopenmpt/libopenmpt_modplug.c"", ""raw_url"": ""https://github.com/OpenMPT/openmpt/raw/927688ddab43c2b203569de79407a899e734fabe/libopenmpt/libopenmpt_modplug.c"", ""contents_url"": ""https://api.github.com/repos/OpenMPT/openmpt/contents/libopenmpt/libopenmpt_modplug.c?ref=927688ddab43c2b203569de79407a899e734fabe"", ""patch"": ""@@ -478,53 +478,35 @@ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_NumChannels(ModPlugFile* file)\n LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)\n {\n \tconst char* str;\n-\tunsigned int retval;\n-\tsize_t tmpretval;\n+\tchar buf[32];\n \tif(!file) return 0;\n \tstr = openmpt_module_get_sample_name(file->mod,qual-1);\n-\tif(!str){\n-\t\tif(buff){\n-\t\t\t*buff = '\\0';\n-\t\t}\n-\t\treturn 0;\n-\t}\n-\ttmpretval = strlen(str);\n-\tif(tmpretval>=INT_MAX){\n-\t\ttmpretval = INT_MAX-1;\n+\tmemset(buf,0,32);\n+\tif(str){\n+\t\tstrncpy(buf,str,31);\n+\t\topenmpt_free_string(str);\n \t}\n-\tretval = (int)tmpretval;\n \tif(buff){\n-\t\tmemcpy(buff,str,retval+1);\n-\t\tbuff[retval] = '\\0';\n+\t\tstrncpy(buff,buf,32);\n \t}\n-\topenmpt_free_string(str);\n-\treturn retval;\n+\treturn (unsigned int)strlen(buf);\n }\n \n LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)\n {\n \tconst char* str;\n-\tunsigned int retval;\n-\tsize_t tmpretval;\n+\tchar buf[32];\n \tif(!file) return 0;\n \tstr = openmpt_module_get_instrument_name(file->mod,qual-1);\n-\tif(!str){\n-\t\tif(buff){\n-\t\t\t*buff = '\\0';\n-\t\t}\n-\t\treturn 0;\n-\t}\n-\ttmpretval = strlen(str);\n-\tif(tmpretval>=INT_MAX){\n-\t\ttmpretval = INT_MAX-1;\n+\tmemset(buf,0,32);\n+\tif(str){\n+\t\tstrncpy(buf,str,31);\n+\t\topenmpt_free_string(str);\n \t}\n-\tretval = (int)tmpretval;\n \tif(buff){\n-\t\tmemcpy(buff,str,retval+1);\n-\t\tbuff[retval] = '\\0';\n+\t\tstrncpy(buff,buf,32);\n \t}\n-\topenmpt_free_string(str);\n-\treturn retval;\n+\treturn (unsigned int)strlen(buf);\n }\n \n LIBOPENMPT_MODPLUG_API ModPlugNote* ModPlug_GetPattern(ModPlugFile* file, int pattern, unsigned int* numrows)""}"," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+	memset(buf,0,32);
+	if(str){
+		strncpy(buf,str,31);
+		openmpt_free_string(str);
+ 	}
+ 	if(buff){
+		strncpy(buff,buf,32);
+ 	}
+	return (unsigned int)strlen(buf);
+ }
+"," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	unsigned int retval;
+	size_t tmpretval;
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+	if(!str){
+		if(buff){
+			*buff = '\0';
+		}
+		return 0;
+	}
+	tmpretval = strlen(str);
+	if(tmpretval>=INT_MAX){
+		tmpretval = INT_MAX-1;
+ 	}
+	retval = (int)tmpretval;
+ 	if(buff){
+		memcpy(buff,str,retval+1);
+		buff[retval] = '\0';
+ 	}
+	openmpt_free_string(str);
+	return retval;
+ }
+",C,"	char buf[32];
+	memset(buf,0,32);
+	if(str){
+		strncpy(buf,str,31);
+		openmpt_free_string(str);
+		strncpy(buff,buf,32);
+	return (unsigned int)strlen(buf);
+","	unsigned int retval;
+	size_t tmpretval;
+	if(!str){
+		if(buff){
+			*buff = '\0';
+		}
+		return 0;
+	}
+	tmpretval = strlen(str);
+	if(tmpretval>=INT_MAX){
+		tmpretval = INT_MAX-1;
+	retval = (int)tmpretval;
+		memcpy(buff,str,retval+1);
+		buff[retval] = '\0';
+	openmpt_free_string(str);
+	return retval;
+",,"@@ -478,53 +478,35 @@ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_NumChannels(ModPlugFile* file)
+ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+-	unsigned int retval;
+-	size_t tmpretval;
++	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+-	if(!str){
+-		if(buff){
+-			*buff = '\0';
+-		}
+-		return 0;
+-	}
+-	tmpretval = strlen(str);
+-	if(tmpretval>=INT_MAX){
+-		tmpretval = INT_MAX-1;
++	memset(buf,0,32);
++	if(str){
++		strncpy(buf,str,31);
++		openmpt_free_string(str);
+ 	}
+-	retval = (int)tmpretval;
+ 	if(buff){
+-		memcpy(buff,str,retval+1);
+-		buff[retval] = '\0';
++		strncpy(buff,buf,32);
+ 	}
+-	openmpt_free_string(str);
+-	return retval;
++	return (unsigned int)strlen(buf);
+ }
+ 
+ LIBOPENMPT_MODPLUG_API unsigned int ModPlug_InstrumentName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+-	unsigned int retval;
+-	size_t tmpretval;
++	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_instrument_name(file->mod,qual-1);
+-	if(!str){
+-		if(buff){
+-			*buff = '\0';
+-		}
+-		return 0;
+-	}
+-	tmpretval = strlen(str);
+-	if(tmpretval>=INT_MAX){
+-		tmpretval = INT_MAX-1;
++	memset(buf,0,32);
++	if(str){
++		strncpy(buf,str,31);
++		openmpt_free_string(str);
+ 	}
+-	retval = (int)tmpretval;
+ 	if(buff){
+-		memcpy(buff,str,retval+1);
+-		buff[retval] = '\0';
++		strncpy(buff,buf,32);
+ 	}
+-	openmpt_free_string(str);
+-	return retval;
++	return (unsigned int)strlen(buf);
+ }
+ 
+ LIBOPENMPT_MODPLUG_API ModPlugNote* ModPlug_GetPattern(ModPlugFile* file, int pattern, unsigned int* numrows)",openmpt,927688ddab43c2b203569de79407a899e734fabe,47a3b0663202d3e8b3f2f6231052a344cd8134e3,1," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+//flaw_line_below:
+	unsigned int retval;
+//flaw_line_below:
+	size_t tmpretval;
+//fix_flaw_line_below:
+//	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+//flaw_line_below:
+	if(!str){
+//flaw_line_below:
+		if(buff){
+//flaw_line_below:
+			*buff = '\0';
+//flaw_line_below:
+		}
+//flaw_line_below:
+		return 0;
+//flaw_line_below:
+	}
+//flaw_line_below:
+	tmpretval = strlen(str);
+//flaw_line_below:
+	if(tmpretval>=INT_MAX){
+//flaw_line_below:
+		tmpretval = INT_MAX-1;
+//fix_flaw_line_below:
+//	memset(buf,0,32);
+//fix_flaw_line_below:
+//	if(str){
+//fix_flaw_line_below:
+//		strncpy(buf,str,31);
+//fix_flaw_line_below:
+//		openmpt_free_string(str);
+ 	}
+//flaw_line_below:
+	retval = (int)tmpretval;
+ 	if(buff){
+//flaw_line_below:
+		memcpy(buff,str,retval+1);
+//flaw_line_below:
+		buff[retval] = '\0';
+//fix_flaw_line_below:
+//		strncpy(buff,buf,32);
+ 	}
+//flaw_line_below:
+	openmpt_free_string(str);
+//flaw_line_below:
+	return retval;
+//fix_flaw_line_below:
+//	return (unsigned int)strlen(buf);
+ }
+",182673," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	unsigned int retval;
+	size_t tmpretval;
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+	if(!str){
+		if(buff){
+			*buff = '\0';
+		}
+		return 0;
+	}
+	tmpretval = strlen(str);
+	if(tmpretval>=INT_MAX){
+		tmpretval = INT_MAX-1;
+ 	}
+	retval = (int)tmpretval;
+ 	if(buff){
+		memcpy(buff,str,retval+1);
+		buff[retval] = '\0';
+ 	}
+	openmpt_free_string(str);
+	return retval;
+ }
+"," LIBOPENMPT_MODPLUG_API unsigned int ModPlug_SampleName(ModPlugFile* file, unsigned int qual, char* buff)
+ {
+ 	const char* str;
+	char buf[32];
+ 	if(!file) return 0;
+ 	str = openmpt_module_get_sample_name(file->mod,qual-1);
+	memset(buf,0,32);
+	if(str){
+		strncpy(buf,str,31);
+		openmpt_free_string(str);
+ 	}
+ 	if(buff){
+		strncpy(buff,buf,32);
+ 	}
+	return (unsigned int)strlen(buf);
+ }
+","The `ModPlug_SampleName` function retrieves the name of a sample from a given ModPlugFile structure, identified by the `qual` parameter, which specifies the sample index (1-based). It first checks if the file is valid; if not, it returns 0. If the sample name exists, it copies the name into the provided buffer `buff`, ensuring it does not exceed the maximum string length. The function also handles potential memory issues by limiting the length to `INT_MAX - 1`. Finally, it frees the allocated string and returns the length of the sample name, or 0 if the name is not found.","The provided code defines a function that retrieves the name of a specific audio sample from a file structure, using an index to identify the sample. It first checks the validity of the file; if invalid, it returns zero. If the sample name is found, it copies the name into a designated buffer while ensuring the length does not exceed a predefined limit. The function also handles cases where the sample name is absent by clearing the buffer and returning zero. Finally, it releases any allocated memory associated with the sample name and returns the length of the retrieved name.","The vulnerability in the original code arises from the lack of bounds checking when copying the sample name into the output buffer, which could lead to buffer overflows if the sample name exceeds the buffer's capacity. Specifically, the function used `memcpy` without ensuring that the length of the sample name did not exceed the size of the provided buffer. In the fixed code, the use of a temporary buffer with a defined size of 32 bytes, along with `strncpy`, ensures that only a limited number of bytes (including the null terminator) are copied, thus preventing potential overflows and enhancing the overall safety of the function.","The vulnerability in the original code stems from the potential for buffer overflows due to the absence of checks on the length of strings being copied into an output buffer. This could allow longer sample names to exceed the buffer's capacity, leading to memory corruption or crashes. The fix implemented in the updated code introduces a temporary buffer with a defined size limit, ensuring that only a specified number of bytes, including the null terminator, are copied. This change effectively mitigates the risk of buffer overflows by enforcing a strict length constraint on the strings being handled.","The vulnerability was fixed by introducing a temporary buffer with a defined size of 32 bytes to safely store the sample name before copying it to the output buffer. In the updated code, the `memset` function initializes this temporary buffer to ensure it is empty. The `strncpy` function is then used to copy the sample name into this buffer, limiting the copy to 31 bytes plus the null terminator. Finally, the code uses `strncpy` again to transfer the contents of the temporary buffer to the provided output buffer, ensuring that the total length does not exceed the safe limit and preventing buffer overflows.","The vulnerability was addressed by implementing a temporary buffer with a fixed size to safely store the sample name before transferring it to the output buffer. This approach ensures that the length of the copied string is strictly controlled, preventing any possibility of exceeding the buffer's capacity. The code initializes the temporary buffer to avoid any residual data and uses a method that limits the number of bytes copied, including the null terminator. This change effectively mitigates the risk of buffer overflows, enhancing the overall safety and stability of the function.","4, 5","5,5","4,5","5,5","CWE-119, CWE-120, CWE-787, CWE-788, CWE-121, CWE-122, CWE-125, CWE-131, CWE-789, CWE-123",N,-1
+2,2,2,183007,183007,,Remote,Not required,Partial,CVE-2018-14879,https://www.cvedetails.com/cve/CVE-2018-14879/,CWE-120,Low,Partial,Partial,,2019-10-03,7.5,The command-line argument parser in tcpdump before 4.9.3 has a buffer overflow in tcpdump.c:get_next_file().,2019-10-11,Overflow ,4,https://github.com/the-tcpdump-group/tcpdump/commit/9ba91381954ad325ea4fd26b9c65a8bd9a2a85b6,9ba91381954ad325ea4fd26b9c65a8bd9a2a85b6,"(for 4.9.3) CVE-2018-14879/fix -V to fail invalid input safely
+
+get_next_file() did not check the return value of strlen() and
+underflowed an array index if the line read by fgets() from the file
+started with \0. This caused an out-of-bounds read and could cause a
+write. Add the missing check.
+
+This vulnerability was discovered by Brian Carpenter & Geeknik Labs.",2,tcpdump.c,"{""sha"": ""043bda1d7aca523ac17d555e5bcd1e09a676adfe"", ""filename"": ""tcpdump.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 2, ""changes"": 6, ""blob_url"": ""https://github.com/the-tcpdump-group/tcpdump/blob/9ba91381954ad325ea4fd26b9c65a8bd9a2a85b6/tcpdump.c"", ""raw_url"": ""https://github.com/the-tcpdump-group/tcpdump/raw/9ba91381954ad325ea4fd26b9c65a8bd9a2a85b6/tcpdump.c"", ""contents_url"": ""https://api.github.com/repos/the-tcpdump-group/tcpdump/contents/tcpdump.c?ref=9ba91381954ad325ea4fd26b9c65a8bd9a2a85b6"", ""patch"": ""@@ -699,13 +699,15 @@ static char *\n get_next_file(FILE *VFile, char *ptr)\n {\n \tchar *ret;\n+\tsize_t len;\n \n \tret = fgets(ptr, PATH_MAX, VFile);\n \tif (!ret)\n \t\treturn NULL;\n \n-\tif (ptr[strlen(ptr) - 1] == '\\n')\n-\t\tptr[strlen(ptr) - 1] = '\\0';\n+\tlen = strlen (ptr);\n+\tif (len > 0 && ptr[len - 1] == '\\n')\n+\t\tptr[len - 1] = '\\0';\n \n \treturn ret;\n }""}"," get_next_file(FILE *VFile, char *ptr)
+ {
+ 	char *ret;
+	size_t len;
+ 
+ 	ret = fgets(ptr, PATH_MAX, VFile);
+ 	if (!ret)
+ 		return NULL;
+ 
+	len = strlen (ptr);
+	if (len > 0 && ptr[len - 1] == '\n')
+		ptr[len - 1] = '\0';
+ 
+ 	return ret;
+ }
+"," get_next_file(FILE *VFile, char *ptr)
+ {
+ 	char *ret;
+ 
+ 	ret = fgets(ptr, PATH_MAX, VFile);
+ 	if (!ret)
+ 		return NULL;
+ 
+	if (ptr[strlen(ptr) - 1] == '\n')
+		ptr[strlen(ptr) - 1] = '\0';
+ 
+ 	return ret;
+ }
+",C,"	size_t len;
+	len = strlen (ptr);
+	if (len > 0 && ptr[len - 1] == '\n')
+		ptr[len - 1] = '\0';
+","	if (ptr[strlen(ptr) - 1] == '\n')
+		ptr[strlen(ptr) - 1] = '\0';
+",,"@@ -699,13 +699,15 @@ static char *
+ get_next_file(FILE *VFile, char *ptr)
+ {
+ 	char *ret;
++	size_t len;
+ 
+ 	ret = fgets(ptr, PATH_MAX, VFile);
+ 	if (!ret)
+ 		return NULL;
+ 
+-	if (ptr[strlen(ptr) - 1] == '\n')
+-		ptr[strlen(ptr) - 1] = '\0';
++	len = strlen (ptr);
++	if (len > 0 && ptr[len - 1] == '\n')
++		ptr[len - 1] = '\0';
+ 
+ 	return ret;
+ }",tcpdump,9ba91381954ad325ea4fd26b9c65a8bd9a2a85b6,d7505276842e85bfd067fa21cdb32b8a2dc3c5e4,1," get_next_file(FILE *VFile, char *ptr)
+ {
+ 	char *ret;
+//fix_flaw_line_below:
+//	size_t len;
+ 
+ 	ret = fgets(ptr, PATH_MAX, VFile);
+ 	if (!ret)
+ 		return NULL;
+ 
+//flaw_line_below:
+	if (ptr[strlen(ptr) - 1] == '\n')
+//flaw_line_below:
+		ptr[strlen(ptr) - 1] = '\0';
+//fix_flaw_line_below:
+//	len = strlen (ptr);
+//fix_flaw_line_below:
+//	if (len > 0 && ptr[len - 1] == '\n')
+//fix_flaw_line_below:
+//		ptr[len - 1] = '\0';
+ 
+ 	return ret;
+ }
+",183007," get_next_file(FILE *VFile, char *ptr)
+ {
+ 	char *ret;
+ 
+ 	ret = fgets(ptr, PATH_MAX, VFile);
+ 	if (!ret)
+ 		return NULL;
+ 
+	if (ptr[strlen(ptr) - 1] == '\n')
+		ptr[strlen(ptr) - 1] = '\0';
+ 
+ 	return ret;
+ }
+"," get_next_file(FILE *VFile, char *ptr)
+ {
+ 	char *ret;
+	size_t len;
+ 
+ 	ret = fgets(ptr, PATH_MAX, VFile);
+ 	if (!ret)
+ 		return NULL;
+ 
+	len = strlen (ptr);
+	if (len > 0 && ptr[len - 1] == '\n')
+		ptr[len - 1] = '\0';
+ 
+ 	return ret;
+ }
+","The `get_next_file` function reads a line from a given file pointer `VFile` into a buffer pointed to by `ptr`, ensuring that the line does not exceed the maximum path length defined by `PATH_MAX`. It utilizes the `fgets` function to retrieve the line, returning `NULL` if the end of the file is reached or an error occurs. If the line read ends with a newline character, it is replaced with a null terminator to properly format the string. The function ultimately returns the pointer to the buffer containing the read line or `NULL` if unsuccessful.","The provided code defines a function that reads a line from a specified file into a designated buffer, ensuring that the line does not exceed a predefined maximum length. It attempts to retrieve the line using a standard input function, returning a null value if the end of the file is reached or an error occurs. If the line ends with a newline character, it replaces that character with a null terminator to properly format the string. The function ultimately returns a pointer to the buffer containing the read line or a null value if the operation was unsuccessful.","The vulnerability in the original code arises from the lack of a check on the return value of the `strlen()` function, which could lead to an underflow when the line read by `fgets()` starts with a null character. This situation allows the code to access an out-of-bounds index, potentially leading to unintended memory access or writes. The fix introduces a check to ensure that the length of the string is greater than zero before attempting to access the last character. This prevents the out-of-bounds read and write, thereby enhancing the safety and robustness of the function.","The vulnerability in the original code stems from the absence of a check on the length of the string read from the file, which could lead to an underflow when the string begins with a null character. This oversight allows the code to access an invalid memory index, resulting in potential out-of-bounds reads or writes, which can compromise program stability and security. The fix addresses this issue by introducing a condition to verify that the string length is greater than zero before accessing its last character, thereby preventing any unsafe memory operations and enhancing the overall safety of the function.","The vulnerability was fixed by adding a check for the length of the string read into the buffer. In the updated code, after retrieving the line with `fgets()`, the length of the string is calculated using `strlen()`, and a condition is introduced to ensure that this length is greater than zero before accessing the last character. This prevents the code from attempting to access an index that could be out of bounds if the string is empty or starts with a null character. By implementing this safeguard, the code now avoids potential underflow issues and enhances its overall safety.","The vulnerability was addressed by introducing a condition to verify that the length of the string read from the file is greater than zero before attempting to access its last character. This additional check ensures that the code does not attempt to access an invalid memory index, which could occur if the string is empty or starts with a null character. By implementing this safeguard, the code prevents potential out-of-bounds reads and writes, thereby enhancing the overall safety and robustness of the function against unexpected input scenarios.","4, 4","5, 5","4,4","5,5","CWE-125, CWE-788, CWE-119, CWE-126, CWE-789, CWE-823, CWE-124, CWE-787, CWE-805, CWE-466",N,-1
+3,3,3,188035,188035,,Remote,Not required,Complete,CVE-2017-0594,https://www.cvedetails.com/cve/CVE-2017-0594/,CWE-120,Medium,Complete,Complete,,2017-05-12,9.3,"An elevation of privilege vulnerability in codecs/aacenc/SoftAACEncoder2.cpp in libstagefright in Mediaserver could enable a local malicious application to execute arbitrary code within the context of a privileged process. This issue is rated as High because it could be used to gain local access to elevated capabilities, which are not normally accessible to a third-party application. Product: Android. Versions: 4.4.4, 5.0.2, 5.1.1, 6.0, 6.0.1, 7.0, 7.1.1, 7.1.2. Android ID: A-34617444.",2019-10-02,Exec Code +Priv ,9,https://android.googlesource.com/platform/frameworks/av/+/594bf934384920618d2b6ce0bcda1f60144cb3eb,594bf934384920618d2b6ce0bcda1f60144cb3eb,"Add bounds check in SoftAACEncoder2::onQueueFilled()
+
+Original code blindly copied some header information into the
+user-supplied buffer without checking for sufficient space.
+The code does check when it gets to filling the data -- it's
+just the header copies that weren't checked.
+
+Bug: 34617444
+Test: ran POC before/after
+Change-Id: I6e80ec90616f6cd02bb8316cd2d6e309b7e4729d
+(cherry picked from commit 6231243626b8b9c57593b1f0ee417f2c4af4c0aa)
+",0,media/libstagefright/codecs/aacenc/SoftAACEncoder2.cpp,"{""filename"": ""media/libstagefright/codecs/aacenc/SoftAACEncoder2.cpp"", ""raw_url"": ""https://android.googlesource.com/platform/frameworks/av/+/594bf934384920618d2b6ce0bcda1f60144cb3eb/media/libstagefright/codecs/aacenc/SoftAACEncoder2.cpp"", ""patch"": ""@@ -510,6 +510,15 @@\n\n \n         BufferInfo *outInfo = *outQueue.begin();\n         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;\n+\n+        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {\n+            ALOGE(\""b/34617444\"");\n+            android_errorWriteLog(0x534e4554,\""34617444\"");\n+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);\n+            mSignalledError = true;\n+            return;\n+        }\n+\n         outHeader->nFilledLen = encInfo.confSize;\n         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;\n \n""}","void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
+ if (mSignalledError) {
+ return;
+ }
+
+ List<BufferInfo *> &inQueue = getPortQueue(0);
+ List<BufferInfo *> &outQueue = getPortQueue(1);
+
+ if (!mSentCodecSpecificData) {
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ if (AACENC_OK != aacEncEncode(mAACEncoder, NULL, NULL, NULL, NULL)) {
+            ALOGE(""Unable to initialize encoder for profile / sample-rate / bit-rate / channels"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+        OMX_U32 actualBitRate  = aacEncoder_GetParam(mAACEncoder, AACENC_BITRATE);
+ if (mBitRate != actualBitRate) {
+            ALOGW(""Requested bitrate %u unsupported, using %u"", mBitRate, actualBitRate);
+ }
+
+        AACENC_InfoStruct encInfo;
+ if (AACENC_OK != aacEncInfo(mAACEncoder, &encInfo)) {
+            ALOGE(""Failed to get AAC encoder info"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+ 
+         BufferInfo *outInfo = *outQueue.begin();
+         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {
+            ALOGE(""b/34617444"");
+            android_errorWriteLog(0x534e4554,""34617444"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+            return;
+        }
+
+         outHeader->nFilledLen = encInfo.confSize;
+         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+ 
+ uint8_t *out = outHeader->pBuffer + outHeader->nOffset;
+        memcpy(out, encInfo.confBuf, encInfo.confSize);
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        mSentCodecSpecificData = true;
+ }
+
+ size_t numBytesPerInputFrame =
+        mNumChannels * kNumSamplesPerFrame * sizeof(int16_t);
+
+ if (mAACProfile == OMX_AUDIO_AACObjectELD && numBytesPerInputFrame > 512) {
+        numBytesPerInputFrame = 512;
+ }
+
+ for (;;) {
+
+ while (mInputSize < numBytesPerInputFrame) {
+
+ if (mSawInputEOS || inQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *inInfo = *inQueue.begin();
+            OMX_BUFFERHEADERTYPE *inHeader = inInfo->mHeader;
+
+ const void *inData = inHeader->pBuffer + inHeader->nOffset;
+
+ size_t copy = numBytesPerInputFrame - mInputSize;
+ if (copy > inHeader->nFilledLen) {
+                copy = inHeader->nFilledLen;
+ }
+
+ if (mInputFrame == NULL) {
+                mInputFrame = new int16_t[numBytesPerInputFrame / sizeof(int16_t)];
+ }
+
+ if (mInputSize == 0) {
+                mInputTimeUs = inHeader->nTimeStamp;
+ }
+
+            memcpy((uint8_t *)mInputFrame + mInputSize, inData, copy);
+            mInputSize += copy;
+
+            inHeader->nOffset += copy;
+            inHeader->nFilledLen -= copy;
+
+            inHeader->nTimeStamp +=
+ (copy * 1000000ll / mSampleRate)
+ / (mNumChannels * sizeof(int16_t));
+
+ if (inHeader->nFilledLen == 0) {
+ if (inHeader->nFlags & OMX_BUFFERFLAG_EOS) {
+                    mSawInputEOS = true;
+
+                    memset((uint8_t *)mInputFrame + mInputSize,
+ 0,
+                           numBytesPerInputFrame - mInputSize);
+
+                    mInputSize = numBytesPerInputFrame;
+ }
+
+                inQueue.erase(inQueue.begin());
+                inInfo->mOwnedByUs = false;
+                notifyEmptyBufferDone(inHeader);
+
+                inData = NULL;
+                inHeader = NULL;
+                inInfo = NULL;
+ }
+ }
+
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *outInfo = *outQueue.begin();
+        OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+ uint8_t *outPtr = (uint8_t *)outHeader->pBuffer + outHeader->nOffset;
+ size_t outAvailable = outHeader->nAllocLen - outHeader->nOffset;
+
+        AACENC_InArgs inargs;
+        AACENC_OutArgs outargs;
+        memset(&inargs, 0, sizeof(inargs));
+        memset(&outargs, 0, sizeof(outargs));
+        inargs.numInSamples = numBytesPerInputFrame / sizeof(int16_t);
+
+ void* inBuffer[] = { (unsigned char *)mInputFrame };
+        INT   inBufferIds[] = { IN_AUDIO_DATA };
+        INT   inBufferSize[] = { (INT)numBytesPerInputFrame };
+        INT   inBufferElSize[] = { sizeof(int16_t) };
+
+        AACENC_BufDesc inBufDesc;
+        inBufDesc.numBufs           = sizeof(inBuffer) / sizeof(void*);
+        inBufDesc.bufs              = (void**)&inBuffer;
+        inBufDesc.bufferIdentifiers = inBufferIds;
+        inBufDesc.bufSizes          = inBufferSize;
+        inBufDesc.bufElSizes        = inBufferElSize;
+
+ void* outBuffer[] = { outPtr };
+        INT   outBufferIds[] = { OUT_BITSTREAM_DATA };
+        INT   outBufferSize[] = { 0 };
+        INT   outBufferElSize[] = { sizeof(UCHAR) };
+
+        AACENC_BufDesc outBufDesc;
+        outBufDesc.numBufs           = sizeof(outBuffer) / sizeof(void*);
+        outBufDesc.bufs              = (void**)&outBuffer;
+        outBufDesc.bufferIdentifiers = outBufferIds;
+        outBufDesc.bufSizes          = outBufferSize;
+        outBufDesc.bufElSizes        = outBufferElSize;
+
+        AACENC_ERROR encoderErr = AACENC_OK;
+ size_t nOutputBytes = 0;
+
+ do {
+            memset(&outargs, 0, sizeof(outargs));
+
+            outBuffer[0] = outPtr;
+            outBufferSize[0] = outAvailable - nOutputBytes;
+
+            encoderErr = aacEncEncode(mAACEncoder,
+ &inBufDesc,
+ &outBufDesc,
+ &inargs,
+ &outargs);
+
+ if (encoderErr == AACENC_OK) {
+                outPtr += outargs.numOutBytes;
+                nOutputBytes += outargs.numOutBytes;
+
+ if (outargs.numInSamples > 0) {
+ int numRemainingSamples = inargs.numInSamples - outargs.numInSamples;
+ if (numRemainingSamples > 0) {
+                        memmove(mInputFrame,
+ &mInputFrame[outargs.numInSamples],
+ sizeof(int16_t) * numRemainingSamples);
+ }
+                    inargs.numInSamples -= outargs.numInSamples;
+ }
+ }
+ } while (encoderErr == AACENC_OK && inargs.numInSamples > 0);
+
+        outHeader->nFilledLen = nOutputBytes;
+
+        outHeader->nFlags = OMX_BUFFERFLAG_ENDOFFRAME;
+
+ if (mSawInputEOS) {
+            outHeader->nFlags = OMX_BUFFERFLAG_EOS;
+ }
+
+        outHeader->nTimeStamp = mInputTimeUs;
+
+#if 0
+        ALOGI(""sending %d bytes of data (time = %lld us, flags = 0x%08lx)"",
+              nOutputBytes, mInputTimeUs, outHeader->nFlags);
+
+        hexdump(outHeader->pBuffer + outHeader->nOffset, outHeader->nFilledLen);
+#endif
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        outHeader = NULL;
+        outInfo = NULL;
+
+        mInputSize = 0;
+ }
+}
+","void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
+ if (mSignalledError) {
+ return;
+ }
+
+ List<BufferInfo *> &inQueue = getPortQueue(0);
+ List<BufferInfo *> &outQueue = getPortQueue(1);
+
+ if (!mSentCodecSpecificData) {
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ if (AACENC_OK != aacEncEncode(mAACEncoder, NULL, NULL, NULL, NULL)) {
+            ALOGE(""Unable to initialize encoder for profile / sample-rate / bit-rate / channels"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+        OMX_U32 actualBitRate  = aacEncoder_GetParam(mAACEncoder, AACENC_BITRATE);
+ if (mBitRate != actualBitRate) {
+            ALOGW(""Requested bitrate %u unsupported, using %u"", mBitRate, actualBitRate);
+ }
+
+        AACENC_InfoStruct encInfo;
+ if (AACENC_OK != aacEncInfo(mAACEncoder, &encInfo)) {
+            ALOGE(""Failed to get AAC encoder info"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+ 
+         BufferInfo *outInfo = *outQueue.begin();
+         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+         outHeader->nFilledLen = encInfo.confSize;
+         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+ 
+ uint8_t *out = outHeader->pBuffer + outHeader->nOffset;
+        memcpy(out, encInfo.confBuf, encInfo.confSize);
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        mSentCodecSpecificData = true;
+ }
+
+ size_t numBytesPerInputFrame =
+        mNumChannels * kNumSamplesPerFrame * sizeof(int16_t);
+
+ if (mAACProfile == OMX_AUDIO_AACObjectELD && numBytesPerInputFrame > 512) {
+        numBytesPerInputFrame = 512;
+ }
+
+ for (;;) {
+
+ while (mInputSize < numBytesPerInputFrame) {
+
+ if (mSawInputEOS || inQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *inInfo = *inQueue.begin();
+            OMX_BUFFERHEADERTYPE *inHeader = inInfo->mHeader;
+
+ const void *inData = inHeader->pBuffer + inHeader->nOffset;
+
+ size_t copy = numBytesPerInputFrame - mInputSize;
+ if (copy > inHeader->nFilledLen) {
+                copy = inHeader->nFilledLen;
+ }
+
+ if (mInputFrame == NULL) {
+                mInputFrame = new int16_t[numBytesPerInputFrame / sizeof(int16_t)];
+ }
+
+ if (mInputSize == 0) {
+                mInputTimeUs = inHeader->nTimeStamp;
+ }
+
+            memcpy((uint8_t *)mInputFrame + mInputSize, inData, copy);
+            mInputSize += copy;
+
+            inHeader->nOffset += copy;
+            inHeader->nFilledLen -= copy;
+
+            inHeader->nTimeStamp +=
+ (copy * 1000000ll / mSampleRate)
+ / (mNumChannels * sizeof(int16_t));
+
+ if (inHeader->nFilledLen == 0) {
+ if (inHeader->nFlags & OMX_BUFFERFLAG_EOS) {
+                    mSawInputEOS = true;
+
+                    memset((uint8_t *)mInputFrame + mInputSize,
+ 0,
+                           numBytesPerInputFrame - mInputSize);
+
+                    mInputSize = numBytesPerInputFrame;
+ }
+
+                inQueue.erase(inQueue.begin());
+                inInfo->mOwnedByUs = false;
+                notifyEmptyBufferDone(inHeader);
+
+                inData = NULL;
+                inHeader = NULL;
+                inInfo = NULL;
+ }
+ }
+
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *outInfo = *outQueue.begin();
+        OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+ uint8_t *outPtr = (uint8_t *)outHeader->pBuffer + outHeader->nOffset;
+ size_t outAvailable = outHeader->nAllocLen - outHeader->nOffset;
+
+        AACENC_InArgs inargs;
+        AACENC_OutArgs outargs;
+        memset(&inargs, 0, sizeof(inargs));
+        memset(&outargs, 0, sizeof(outargs));
+        inargs.numInSamples = numBytesPerInputFrame / sizeof(int16_t);
+
+ void* inBuffer[] = { (unsigned char *)mInputFrame };
+        INT   inBufferIds[] = { IN_AUDIO_DATA };
+        INT   inBufferSize[] = { (INT)numBytesPerInputFrame };
+        INT   inBufferElSize[] = { sizeof(int16_t) };
+
+        AACENC_BufDesc inBufDesc;
+        inBufDesc.numBufs           = sizeof(inBuffer) / sizeof(void*);
+        inBufDesc.bufs              = (void**)&inBuffer;
+        inBufDesc.bufferIdentifiers = inBufferIds;
+        inBufDesc.bufSizes          = inBufferSize;
+        inBufDesc.bufElSizes        = inBufferElSize;
+
+ void* outBuffer[] = { outPtr };
+        INT   outBufferIds[] = { OUT_BITSTREAM_DATA };
+        INT   outBufferSize[] = { 0 };
+        INT   outBufferElSize[] = { sizeof(UCHAR) };
+
+        AACENC_BufDesc outBufDesc;
+        outBufDesc.numBufs           = sizeof(outBuffer) / sizeof(void*);
+        outBufDesc.bufs              = (void**)&outBuffer;
+        outBufDesc.bufferIdentifiers = outBufferIds;
+        outBufDesc.bufSizes          = outBufferSize;
+        outBufDesc.bufElSizes        = outBufferElSize;
+
+        AACENC_ERROR encoderErr = AACENC_OK;
+ size_t nOutputBytes = 0;
+
+ do {
+            memset(&outargs, 0, sizeof(outargs));
+
+            outBuffer[0] = outPtr;
+            outBufferSize[0] = outAvailable - nOutputBytes;
+
+            encoderErr = aacEncEncode(mAACEncoder,
+ &inBufDesc,
+ &outBufDesc,
+ &inargs,
+ &outargs);
+
+ if (encoderErr == AACENC_OK) {
+                outPtr += outargs.numOutBytes;
+                nOutputBytes += outargs.numOutBytes;
+
+ if (outargs.numInSamples > 0) {
+ int numRemainingSamples = inargs.numInSamples - outargs.numInSamples;
+ if (numRemainingSamples > 0) {
+                        memmove(mInputFrame,
+ &mInputFrame[outargs.numInSamples],
+ sizeof(int16_t) * numRemainingSamples);
+ }
+                    inargs.numInSamples -= outargs.numInSamples;
+ }
+ }
+ } while (encoderErr == AACENC_OK && inargs.numInSamples > 0);
+
+        outHeader->nFilledLen = nOutputBytes;
+
+        outHeader->nFlags = OMX_BUFFERFLAG_ENDOFFRAME;
+
+ if (mSawInputEOS) {
+            outHeader->nFlags = OMX_BUFFERFLAG_EOS;
+ }
+
+        outHeader->nTimeStamp = mInputTimeUs;
+
+#if 0
+        ALOGI(""sending %d bytes of data (time = %lld us, flags = 0x%08lx)"",
+              nOutputBytes, mInputTimeUs, outHeader->nFlags);
+
+        hexdump(outHeader->pBuffer + outHeader->nOffset, outHeader->nFilledLen);
+#endif
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        outHeader = NULL;
+        outInfo = NULL;
+
+        mInputSize = 0;
+ }
+}
+",C,"
+        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {
+            ALOGE(""b/34617444"");
+            android_errorWriteLog(0x534e4554,""34617444"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+            return;
+        }
+
+",,,"@@ -510,6 +510,15 @@
+
+ 
+         BufferInfo *outInfo = *outQueue.begin();
+         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
++
++        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {
++            ALOGE(""b/34617444"");
++            android_errorWriteLog(0x534e4554,""34617444"");
++            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
++            mSignalledError = true;
++            return;
++        }
++
+         outHeader->nFilledLen = encInfo.confSize;
+         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+ 
+",Android,https://android.googlesource.com/platform/frameworks/av/+/594bf934384920618d2b6ce0bcda1f60144cb3eb/,https://android.googlesource.com/platform/frameworks/av/+/594bf934384920618d2b6ce0bcda1f60144cb3eb%5E/,1,"void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
+ if (mSignalledError) {
+ return;
+ }
+
+ List<BufferInfo *> &inQueue = getPortQueue(0);
+ List<BufferInfo *> &outQueue = getPortQueue(1);
+
+ if (!mSentCodecSpecificData) {
+ // The very first thing we want to output is the codec specific
+ // data. It does not require any input data but we will need an
+ // output buffer to store it in.
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ if (AACENC_OK != aacEncEncode(mAACEncoder, NULL, NULL, NULL, NULL)) {
+            ALOGE(""Unable to initialize encoder for profile / sample-rate / bit-rate / channels"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+        OMX_U32 actualBitRate  = aacEncoder_GetParam(mAACEncoder, AACENC_BITRATE);
+ if (mBitRate != actualBitRate) {
+            ALOGW(""Requested bitrate %u unsupported, using %u"", mBitRate, actualBitRate);
+ }
+
+        AACENC_InfoStruct encInfo;
+ if (AACENC_OK != aacEncInfo(mAACEncoder, &encInfo)) {
+            ALOGE(""Failed to get AAC encoder info"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+ 
+         BufferInfo *outInfo = *outQueue.begin();
+         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {
+//fix_flaw_line_below:
+//            ALOGE(""b/34617444"");
+//fix_flaw_line_below:
+//            android_errorWriteLog(0x534e4554,""34617444"");
+//fix_flaw_line_below:
+//            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+//fix_flaw_line_below:
+//            mSignalledError = true;
+//fix_flaw_line_below:
+//            return;
+//fix_flaw_line_below:
+//        }
+//fix_flaw_line_below:
+//
+         outHeader->nFilledLen = encInfo.confSize;
+         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+ 
+ uint8_t *out = outHeader->pBuffer + outHeader->nOffset;
+        memcpy(out, encInfo.confBuf, encInfo.confSize);
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        mSentCodecSpecificData = true;
+ }
+
+ size_t numBytesPerInputFrame =
+        mNumChannels * kNumSamplesPerFrame * sizeof(int16_t);
+
+ // Limit input size so we only get one ELD frame
+ if (mAACProfile == OMX_AUDIO_AACObjectELD && numBytesPerInputFrame > 512) {
+        numBytesPerInputFrame = 512;
+ }
+
+ for (;;) {
+ // We do the following until we run out of buffers.
+
+ while (mInputSize < numBytesPerInputFrame) {
+ // As long as there's still input data to be read we
+ // will drain ""kNumSamplesPerFrame * mNumChannels"" samples
+ // into the ""mInputFrame"" buffer and then encode those
+ // as a unit into an output buffer.
+
+ if (mSawInputEOS || inQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *inInfo = *inQueue.begin();
+            OMX_BUFFERHEADERTYPE *inHeader = inInfo->mHeader;
+
+ const void *inData = inHeader->pBuffer + inHeader->nOffset;
+
+ size_t copy = numBytesPerInputFrame - mInputSize;
+ if (copy > inHeader->nFilledLen) {
+                copy = inHeader->nFilledLen;
+ }
+
+ if (mInputFrame == NULL) {
+                mInputFrame = new int16_t[numBytesPerInputFrame / sizeof(int16_t)];
+ }
+
+ if (mInputSize == 0) {
+                mInputTimeUs = inHeader->nTimeStamp;
+ }
+
+            memcpy((uint8_t *)mInputFrame + mInputSize, inData, copy);
+            mInputSize += copy;
+
+            inHeader->nOffset += copy;
+            inHeader->nFilledLen -= copy;
+
+ // ""Time"" on the input buffer has in effect advanced by the
+ // number of audio frames we just advanced nOffset by.
+            inHeader->nTimeStamp +=
+ (copy * 1000000ll / mSampleRate)
+ / (mNumChannels * sizeof(int16_t));
+
+ if (inHeader->nFilledLen == 0) {
+ if (inHeader->nFlags & OMX_BUFFERFLAG_EOS) {
+                    mSawInputEOS = true;
+
+ // Pad any remaining data with zeroes.
+                    memset((uint8_t *)mInputFrame + mInputSize,
+ 0,
+                           numBytesPerInputFrame - mInputSize);
+
+                    mInputSize = numBytesPerInputFrame;
+ }
+
+                inQueue.erase(inQueue.begin());
+                inInfo->mOwnedByUs = false;
+                notifyEmptyBufferDone(inHeader);
+
+                inData = NULL;
+                inHeader = NULL;
+                inInfo = NULL;
+ }
+ }
+
+ // At this  point we have all the input data necessary to encode
+ // a single frame, all we need is an output buffer to store the result
+ // in.
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *outInfo = *outQueue.begin();
+        OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+ uint8_t *outPtr = (uint8_t *)outHeader->pBuffer + outHeader->nOffset;
+ size_t outAvailable = outHeader->nAllocLen - outHeader->nOffset;
+
+        AACENC_InArgs inargs;
+        AACENC_OutArgs outargs;
+        memset(&inargs, 0, sizeof(inargs));
+        memset(&outargs, 0, sizeof(outargs));
+        inargs.numInSamples = numBytesPerInputFrame / sizeof(int16_t);
+
+ void* inBuffer[] = { (unsigned char *)mInputFrame };
+        INT   inBufferIds[] = { IN_AUDIO_DATA };
+        INT   inBufferSize[] = { (INT)numBytesPerInputFrame };
+        INT   inBufferElSize[] = { sizeof(int16_t) };
+
+        AACENC_BufDesc inBufDesc;
+        inBufDesc.numBufs           = sizeof(inBuffer) / sizeof(void*);
+        inBufDesc.bufs              = (void**)&inBuffer;
+        inBufDesc.bufferIdentifiers = inBufferIds;
+        inBufDesc.bufSizes          = inBufferSize;
+        inBufDesc.bufElSizes        = inBufferElSize;
+
+ void* outBuffer[] = { outPtr };
+        INT   outBufferIds[] = { OUT_BITSTREAM_DATA };
+        INT   outBufferSize[] = { 0 };
+        INT   outBufferElSize[] = { sizeof(UCHAR) };
+
+        AACENC_BufDesc outBufDesc;
+        outBufDesc.numBufs           = sizeof(outBuffer) / sizeof(void*);
+        outBufDesc.bufs              = (void**)&outBuffer;
+        outBufDesc.bufferIdentifiers = outBufferIds;
+        outBufDesc.bufSizes          = outBufferSize;
+        outBufDesc.bufElSizes        = outBufferElSize;
+
+ // Encode the mInputFrame, which is treated as a modulo buffer
+        AACENC_ERROR encoderErr = AACENC_OK;
+ size_t nOutputBytes = 0;
+
+ do {
+            memset(&outargs, 0, sizeof(outargs));
+
+            outBuffer[0] = outPtr;
+            outBufferSize[0] = outAvailable - nOutputBytes;
+
+            encoderErr = aacEncEncode(mAACEncoder,
+ &inBufDesc,
+ &outBufDesc,
+ &inargs,
+ &outargs);
+
+ if (encoderErr == AACENC_OK) {
+                outPtr += outargs.numOutBytes;
+                nOutputBytes += outargs.numOutBytes;
+
+ if (outargs.numInSamples > 0) {
+ int numRemainingSamples = inargs.numInSamples - outargs.numInSamples;
+ if (numRemainingSamples > 0) {
+                        memmove(mInputFrame,
+ &mInputFrame[outargs.numInSamples],
+ sizeof(int16_t) * numRemainingSamples);
+ }
+                    inargs.numInSamples -= outargs.numInSamples;
+ }
+ }
+ } while (encoderErr == AACENC_OK && inargs.numInSamples > 0);
+
+        outHeader->nFilledLen = nOutputBytes;
+
+        outHeader->nFlags = OMX_BUFFERFLAG_ENDOFFRAME;
+
+ if (mSawInputEOS) {
+ // We also tag this output buffer with EOS if it corresponds
+ // to the final input buffer.
+            outHeader->nFlags = OMX_BUFFERFLAG_EOS;
+ }
+
+        outHeader->nTimeStamp = mInputTimeUs;
+
+#if 0
+        ALOGI(""sending %d bytes of data (time = %lld us, flags = 0x%08lx)"",
+              nOutputBytes, mInputTimeUs, outHeader->nFlags);
+
+        hexdump(outHeader->pBuffer + outHeader->nOffset, outHeader->nFilledLen);
+#endif
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        outHeader = NULL;
+        outInfo = NULL;
+
+        mInputSize = 0;
+ }
+}
+",188035,"void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
+ if (mSignalledError) {
+ return;
+ }
+
+ List<BufferInfo *> &inQueue = getPortQueue(0);
+ List<BufferInfo *> &outQueue = getPortQueue(1);
+
+ if (!mSentCodecSpecificData) {
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ if (AACENC_OK != aacEncEncode(mAACEncoder, NULL, NULL, NULL, NULL)) {
+            ALOGE(""Unable to initialize encoder for profile / sample-rate / bit-rate / channels"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+        OMX_U32 actualBitRate  = aacEncoder_GetParam(mAACEncoder, AACENC_BITRATE);
+ if (mBitRate != actualBitRate) {
+            ALOGW(""Requested bitrate %u unsupported, using %u"", mBitRate, actualBitRate);
+ }
+
+        AACENC_InfoStruct encInfo;
+ if (AACENC_OK != aacEncInfo(mAACEncoder, &encInfo)) {
+            ALOGE(""Failed to get AAC encoder info"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+ 
+         BufferInfo *outInfo = *outQueue.begin();
+         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+         outHeader->nFilledLen = encInfo.confSize;
+         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+ 
+ uint8_t *out = outHeader->pBuffer + outHeader->nOffset;
+        memcpy(out, encInfo.confBuf, encInfo.confSize);
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        mSentCodecSpecificData = true;
+ }
+
+ size_t numBytesPerInputFrame =
+        mNumChannels * kNumSamplesPerFrame * sizeof(int16_t);
+
+ if (mAACProfile == OMX_AUDIO_AACObjectELD && numBytesPerInputFrame > 512) {
+        numBytesPerInputFrame = 512;
+ }
+
+ for (;;) {
+
+ while (mInputSize < numBytesPerInputFrame) {
+
+ if (mSawInputEOS || inQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *inInfo = *inQueue.begin();
+            OMX_BUFFERHEADERTYPE *inHeader = inInfo->mHeader;
+
+ const void *inData = inHeader->pBuffer + inHeader->nOffset;
+
+ size_t copy = numBytesPerInputFrame - mInputSize;
+ if (copy > inHeader->nFilledLen) {
+                copy = inHeader->nFilledLen;
+ }
+
+ if (mInputFrame == NULL) {
+                mInputFrame = new int16_t[numBytesPerInputFrame / sizeof(int16_t)];
+ }
+
+ if (mInputSize == 0) {
+                mInputTimeUs = inHeader->nTimeStamp;
+ }
+
+            memcpy((uint8_t *)mInputFrame + mInputSize, inData, copy);
+            mInputSize += copy;
+
+            inHeader->nOffset += copy;
+            inHeader->nFilledLen -= copy;
+
+            inHeader->nTimeStamp +=
+ (copy * 1000000ll / mSampleRate)
+ / (mNumChannels * sizeof(int16_t));
+
+ if (inHeader->nFilledLen == 0) {
+ if (inHeader->nFlags & OMX_BUFFERFLAG_EOS) {
+                    mSawInputEOS = true;
+
+                    memset((uint8_t *)mInputFrame + mInputSize,
+ 0,
+                           numBytesPerInputFrame - mInputSize);
+
+                    mInputSize = numBytesPerInputFrame;
+ }
+
+                inQueue.erase(inQueue.begin());
+                inInfo->mOwnedByUs = false;
+                notifyEmptyBufferDone(inHeader);
+
+                inData = NULL;
+                inHeader = NULL;
+                inInfo = NULL;
+ }
+ }
+
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *outInfo = *outQueue.begin();
+        OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+ uint8_t *outPtr = (uint8_t *)outHeader->pBuffer + outHeader->nOffset;
+ size_t outAvailable = outHeader->nAllocLen - outHeader->nOffset;
+
+        AACENC_InArgs inargs;
+        AACENC_OutArgs outargs;
+        memset(&inargs, 0, sizeof(inargs));
+        memset(&outargs, 0, sizeof(outargs));
+        inargs.numInSamples = numBytesPerInputFrame / sizeof(int16_t);
+
+ void* inBuffer[] = { (unsigned char *)mInputFrame };
+        INT   inBufferIds[] = { IN_AUDIO_DATA };
+        INT   inBufferSize[] = { (INT)numBytesPerInputFrame };
+        INT   inBufferElSize[] = { sizeof(int16_t) };
+
+        AACENC_BufDesc inBufDesc;
+        inBufDesc.numBufs           = sizeof(inBuffer) / sizeof(void*);
+        inBufDesc.bufs              = (void**)&inBuffer;
+        inBufDesc.bufferIdentifiers = inBufferIds;
+        inBufDesc.bufSizes          = inBufferSize;
+        inBufDesc.bufElSizes        = inBufferElSize;
+
+ void* outBuffer[] = { outPtr };
+        INT   outBufferIds[] = { OUT_BITSTREAM_DATA };
+        INT   outBufferSize[] = { 0 };
+        INT   outBufferElSize[] = { sizeof(UCHAR) };
+
+        AACENC_BufDesc outBufDesc;
+        outBufDesc.numBufs           = sizeof(outBuffer) / sizeof(void*);
+        outBufDesc.bufs              = (void**)&outBuffer;
+        outBufDesc.bufferIdentifiers = outBufferIds;
+        outBufDesc.bufSizes          = outBufferSize;
+        outBufDesc.bufElSizes        = outBufferElSize;
+
+        AACENC_ERROR encoderErr = AACENC_OK;
+ size_t nOutputBytes = 0;
+
+ do {
+            memset(&outargs, 0, sizeof(outargs));
+
+            outBuffer[0] = outPtr;
+            outBufferSize[0] = outAvailable - nOutputBytes;
+
+            encoderErr = aacEncEncode(mAACEncoder,
+ &inBufDesc,
+ &outBufDesc,
+ &inargs,
+ &outargs);
+
+ if (encoderErr == AACENC_OK) {
+                outPtr += outargs.numOutBytes;
+                nOutputBytes += outargs.numOutBytes;
+
+ if (outargs.numInSamples > 0) {
+ int numRemainingSamples = inargs.numInSamples - outargs.numInSamples;
+ if (numRemainingSamples > 0) {
+                        memmove(mInputFrame,
+ &mInputFrame[outargs.numInSamples],
+ sizeof(int16_t) * numRemainingSamples);
+ }
+                    inargs.numInSamples -= outargs.numInSamples;
+ }
+ }
+ } while (encoderErr == AACENC_OK && inargs.numInSamples > 0);
+
+        outHeader->nFilledLen = nOutputBytes;
+
+        outHeader->nFlags = OMX_BUFFERFLAG_ENDOFFRAME;
+
+ if (mSawInputEOS) {
+            outHeader->nFlags = OMX_BUFFERFLAG_EOS;
+ }
+
+        outHeader->nTimeStamp = mInputTimeUs;
+
+#if 0
+        ALOGI(""sending %d bytes of data (time = %lld us, flags = 0x%08lx)"",
+              nOutputBytes, mInputTimeUs, outHeader->nFlags);
+
+        hexdump(outHeader->pBuffer + outHeader->nOffset, outHeader->nFilledLen);
+#endif
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        outHeader = NULL;
+        outInfo = NULL;
+
+        mInputSize = 0;
+ }
+}
+","void SoftAACEncoder2::onQueueFilled(OMX_U32 /* portIndex */) {
+ if (mSignalledError) {
+ return;
+ }
+
+ List<BufferInfo *> &inQueue = getPortQueue(0);
+ List<BufferInfo *> &outQueue = getPortQueue(1);
+
+ if (!mSentCodecSpecificData) {
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ if (AACENC_OK != aacEncEncode(mAACEncoder, NULL, NULL, NULL, NULL)) {
+            ALOGE(""Unable to initialize encoder for profile / sample-rate / bit-rate / channels"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+        OMX_U32 actualBitRate  = aacEncoder_GetParam(mAACEncoder, AACENC_BITRATE);
+ if (mBitRate != actualBitRate) {
+            ALOGW(""Requested bitrate %u unsupported, using %u"", mBitRate, actualBitRate);
+ }
+
+        AACENC_InfoStruct encInfo;
+ if (AACENC_OK != aacEncInfo(mAACEncoder, &encInfo)) {
+            ALOGE(""Failed to get AAC encoder info"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+ return;
+ }
+
+ 
+         BufferInfo *outInfo = *outQueue.begin();
+         OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+        if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen) {
+            ALOGE(""b/34617444"");
+            android_errorWriteLog(0x534e4554,""34617444"");
+            notify(OMX_EventError, OMX_ErrorUndefined, 0, NULL);
+            mSignalledError = true;
+            return;
+        }
+
+         outHeader->nFilledLen = encInfo.confSize;
+         outHeader->nFlags = OMX_BUFFERFLAG_CODECCONFIG;
+ 
+ uint8_t *out = outHeader->pBuffer + outHeader->nOffset;
+        memcpy(out, encInfo.confBuf, encInfo.confSize);
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        mSentCodecSpecificData = true;
+ }
+
+ size_t numBytesPerInputFrame =
+        mNumChannels * kNumSamplesPerFrame * sizeof(int16_t);
+
+ if (mAACProfile == OMX_AUDIO_AACObjectELD && numBytesPerInputFrame > 512) {
+        numBytesPerInputFrame = 512;
+ }
+
+ for (;;) {
+
+ while (mInputSize < numBytesPerInputFrame) {
+
+ if (mSawInputEOS || inQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *inInfo = *inQueue.begin();
+            OMX_BUFFERHEADERTYPE *inHeader = inInfo->mHeader;
+
+ const void *inData = inHeader->pBuffer + inHeader->nOffset;
+
+ size_t copy = numBytesPerInputFrame - mInputSize;
+ if (copy > inHeader->nFilledLen) {
+                copy = inHeader->nFilledLen;
+ }
+
+ if (mInputFrame == NULL) {
+                mInputFrame = new int16_t[numBytesPerInputFrame / sizeof(int16_t)];
+ }
+
+ if (mInputSize == 0) {
+                mInputTimeUs = inHeader->nTimeStamp;
+ }
+
+            memcpy((uint8_t *)mInputFrame + mInputSize, inData, copy);
+            mInputSize += copy;
+
+            inHeader->nOffset += copy;
+            inHeader->nFilledLen -= copy;
+
+            inHeader->nTimeStamp +=
+ (copy * 1000000ll / mSampleRate)
+ / (mNumChannels * sizeof(int16_t));
+
+ if (inHeader->nFilledLen == 0) {
+ if (inHeader->nFlags & OMX_BUFFERFLAG_EOS) {
+                    mSawInputEOS = true;
+
+                    memset((uint8_t *)mInputFrame + mInputSize,
+ 0,
+                           numBytesPerInputFrame - mInputSize);
+
+                    mInputSize = numBytesPerInputFrame;
+ }
+
+                inQueue.erase(inQueue.begin());
+                inInfo->mOwnedByUs = false;
+                notifyEmptyBufferDone(inHeader);
+
+                inData = NULL;
+                inHeader = NULL;
+                inInfo = NULL;
+ }
+ }
+
+
+ if (outQueue.empty()) {
+ return;
+ }
+
+ BufferInfo *outInfo = *outQueue.begin();
+        OMX_BUFFERHEADERTYPE *outHeader = outInfo->mHeader;
+
+ uint8_t *outPtr = (uint8_t *)outHeader->pBuffer + outHeader->nOffset;
+ size_t outAvailable = outHeader->nAllocLen - outHeader->nOffset;
+
+        AACENC_InArgs inargs;
+        AACENC_OutArgs outargs;
+        memset(&inargs, 0, sizeof(inargs));
+        memset(&outargs, 0, sizeof(outargs));
+        inargs.numInSamples = numBytesPerInputFrame / sizeof(int16_t);
+
+ void* inBuffer[] = { (unsigned char *)mInputFrame };
+        INT   inBufferIds[] = { IN_AUDIO_DATA };
+        INT   inBufferSize[] = { (INT)numBytesPerInputFrame };
+        INT   inBufferElSize[] = { sizeof(int16_t) };
+
+        AACENC_BufDesc inBufDesc;
+        inBufDesc.numBufs           = sizeof(inBuffer) / sizeof(void*);
+        inBufDesc.bufs              = (void**)&inBuffer;
+        inBufDesc.bufferIdentifiers = inBufferIds;
+        inBufDesc.bufSizes          = inBufferSize;
+        inBufDesc.bufElSizes        = inBufferElSize;
+
+ void* outBuffer[] = { outPtr };
+        INT   outBufferIds[] = { OUT_BITSTREAM_DATA };
+        INT   outBufferSize[] = { 0 };
+        INT   outBufferElSize[] = { sizeof(UCHAR) };
+
+        AACENC_BufDesc outBufDesc;
+        outBufDesc.numBufs           = sizeof(outBuffer) / sizeof(void*);
+        outBufDesc.bufs              = (void**)&outBuffer;
+        outBufDesc.bufferIdentifiers = outBufferIds;
+        outBufDesc.bufSizes          = outBufferSize;
+        outBufDesc.bufElSizes        = outBufferElSize;
+
+        AACENC_ERROR encoderErr = AACENC_OK;
+ size_t nOutputBytes = 0;
+
+ do {
+            memset(&outargs, 0, sizeof(outargs));
+
+            outBuffer[0] = outPtr;
+            outBufferSize[0] = outAvailable - nOutputBytes;
+
+            encoderErr = aacEncEncode(mAACEncoder,
+ &inBufDesc,
+ &outBufDesc,
+ &inargs,
+ &outargs);
+
+ if (encoderErr == AACENC_OK) {
+                outPtr += outargs.numOutBytes;
+                nOutputBytes += outargs.numOutBytes;
+
+ if (outargs.numInSamples > 0) {
+ int numRemainingSamples = inargs.numInSamples - outargs.numInSamples;
+ if (numRemainingSamples > 0) {
+                        memmove(mInputFrame,
+ &mInputFrame[outargs.numInSamples],
+ sizeof(int16_t) * numRemainingSamples);
+ }
+                    inargs.numInSamples -= outargs.numInSamples;
+ }
+ }
+ } while (encoderErr == AACENC_OK && inargs.numInSamples > 0);
+
+        outHeader->nFilledLen = nOutputBytes;
+
+        outHeader->nFlags = OMX_BUFFERFLAG_ENDOFFRAME;
+
+ if (mSawInputEOS) {
+            outHeader->nFlags = OMX_BUFFERFLAG_EOS;
+ }
+
+        outHeader->nTimeStamp = mInputTimeUs;
+
+#if 0
+        ALOGI(""sending %d bytes of data (time = %lld us, flags = 0x%08lx)"",
+              nOutputBytes, mInputTimeUs, outHeader->nFlags);
+
+        hexdump(outHeader->pBuffer + outHeader->nOffset, outHeader->nFilledLen);
+#endif
+
+        outQueue.erase(outQueue.begin());
+        outInfo->mOwnedByUs = false;
+        notifyFillBufferDone(outHeader);
+
+        outHeader = NULL;
+        outInfo = NULL;
+
+        mInputSize = 0;
+ }
+}
+","The `onQueueFilled` function in the `SoftAACEncoder2` class processes audio data for AAC encoding. It first checks for errors and initializes the encoder if codec-specific data hasn't been sent. The function then reads input audio frames from an input queue, ensuring the correct number of samples is gathered. It handles end-of-stream conditions and prepares the output buffer for encoded data. The AAC encoder is invoked to process the input data, and the resulting encoded bytes are written to the output buffer. Finally, it notifies the completion of buffer processing, managing memory and state throughout the operation.","The provided code implements an audio encoding process that handles input audio data, encodes it into a specific format, and manages the associated buffers. It checks for errors and initializes the encoder if necessary, then reads audio frames from an input queue while ensuring the correct amount of data is collected. The encoding function processes the gathered audio data, producing encoded output that is stored in an output buffer. The code also manages end-of-stream conditions and notifies the completion of buffer processing, ensuring efficient memory usage and state management throughout the encoding operation.","The vulnerability in the original code stemmed from a lack of bounds checking when copying header information into a user-supplied buffer, which could lead to buffer overflows if the buffer did not have sufficient space. Specifically, the code did not verify whether the sum of the current offset and the size of the configuration data exceeded the allocated length of the output buffer. The fix introduced a bounds check that ensures the output buffer has enough space before copying the header information, thereby preventing potential buffer overflow vulnerabilities and ensuring safer memory operations.","The vulnerability in the original code arose from the absence of checks to ensure that there was enough space in a user-supplied buffer before copying header information into it. This oversight could lead to buffer overflows, potentially allowing for memory corruption or exploitation. The fix implemented a bounds check that verifies the available space in the buffer before performing any copy operations. This additional validation ensures that the header information is only copied when there is sufficient space, thereby mitigating the risk of buffer overflow and enhancing the overall safety of memory handling in the code.","The vulnerability was fixed by adding a bounds check before copying the configuration data into the output buffer. Specifically, the code now verifies that the sum of the output header's offset and the size of the configuration data does not exceed the allocated length of the buffer. This check is implemented with the condition `if (outHeader->nOffset + encInfo.confSize > outHeader->nAllocLen)`, which prevents the copying operation if there isn't enough space. By ensuring that the buffer can accommodate the data, the fix effectively mitigates the risk of buffer overflow and enhances memory safety.","The vulnerability was addressed by introducing a safety check to ensure that there is sufficient space in the user-supplied buffer before copying any header information into it. This fix involves verifying that the combined size of the current offset and the data to be copied does not exceed the total allocated buffer size. If the check fails, the code prevents the copy operation from occurring, thereby eliminating the risk of buffer overflow. This enhancement ensures that memory operations are conducted safely, protecting against potential corruption or exploitation due to insufficient buffer space.","5,5","5, 5","5,4","5,4","CWE-119, CWE-120, CWE-131, CWE-788, CWE-787, CWE-122, CWE-125, CWE-130, CWE-805, CWE-129",N,-1

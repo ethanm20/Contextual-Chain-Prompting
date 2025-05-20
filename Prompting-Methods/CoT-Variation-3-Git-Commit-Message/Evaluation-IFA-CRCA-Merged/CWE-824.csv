@@ -1,0 +1,1497 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,182308,182308,,Remote,Not required,Partial,CVE-2018-14356,https://www.cvedetails.com/cve/CVE-2018-14356/,CWE-824,Low,Partial,Partial,,2018-07-17,7.5,An issue was discovered in Mutt before 1.10.1 and NeoMutt before 2018-07-16. pop.c mishandles a zero-length UID.,2019-10-02,,4,https://github.com/neomutt/neomutt/commit/93b8ac558752d09e1c56d4f1bc82631316fa9c82,93b8ac558752d09e1c56d4f1bc82631316fa9c82,Ensure UID in fetch_uidl,0,pop.c,"{""sha"": ""c52585abe7d08ffcf04e5726599e0c67207b2d7d"", ""filename"": ""pop.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/neomutt/neomutt/blob/93b8ac558752d09e1c56d4f1bc82631316fa9c82/pop.c"", ""raw_url"": ""https://github.com/neomutt/neomutt/raw/93b8ac558752d09e1c56d4f1bc82631316fa9c82/pop.c"", ""contents_url"": ""https://api.github.com/repos/neomutt/neomutt/contents/pop.c?ref=93b8ac558752d09e1c56d4f1bc82631316fa9c82"", ""patch"": ""@@ -202,6 +202,10 @@ static int fetch_uidl(char *line, void *data)\n     endp++;\n   memmove(line, endp, strlen(endp) + 1);\n \n+  /* uid must be at least be 1 byte */\n+  if (strlen(line) == 0)\n+    return -1;\n+\n   for (i = 0; i < ctx->msgcount; i++)\n     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)\n       break;""}","static int fetch_uidl(char *line, void *data)
+{
+  int i, index;
+  struct Context *ctx = (struct Context *) data;
+  struct PopData *pop_data = (struct PopData *) ctx->data;
+  char *endp = NULL;
+
+  errno = 0;
+  index = strtol(line, &endp, 10);
+  if (errno)
+    return -1;
+  while (*endp == ' ')
+     endp++;
+   memmove(line, endp, strlen(endp) + 1);
+ 
+  /* uid must be at least be 1 byte */
+  if (strlen(line) == 0)
+    return -1;
+
+   for (i = 0; i < ctx->msgcount; i++)
+     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)
+       break;
+
+  if (i == ctx->msgcount)
+  {
+    mutt_debug(1, ""new header %d %s\n"", index, line);
+
+    if (i >= ctx->hdrmax)
+      mx_alloc_memory(ctx);
+
+    ctx->msgcount++;
+    ctx->hdrs[i] = mutt_header_new();
+    ctx->hdrs[i]->data = mutt_str_strdup(line);
+  }
+  else if (ctx->hdrs[i]->index != index - 1)
+    pop_data->clear_cache = true;
+
+  ctx->hdrs[i]->refno = index;
+  ctx->hdrs[i]->index = index - 1;
+
+  return 0;
+}
+","static int fetch_uidl(char *line, void *data)
+{
+  int i, index;
+  struct Context *ctx = (struct Context *) data;
+  struct PopData *pop_data = (struct PopData *) ctx->data;
+  char *endp = NULL;
+
+  errno = 0;
+  index = strtol(line, &endp, 10);
+  if (errno)
+    return -1;
+  while (*endp == ' ')
+     endp++;
+   memmove(line, endp, strlen(endp) + 1);
+ 
+   for (i = 0; i < ctx->msgcount; i++)
+     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)
+       break;
+
+  if (i == ctx->msgcount)
+  {
+    mutt_debug(1, ""new header %d %s\n"", index, line);
+
+    if (i >= ctx->hdrmax)
+      mx_alloc_memory(ctx);
+
+    ctx->msgcount++;
+    ctx->hdrs[i] = mutt_header_new();
+    ctx->hdrs[i]->data = mutt_str_strdup(line);
+  }
+  else if (ctx->hdrs[i]->index != index - 1)
+    pop_data->clear_cache = true;
+
+  ctx->hdrs[i]->refno = index;
+  ctx->hdrs[i]->index = index - 1;
+
+  return 0;
+}
+",C,"  /* uid must be at least be 1 byte */
+  if (strlen(line) == 0)
+    return -1;
+
+",,,"@@ -202,6 +202,10 @@ static int fetch_uidl(char *line, void *data)
+     endp++;
+   memmove(line, endp, strlen(endp) + 1);
+ 
++  /* uid must be at least be 1 byte */
++  if (strlen(line) == 0)
++    return -1;
++
+   for (i = 0; i < ctx->msgcount; i++)
+     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)
+       break;",neomutt,93b8ac558752d09e1c56d4f1bc82631316fa9c82,e27b65b3bf8defa34db58919496056caf3850cd4,1,"static int fetch_uidl(char *line, void *data)
+{
+  int i, index;
+  struct Context *ctx = (struct Context *) data;
+  struct PopData *pop_data = (struct PopData *) ctx->data;
+  char *endp = NULL;
+
+  errno = 0;
+  index = strtol(line, &endp, 10);
+  if (errno)
+    return -1;
+  while (*endp == ' ')
+     endp++;
+   memmove(line, endp, strlen(endp) + 1);
+ 
+//fix_flaw_line_below:
+//  /* uid must be at least be 1 byte */
+//fix_flaw_line_below:
+//  if (strlen(line) == 0)
+//fix_flaw_line_below:
+//    return -1;
+//fix_flaw_line_below:
+//
+   for (i = 0; i < ctx->msgcount; i++)
+     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)
+       break;
+
+  if (i == ctx->msgcount)
+  {
+    mutt_debug(1, ""new header %d %s\n"", index, line);
+
+    if (i >= ctx->hdrmax)
+      mx_alloc_memory(ctx);
+
+    ctx->msgcount++;
+    ctx->hdrs[i] = mutt_header_new();
+    ctx->hdrs[i]->data = mutt_str_strdup(line);
+  }
+  else if (ctx->hdrs[i]->index != index - 1)
+    pop_data->clear_cache = true;
+
+  ctx->hdrs[i]->refno = index;
+  ctx->hdrs[i]->index = index - 1;
+
+  return 0;
+}
+",182308,"static int fetch_uidl(char *line, void *data)
+{
+  int i, index;
+  struct Context *ctx = (struct Context *) data;
+  struct PopData *pop_data = (struct PopData *) ctx->data;
+  char *endp = NULL;
+
+  errno = 0;
+  index = strtol(line, &endp, 10);
+  if (errno)
+    return -1;
+  while (*endp == ' ')
+     endp++;
+   memmove(line, endp, strlen(endp) + 1);
+ 
+   for (i = 0; i < ctx->msgcount; i++)
+     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)
+       break;
+
+  if (i == ctx->msgcount)
+  {
+    mutt_debug(1, ""new header %d %s\n"", index, line);
+
+    if (i >= ctx->hdrmax)
+      mx_alloc_memory(ctx);
+
+    ctx->msgcount++;
+    ctx->hdrs[i] = mutt_header_new();
+    ctx->hdrs[i]->data = mutt_str_strdup(line);
+  }
+  else if (ctx->hdrs[i]->index != index - 1)
+    pop_data->clear_cache = true;
+
+  ctx->hdrs[i]->refno = index;
+  ctx->hdrs[i]->index = index - 1;
+
+  return 0;
+}
+","static int fetch_uidl(char *line, void *data)
+{
+  int i, index;
+  struct Context *ctx = (struct Context *) data;
+  struct PopData *pop_data = (struct PopData *) ctx->data;
+  char *endp = NULL;
+
+  errno = 0;
+  index = strtol(line, &endp, 10);
+  if (errno)
+    return -1;
+  while (*endp == ' ')
+     endp++;
+   memmove(line, endp, strlen(endp) + 1);
+ 
+  /* uid must be at least be 1 byte */
+  if (strlen(line) == 0)
+    return -1;
+
+   for (i = 0; i < ctx->msgcount; i++)
+     if (mutt_str_strcmp(line, ctx->hdrs[i]->data) == 0)
+       break;
+
+  if (i == ctx->msgcount)
+  {
+    mutt_debug(1, ""new header %d %s\n"", index, line);
+
+    if (i >= ctx->hdrmax)
+      mx_alloc_memory(ctx);
+
+    ctx->msgcount++;
+    ctx->hdrs[i] = mutt_header_new();
+    ctx->hdrs[i]->data = mutt_str_strdup(line);
+  }
+  else if (ctx->hdrs[i]->index != index - 1)
+    pop_data->clear_cache = true;
+
+  ctx->hdrs[i]->refno = index;
+  ctx->hdrs[i]->index = index - 1;
+
+  return 0;
+}
+","The `fetch_uidl` function processes a line of input to extract a unique identifier (UID) and updates a context structure with this information. It converts the beginning of the line to an integer index, trims any leading spaces, and checks if the UID already exists in the context's header array. If the UID is new, it allocates memory for a new header, increments the message count, and stores the UID. If the UID exists but has a different index, it flags the cache for clearing. Finally, it updates the reference number and index of the header before returning a success status.","The function processes a line of input to extract a unique identifier and updates a context structure accordingly. It converts the initial part of the line into an integer, removes any leading spaces, and checks if the identifier already exists in a collection. If the identifier is new, it allocates memory for a new entry, increments the count of entries, and stores the identifier. If the identifier is found but has a different associated index, it marks the cache for clearing. Finally, it updates the reference number and index of the entry before returning a success status.","The vulnerability in the original code arises from the lack of validation for the input line after extracting the unique identifier, which could lead to processing an empty string. This oversight allows potential buffer overflows or undefined behavior when the code attempts to manipulate or compare the empty string. The fix introduces a check for the length of the line after trimming spaces, ensuring that it is at least one byte long before proceeding. This validation prevents the function from continuing with invalid input, thereby enhancing the robustness and security of the code.","The vulnerability in the original code stems from the absence of validation for the input string after extracting a unique identifier, which could allow for the processing of an empty or invalid string. This could lead to potential buffer overflows or undefined behavior during subsequent operations. The fix addresses this issue by implementing a check to ensure that the input string has a minimum length before any further processing occurs. This additional validation step prevents the function from executing with invalid input, thereby improving the overall security and stability of the code.","The vulnerability was fixed by adding a validation check for the length of the input string after trimming spaces. Specifically, the code now includes a condition that verifies if the length of the line is zero, returning an error if this is the case. This check is implemented right after the space-trimming loop and before any further processing occurs. By ensuring that the line contains at least one byte of data, the fix prevents the function from proceeding with an empty string, thereby mitigating risks of buffer overflows and undefined behavior in subsequent operations.","The vulnerability was addressed by introducing a validation step that checks the length of the input string after any leading spaces have been removed. This new check ensures that the string is not empty before the function continues with further processing. If the string is found to be empty, the function immediately returns an error, preventing any subsequent operations that could lead to buffer overflows or undefined behavior. This enhancement effectively safeguards the code against invalid input, thereby improving its overall security and stability.","CWE-20, CWE-120, CWE-119, CWE-789, CWE-805, CWE-131, CWE-232, CWE-170, CWE-74, CWE-140",N,-1.0,"4, 5","5,5","4,5","4, 4"
+1,1,182864,182864,,Remote,Not required,Partial,CVE-2019-11498,https://www.cvedetails.com/cve/CVE-2019-11498/,CWE-824,Medium,,,,2019-04-24,4.3,"WavpackSetConfiguration64 in pack_utils.c in libwavpack.a in WavPack through 5.1.0 has a *Conditional jump or move depends on uninitialised value* condition, which might allow attackers to cause a denial of service (application crash) via a DFF file that lacks valid sample-rate data.",2019-06-04,DoS ,2,https://github.com/dbry/WavPack/commit/bc6cba3f552c44565f7f1e66dc1580189addb2b4,bc6cba3f552c44565f7f1e66dc1580189addb2b4,issue #67: make sure sample rate is specified and non-zero in DFF files,2,cli/dsdiff.c,"{""sha"": ""193adeecffba442cabc1ea7ca9fc09413ff267da"", ""filename"": ""cli/dsdiff.c"", ""status"": ""modified"", ""additions"": 2, ""deletions"": 2, ""changes"": 4, ""blob_url"": ""https://github.com/dbry/WavPack/blob/bc6cba3f552c44565f7f1e66dc1580189addb2b4/cli/dsdiff.c"", ""raw_url"": ""https://github.com/dbry/WavPack/raw/bc6cba3f552c44565f7f1e66dc1580189addb2b4/cli/dsdiff.c"", ""contents_url"": ""https://api.github.com/repos/dbry/WavPack/contents/cli/dsdiff.c?ref=bc6cba3f552c44565f7f1e66dc1580189addb2b4"", ""patch"": ""@@ -181,7 +181,7 @@ int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, Wavpa\n             if (!strncmp (prop_chunk, \""SND \"", 4)) {\n                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;\n                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;\n-                uint32_t sampleRate;\n+                uint32_t sampleRate = 0;\n \n                 while (eptr - cptr >= sizeof (dff_chunk_header)) {\n                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));\n@@ -280,7 +280,7 @@ int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, Wavpa\n         }\n         else if (!strncmp (dff_chunk_header.ckID, \""DSD \"", 4)) {\n \n-            if (!config->num_channels) {\n+            if (!config->num_channels || !config->sample_rate) {\n                 error_line (\""%s is not a valid .DFF file!\"", infilename);\n                 return WAVPACK_SOFT_ERROR;\n             }""}","int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, WavpackContext *wpc, WavpackConfig *config)
+{
+    int64_t infilesize, total_samples;
+    DFFFileHeader dff_file_header;
+    DFFChunkHeader dff_chunk_header;
+    uint32_t bcount;
+
+    infilesize = DoGetFileSize (infile);
+    memcpy (&dff_file_header, fourcc, 4);
+
+    if ((!DoReadFile (infile, ((char *) &dff_file_header) + 4, sizeof (DFFFileHeader) - 4, &bcount) ||
+        bcount != sizeof (DFFFileHeader) - 4) || strncmp (dff_file_header.formType, ""DSD "", 4)) {
+            error_line (""%s is not a valid .DFF file!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+    else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+        !WavpackAddWrapper (wpc, &dff_file_header, sizeof (DFFFileHeader))) {
+            error_line (""%s"", WavpackGetErrorMessage (wpc));
+            return WAVPACK_SOFT_ERROR;
+    }
+
+#if 1   // this might be a little too picky...
+    WavpackBigEndianToNative (&dff_file_header, DFFFileHeaderFormat);
+
+    if (infilesize && !(config->qmode & QMODE_IGNORE_LENGTH) &&
+        dff_file_header.ckDataSize && dff_file_header.ckDataSize + 1 && dff_file_header.ckDataSize + 12 != infilesize) {
+            error_line (""%s is not a valid .DFF file (by total size)!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+
+    if (debug_logging_mode)
+        error_line (""file header indicated length = %lld"", dff_file_header.ckDataSize);
+
+#endif
+
+
+    while (1) {
+        if (!DoReadFile (infile, &dff_chunk_header, sizeof (DFFChunkHeader), &bcount) ||
+            bcount != sizeof (DFFChunkHeader)) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+        }
+        else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+            !WavpackAddWrapper (wpc, &dff_chunk_header, sizeof (DFFChunkHeader))) {
+                error_line (""%s"", WavpackGetErrorMessage (wpc));
+                return WAVPACK_SOFT_ERROR;
+        }
+
+        WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+        if (debug_logging_mode)
+            error_line (""chunk header indicated length = %lld"", dff_chunk_header.ckDataSize);
+
+        if (!strncmp (dff_chunk_header.ckID, ""FVER"", 4)) {
+            uint32_t version;
+
+            if (dff_chunk_header.ckDataSize != sizeof (version) ||
+                !DoReadFile (infile, &version, sizeof (version), &bcount) ||
+                bcount != sizeof (version)) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, &version, sizeof (version))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            WavpackBigEndianToNative (&version, ""L"");
+
+            if (debug_logging_mode)
+                error_line (""dsdiff file version = 0x%08x"", version);
+        }
+        else if (!strncmp (dff_chunk_header.ckID, ""PROP"", 4)) {
+            char *prop_chunk;
+
+            if (dff_chunk_header.ckDataSize < 4 || dff_chunk_header.ckDataSize > 1024) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            if (debug_logging_mode)
+                error_line (""got PROP chunk of %d bytes total"", (int) dff_chunk_header.ckDataSize);
+
+            prop_chunk = malloc ((size_t) dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize, &bcount) ||
+                bcount != dff_chunk_header.ckDataSize) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize)) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+             if (!strncmp (prop_chunk, ""SND "", 4)) {
+                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;
+                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;
+                uint32_t sampleRate = 0;
+ 
+                 while (eptr - cptr >= sizeof (dff_chunk_header)) {
+                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));
+                    cptr += sizeof (dff_chunk_header);
+                    WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+                    if (dff_chunk_header.ckDataSize > 0 && dff_chunk_header.ckDataSize <= eptr - cptr) {
+                        if (!strncmp (dff_chunk_header.ckID, ""FS  "", 4) && dff_chunk_header.ckDataSize == 4) {
+                            memcpy (&sampleRate, cptr, sizeof (sampleRate));
+                            WavpackBigEndianToNative (&sampleRate, ""L"");
+                            cptr += dff_chunk_header.ckDataSize;
+
+                            if (debug_logging_mode)
+                                error_line (""got sample rate of %u Hz"", sampleRate);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CHNL"", 4) && dff_chunk_header.ckDataSize >= 2) {
+                            memcpy (&numChannels, cptr, sizeof (numChannels));
+                            WavpackBigEndianToNative (&numChannels, ""S"");
+                            cptr += sizeof (numChannels);
+
+                            chansSpecified = (int)(dff_chunk_header.ckDataSize - sizeof (numChannels)) / 4;
+
+                            if (numChannels < chansSpecified || numChannels < 1 || numChannels > 256) {
+                                error_line (""%s is not a valid .DFF file!"", infilename);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            while (chansSpecified--) {
+                                if (!strncmp (cptr, ""SLFT"", 4) || !strncmp (cptr, ""MLFT"", 4))
+                                    chanMask |= 0x1;
+                                else if (!strncmp (cptr, ""SRGT"", 4) || !strncmp (cptr, ""MRGT"", 4))
+                                    chanMask |= 0x2;
+                                else if (!strncmp (cptr, ""LS  "", 4))
+                                    chanMask |= 0x10;
+                                else if (!strncmp (cptr, ""RS  "", 4))
+                                    chanMask |= 0x20;
+                                else if (!strncmp (cptr, ""C   "", 4))
+                                    chanMask |= 0x4;
+                                else if (!strncmp (cptr, ""LFE "", 4))
+                                    chanMask |= 0x8;
+                                else
+                                    if (debug_logging_mode)
+                                        error_line (""undefined channel ID %c%c%c%c"", cptr [0], cptr [1], cptr [2], cptr [3]);
+
+                                cptr += 4;
+                            }
+
+                            if (debug_logging_mode)
+                                error_line (""%d channels, mask = 0x%08x"", numChannels, chanMask);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CMPR"", 4) && dff_chunk_header.ckDataSize >= 4) {
+                            if (strncmp (cptr, ""DSD "", 4)) {
+                                error_line (""DSDIFF files must be uncompressed, not \""%c%c%c%c\""!"",
+                                    cptr [0], cptr [1], cptr [2], cptr [3]);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                        else {
+                            if (debug_logging_mode)
+                                error_line (""got PROP/SND chunk type \""%c%c%c%c\"" of %d bytes"", dff_chunk_header.ckID [0],
+                                    dff_chunk_header.ckID [1], dff_chunk_header.ckID [2], dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                    }
+                    else {
+                        error_line (""%s is not a valid .DFF file!"", infilename);
+                        free (prop_chunk);
+                        return WAVPACK_SOFT_ERROR;
+                    }
+                }
+
+                if (chanMask && (config->channel_mask || (config->qmode & QMODE_CHANS_UNASSIGNED))) {
+                    error_line (""this DSDIFF file already has channel order information!"");
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+                }
+                else if (chanMask)
+                    config->channel_mask = chanMask;
+
+                config->bits_per_sample = 8;
+                config->bytes_per_sample = 1;
+                config->num_channels = numChannels;
+                config->sample_rate = sampleRate / 8;
+                config->qmode |= QMODE_DSD_MSB_FIRST;
+            }
+            else if (debug_logging_mode)
+                error_line (""got unknown PROP chunk type \""%c%c%c%c\"" of %d bytes"",
+                    prop_chunk [0], prop_chunk [1], prop_chunk [2], prop_chunk [3], dff_chunk_header.ckDataSize);
+
+            free (prop_chunk);
+         }
+         else if (!strncmp (dff_chunk_header.ckID, ""DSD "", 4)) {
+ 
+            if (!config->num_channels || !config->sample_rate) {
+                 error_line (""%s is not a valid .DFF file!"", infilename);
+                 return WAVPACK_SOFT_ERROR;
+             }
+
+            total_samples = dff_chunk_header.ckDataSize / config->num_channels;
+            break;
+        }
+        else {          // just copy unknown chunks to output file
+
+            int bytes_to_copy = (int)(((dff_chunk_header.ckDataSize) + 1) & ~(int64_t)1);
+            char *buff;
+
+            if (bytes_to_copy < 0 || bytes_to_copy > 4194304) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            buff = malloc (bytes_to_copy);
+
+            if (debug_logging_mode)
+                error_line (""extra unknown chunk \""%c%c%c%c\"" of %d bytes"",
+                    dff_chunk_header.ckID [0], dff_chunk_header.ckID [1], dff_chunk_header.ckID [2],
+                    dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, buff, bytes_to_copy, &bcount) ||
+                bcount != bytes_to_copy ||
+                (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, buff, bytes_to_copy))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (buff);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            free (buff);
+        }
+    }
+
+    if (debug_logging_mode)
+        error_line (""setting configuration with %lld samples"", total_samples);
+
+    if (!WavpackSetConfiguration64 (wpc, config, total_samples, NULL)) {
+        error_line (""%s: %s"", infilename, WavpackGetErrorMessage (wpc));
+        return WAVPACK_SOFT_ERROR;
+    }
+
+    return WAVPACK_NO_ERROR;
+}
+","int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, WavpackContext *wpc, WavpackConfig *config)
+{
+    int64_t infilesize, total_samples;
+    DFFFileHeader dff_file_header;
+    DFFChunkHeader dff_chunk_header;
+    uint32_t bcount;
+
+    infilesize = DoGetFileSize (infile);
+    memcpy (&dff_file_header, fourcc, 4);
+
+    if ((!DoReadFile (infile, ((char *) &dff_file_header) + 4, sizeof (DFFFileHeader) - 4, &bcount) ||
+        bcount != sizeof (DFFFileHeader) - 4) || strncmp (dff_file_header.formType, ""DSD "", 4)) {
+            error_line (""%s is not a valid .DFF file!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+    else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+        !WavpackAddWrapper (wpc, &dff_file_header, sizeof (DFFFileHeader))) {
+            error_line (""%s"", WavpackGetErrorMessage (wpc));
+            return WAVPACK_SOFT_ERROR;
+    }
+
+#if 1   // this might be a little too picky...
+    WavpackBigEndianToNative (&dff_file_header, DFFFileHeaderFormat);
+
+    if (infilesize && !(config->qmode & QMODE_IGNORE_LENGTH) &&
+        dff_file_header.ckDataSize && dff_file_header.ckDataSize + 1 && dff_file_header.ckDataSize + 12 != infilesize) {
+            error_line (""%s is not a valid .DFF file (by total size)!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+
+    if (debug_logging_mode)
+        error_line (""file header indicated length = %lld"", dff_file_header.ckDataSize);
+
+#endif
+
+
+    while (1) {
+        if (!DoReadFile (infile, &dff_chunk_header, sizeof (DFFChunkHeader), &bcount) ||
+            bcount != sizeof (DFFChunkHeader)) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+        }
+        else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+            !WavpackAddWrapper (wpc, &dff_chunk_header, sizeof (DFFChunkHeader))) {
+                error_line (""%s"", WavpackGetErrorMessage (wpc));
+                return WAVPACK_SOFT_ERROR;
+        }
+
+        WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+        if (debug_logging_mode)
+            error_line (""chunk header indicated length = %lld"", dff_chunk_header.ckDataSize);
+
+        if (!strncmp (dff_chunk_header.ckID, ""FVER"", 4)) {
+            uint32_t version;
+
+            if (dff_chunk_header.ckDataSize != sizeof (version) ||
+                !DoReadFile (infile, &version, sizeof (version), &bcount) ||
+                bcount != sizeof (version)) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, &version, sizeof (version))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            WavpackBigEndianToNative (&version, ""L"");
+
+            if (debug_logging_mode)
+                error_line (""dsdiff file version = 0x%08x"", version);
+        }
+        else if (!strncmp (dff_chunk_header.ckID, ""PROP"", 4)) {
+            char *prop_chunk;
+
+            if (dff_chunk_header.ckDataSize < 4 || dff_chunk_header.ckDataSize > 1024) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            if (debug_logging_mode)
+                error_line (""got PROP chunk of %d bytes total"", (int) dff_chunk_header.ckDataSize);
+
+            prop_chunk = malloc ((size_t) dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize, &bcount) ||
+                bcount != dff_chunk_header.ckDataSize) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize)) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+             if (!strncmp (prop_chunk, ""SND "", 4)) {
+                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;
+                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;
+                uint32_t sampleRate;
+ 
+                 while (eptr - cptr >= sizeof (dff_chunk_header)) {
+                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));
+                    cptr += sizeof (dff_chunk_header);
+                    WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+                    if (dff_chunk_header.ckDataSize > 0 && dff_chunk_header.ckDataSize <= eptr - cptr) {
+                        if (!strncmp (dff_chunk_header.ckID, ""FS  "", 4) && dff_chunk_header.ckDataSize == 4) {
+                            memcpy (&sampleRate, cptr, sizeof (sampleRate));
+                            WavpackBigEndianToNative (&sampleRate, ""L"");
+                            cptr += dff_chunk_header.ckDataSize;
+
+                            if (debug_logging_mode)
+                                error_line (""got sample rate of %u Hz"", sampleRate);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CHNL"", 4) && dff_chunk_header.ckDataSize >= 2) {
+                            memcpy (&numChannels, cptr, sizeof (numChannels));
+                            WavpackBigEndianToNative (&numChannels, ""S"");
+                            cptr += sizeof (numChannels);
+
+                            chansSpecified = (int)(dff_chunk_header.ckDataSize - sizeof (numChannels)) / 4;
+
+                            if (numChannels < chansSpecified || numChannels < 1 || numChannels > 256) {
+                                error_line (""%s is not a valid .DFF file!"", infilename);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            while (chansSpecified--) {
+                                if (!strncmp (cptr, ""SLFT"", 4) || !strncmp (cptr, ""MLFT"", 4))
+                                    chanMask |= 0x1;
+                                else if (!strncmp (cptr, ""SRGT"", 4) || !strncmp (cptr, ""MRGT"", 4))
+                                    chanMask |= 0x2;
+                                else if (!strncmp (cptr, ""LS  "", 4))
+                                    chanMask |= 0x10;
+                                else if (!strncmp (cptr, ""RS  "", 4))
+                                    chanMask |= 0x20;
+                                else if (!strncmp (cptr, ""C   "", 4))
+                                    chanMask |= 0x4;
+                                else if (!strncmp (cptr, ""LFE "", 4))
+                                    chanMask |= 0x8;
+                                else
+                                    if (debug_logging_mode)
+                                        error_line (""undefined channel ID %c%c%c%c"", cptr [0], cptr [1], cptr [2], cptr [3]);
+
+                                cptr += 4;
+                            }
+
+                            if (debug_logging_mode)
+                                error_line (""%d channels, mask = 0x%08x"", numChannels, chanMask);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CMPR"", 4) && dff_chunk_header.ckDataSize >= 4) {
+                            if (strncmp (cptr, ""DSD "", 4)) {
+                                error_line (""DSDIFF files must be uncompressed, not \""%c%c%c%c\""!"",
+                                    cptr [0], cptr [1], cptr [2], cptr [3]);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                        else {
+                            if (debug_logging_mode)
+                                error_line (""got PROP/SND chunk type \""%c%c%c%c\"" of %d bytes"", dff_chunk_header.ckID [0],
+                                    dff_chunk_header.ckID [1], dff_chunk_header.ckID [2], dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                    }
+                    else {
+                        error_line (""%s is not a valid .DFF file!"", infilename);
+                        free (prop_chunk);
+                        return WAVPACK_SOFT_ERROR;
+                    }
+                }
+
+                if (chanMask && (config->channel_mask || (config->qmode & QMODE_CHANS_UNASSIGNED))) {
+                    error_line (""this DSDIFF file already has channel order information!"");
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+                }
+                else if (chanMask)
+                    config->channel_mask = chanMask;
+
+                config->bits_per_sample = 8;
+                config->bytes_per_sample = 1;
+                config->num_channels = numChannels;
+                config->sample_rate = sampleRate / 8;
+                config->qmode |= QMODE_DSD_MSB_FIRST;
+            }
+            else if (debug_logging_mode)
+                error_line (""got unknown PROP chunk type \""%c%c%c%c\"" of %d bytes"",
+                    prop_chunk [0], prop_chunk [1], prop_chunk [2], prop_chunk [3], dff_chunk_header.ckDataSize);
+
+            free (prop_chunk);
+         }
+         else if (!strncmp (dff_chunk_header.ckID, ""DSD "", 4)) {
+ 
+            if (!config->num_channels) {
+                 error_line (""%s is not a valid .DFF file!"", infilename);
+                 return WAVPACK_SOFT_ERROR;
+             }
+
+            total_samples = dff_chunk_header.ckDataSize / config->num_channels;
+            break;
+        }
+        else {          // just copy unknown chunks to output file
+
+            int bytes_to_copy = (int)(((dff_chunk_header.ckDataSize) + 1) & ~(int64_t)1);
+            char *buff;
+
+            if (bytes_to_copy < 0 || bytes_to_copy > 4194304) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            buff = malloc (bytes_to_copy);
+
+            if (debug_logging_mode)
+                error_line (""extra unknown chunk \""%c%c%c%c\"" of %d bytes"",
+                    dff_chunk_header.ckID [0], dff_chunk_header.ckID [1], dff_chunk_header.ckID [2],
+                    dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, buff, bytes_to_copy, &bcount) ||
+                bcount != bytes_to_copy ||
+                (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, buff, bytes_to_copy))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (buff);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            free (buff);
+        }
+    }
+
+    if (debug_logging_mode)
+        error_line (""setting configuration with %lld samples"", total_samples);
+
+    if (!WavpackSetConfiguration64 (wpc, config, total_samples, NULL)) {
+        error_line (""%s: %s"", infilename, WavpackGetErrorMessage (wpc));
+        return WAVPACK_SOFT_ERROR;
+    }
+
+    return WAVPACK_NO_ERROR;
+}
+",C,"                uint32_t sampleRate = 0;
+            if (!config->num_channels || !config->sample_rate) {
+","                uint32_t sampleRate;
+            if (!config->num_channels) {
+",,"@@ -181,7 +181,7 @@ int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, Wavpa
+             if (!strncmp (prop_chunk, ""SND "", 4)) {
+                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;
+                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;
+-                uint32_t sampleRate;
++                uint32_t sampleRate = 0;
+ 
+                 while (eptr - cptr >= sizeof (dff_chunk_header)) {
+                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));
+@@ -280,7 +280,7 @@ int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, Wavpa
+         }
+         else if (!strncmp (dff_chunk_header.ckID, ""DSD "", 4)) {
+ 
+-            if (!config->num_channels) {
++            if (!config->num_channels || !config->sample_rate) {
+                 error_line (""%s is not a valid .DFF file!"", infilename);
+                 return WAVPACK_SOFT_ERROR;
+             }",WavPack,bc6cba3f552c44565f7f1e66dc1580189addb2b4,33a0025d1d63ccd05d9dbaa6923d52b1446a62fe,1,"int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, WavpackContext *wpc, WavpackConfig *config)
+{
+    int64_t infilesize, total_samples;
+    DFFFileHeader dff_file_header;
+    DFFChunkHeader dff_chunk_header;
+    uint32_t bcount;
+
+    infilesize = DoGetFileSize (infile);
+    memcpy (&dff_file_header, fourcc, 4);
+
+    if ((!DoReadFile (infile, ((char *) &dff_file_header) + 4, sizeof (DFFFileHeader) - 4, &bcount) ||
+        bcount != sizeof (DFFFileHeader) - 4) || strncmp (dff_file_header.formType, ""DSD "", 4)) {
+            error_line (""%s is not a valid .DFF file!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+    else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+        !WavpackAddWrapper (wpc, &dff_file_header, sizeof (DFFFileHeader))) {
+            error_line (""%s"", WavpackGetErrorMessage (wpc));
+            return WAVPACK_SOFT_ERROR;
+    }
+
+#if 1   // this might be a little too picky...
+    WavpackBigEndianToNative (&dff_file_header, DFFFileHeaderFormat);
+
+    if (infilesize && !(config->qmode & QMODE_IGNORE_LENGTH) &&
+        dff_file_header.ckDataSize && dff_file_header.ckDataSize + 1 && dff_file_header.ckDataSize + 12 != infilesize) {
+            error_line (""%s is not a valid .DFF file (by total size)!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+
+    if (debug_logging_mode)
+        error_line (""file header indicated length = %lld"", dff_file_header.ckDataSize);
+
+#endif
+
+    // loop through all elements of the DSDIFF header
+    // (until the data chuck) and copy them to the output file
+
+    while (1) {
+        if (!DoReadFile (infile, &dff_chunk_header, sizeof (DFFChunkHeader), &bcount) ||
+            bcount != sizeof (DFFChunkHeader)) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+        }
+        else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+            !WavpackAddWrapper (wpc, &dff_chunk_header, sizeof (DFFChunkHeader))) {
+                error_line (""%s"", WavpackGetErrorMessage (wpc));
+                return WAVPACK_SOFT_ERROR;
+        }
+
+        WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+        if (debug_logging_mode)
+            error_line (""chunk header indicated length = %lld"", dff_chunk_header.ckDataSize);
+
+        if (!strncmp (dff_chunk_header.ckID, ""FVER"", 4)) {
+            uint32_t version;
+
+            if (dff_chunk_header.ckDataSize != sizeof (version) ||
+                !DoReadFile (infile, &version, sizeof (version), &bcount) ||
+                bcount != sizeof (version)) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, &version, sizeof (version))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            WavpackBigEndianToNative (&version, ""L"");
+
+            if (debug_logging_mode)
+                error_line (""dsdiff file version = 0x%08x"", version);
+        }
+        else if (!strncmp (dff_chunk_header.ckID, ""PROP"", 4)) {
+            char *prop_chunk;
+
+            if (dff_chunk_header.ckDataSize < 4 || dff_chunk_header.ckDataSize > 1024) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            if (debug_logging_mode)
+                error_line (""got PROP chunk of %d bytes total"", (int) dff_chunk_header.ckDataSize);
+
+            prop_chunk = malloc ((size_t) dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize, &bcount) ||
+                bcount != dff_chunk_header.ckDataSize) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize)) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+             if (!strncmp (prop_chunk, ""SND "", 4)) {
+                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;
+                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;
+//flaw_line_below:
+                uint32_t sampleRate;
+//fix_flaw_line_below:
+//                uint32_t sampleRate = 0;
+ 
+                 while (eptr - cptr >= sizeof (dff_chunk_header)) {
+                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));
+                    cptr += sizeof (dff_chunk_header);
+                    WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+                    if (dff_chunk_header.ckDataSize > 0 && dff_chunk_header.ckDataSize <= eptr - cptr) {
+                        if (!strncmp (dff_chunk_header.ckID, ""FS  "", 4) && dff_chunk_header.ckDataSize == 4) {
+                            memcpy (&sampleRate, cptr, sizeof (sampleRate));
+                            WavpackBigEndianToNative (&sampleRate, ""L"");
+                            cptr += dff_chunk_header.ckDataSize;
+
+                            if (debug_logging_mode)
+                                error_line (""got sample rate of %u Hz"", sampleRate);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CHNL"", 4) && dff_chunk_header.ckDataSize >= 2) {
+                            memcpy (&numChannels, cptr, sizeof (numChannels));
+                            WavpackBigEndianToNative (&numChannels, ""S"");
+                            cptr += sizeof (numChannels);
+
+                            chansSpecified = (int)(dff_chunk_header.ckDataSize - sizeof (numChannels)) / 4;
+
+                            if (numChannels < chansSpecified || numChannels < 1 || numChannels > 256) {
+                                error_line (""%s is not a valid .DFF file!"", infilename);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            while (chansSpecified--) {
+                                if (!strncmp (cptr, ""SLFT"", 4) || !strncmp (cptr, ""MLFT"", 4))
+                                    chanMask |= 0x1;
+                                else if (!strncmp (cptr, ""SRGT"", 4) || !strncmp (cptr, ""MRGT"", 4))
+                                    chanMask |= 0x2;
+                                else if (!strncmp (cptr, ""LS  "", 4))
+                                    chanMask |= 0x10;
+                                else if (!strncmp (cptr, ""RS  "", 4))
+                                    chanMask |= 0x20;
+                                else if (!strncmp (cptr, ""C   "", 4))
+                                    chanMask |= 0x4;
+                                else if (!strncmp (cptr, ""LFE "", 4))
+                                    chanMask |= 0x8;
+                                else
+                                    if (debug_logging_mode)
+                                        error_line (""undefined channel ID %c%c%c%c"", cptr [0], cptr [1], cptr [2], cptr [3]);
+
+                                cptr += 4;
+                            }
+
+                            if (debug_logging_mode)
+                                error_line (""%d channels, mask = 0x%08x"", numChannels, chanMask);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CMPR"", 4) && dff_chunk_header.ckDataSize >= 4) {
+                            if (strncmp (cptr, ""DSD "", 4)) {
+                                error_line (""DSDIFF files must be uncompressed, not \""%c%c%c%c\""!"",
+                                    cptr [0], cptr [1], cptr [2], cptr [3]);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                        else {
+                            if (debug_logging_mode)
+                                error_line (""got PROP/SND chunk type \""%c%c%c%c\"" of %d bytes"", dff_chunk_header.ckID [0],
+                                    dff_chunk_header.ckID [1], dff_chunk_header.ckID [2], dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                    }
+                    else {
+                        error_line (""%s is not a valid .DFF file!"", infilename);
+                        free (prop_chunk);
+                        return WAVPACK_SOFT_ERROR;
+                    }
+                }
+
+                if (chanMask && (config->channel_mask || (config->qmode & QMODE_CHANS_UNASSIGNED))) {
+                    error_line (""this DSDIFF file already has channel order information!"");
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+                }
+                else if (chanMask)
+                    config->channel_mask = chanMask;
+
+                config->bits_per_sample = 8;
+                config->bytes_per_sample = 1;
+                config->num_channels = numChannels;
+                config->sample_rate = sampleRate / 8;
+                config->qmode |= QMODE_DSD_MSB_FIRST;
+            }
+            else if (debug_logging_mode)
+                error_line (""got unknown PROP chunk type \""%c%c%c%c\"" of %d bytes"",
+                    prop_chunk [0], prop_chunk [1], prop_chunk [2], prop_chunk [3], dff_chunk_header.ckDataSize);
+
+            free (prop_chunk);
+         }
+         else if (!strncmp (dff_chunk_header.ckID, ""DSD "", 4)) {
+ 
+//flaw_line_below:
+            if (!config->num_channels) {
+//fix_flaw_line_below:
+//            if (!config->num_channels || !config->sample_rate) {
+                 error_line (""%s is not a valid .DFF file!"", infilename);
+                 return WAVPACK_SOFT_ERROR;
+             }
+
+            total_samples = dff_chunk_header.ckDataSize / config->num_channels;
+            break;
+        }
+        else {          // just copy unknown chunks to output file
+
+            int bytes_to_copy = (int)(((dff_chunk_header.ckDataSize) + 1) & ~(int64_t)1);
+            char *buff;
+
+            if (bytes_to_copy < 0 || bytes_to_copy > 4194304) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            buff = malloc (bytes_to_copy);
+
+            if (debug_logging_mode)
+                error_line (""extra unknown chunk \""%c%c%c%c\"" of %d bytes"",
+                    dff_chunk_header.ckID [0], dff_chunk_header.ckID [1], dff_chunk_header.ckID [2],
+                    dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, buff, bytes_to_copy, &bcount) ||
+                bcount != bytes_to_copy ||
+                (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, buff, bytes_to_copy))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (buff);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            free (buff);
+        }
+    }
+
+    if (debug_logging_mode)
+        error_line (""setting configuration with %lld samples"", total_samples);
+
+    if (!WavpackSetConfiguration64 (wpc, config, total_samples, NULL)) {
+        error_line (""%s: %s"", infilename, WavpackGetErrorMessage (wpc));
+        return WAVPACK_SOFT_ERROR;
+    }
+
+    return WAVPACK_NO_ERROR;
+}
+",182864,"int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, WavpackContext *wpc, WavpackConfig *config)
+{
+    int64_t infilesize, total_samples;
+    DFFFileHeader dff_file_header;
+    DFFChunkHeader dff_chunk_header;
+    uint32_t bcount;
+
+    infilesize = DoGetFileSize (infile);
+    memcpy (&dff_file_header, fourcc, 4);
+
+    if ((!DoReadFile (infile, ((char *) &dff_file_header) + 4, sizeof (DFFFileHeader) - 4, &bcount) ||
+        bcount != sizeof (DFFFileHeader) - 4) || strncmp (dff_file_header.formType, ""DSD "", 4)) {
+            error_line (""%s is not a valid .DFF file!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+    else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+        !WavpackAddWrapper (wpc, &dff_file_header, sizeof (DFFFileHeader))) {
+            error_line (""%s"", WavpackGetErrorMessage (wpc));
+            return WAVPACK_SOFT_ERROR;
+    }
+
+#if 1   // this might be a little too picky...
+    WavpackBigEndianToNative (&dff_file_header, DFFFileHeaderFormat);
+
+    if (infilesize && !(config->qmode & QMODE_IGNORE_LENGTH) &&
+        dff_file_header.ckDataSize && dff_file_header.ckDataSize + 1 && dff_file_header.ckDataSize + 12 != infilesize) {
+            error_line (""%s is not a valid .DFF file (by total size)!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+
+    if (debug_logging_mode)
+        error_line (""file header indicated length = %lld"", dff_file_header.ckDataSize);
+
+#endif
+
+
+    while (1) {
+        if (!DoReadFile (infile, &dff_chunk_header, sizeof (DFFChunkHeader), &bcount) ||
+            bcount != sizeof (DFFChunkHeader)) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+        }
+        else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+            !WavpackAddWrapper (wpc, &dff_chunk_header, sizeof (DFFChunkHeader))) {
+                error_line (""%s"", WavpackGetErrorMessage (wpc));
+                return WAVPACK_SOFT_ERROR;
+        }
+
+        WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+        if (debug_logging_mode)
+            error_line (""chunk header indicated length = %lld"", dff_chunk_header.ckDataSize);
+
+        if (!strncmp (dff_chunk_header.ckID, ""FVER"", 4)) {
+            uint32_t version;
+
+            if (dff_chunk_header.ckDataSize != sizeof (version) ||
+                !DoReadFile (infile, &version, sizeof (version), &bcount) ||
+                bcount != sizeof (version)) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, &version, sizeof (version))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            WavpackBigEndianToNative (&version, ""L"");
+
+            if (debug_logging_mode)
+                error_line (""dsdiff file version = 0x%08x"", version);
+        }
+        else if (!strncmp (dff_chunk_header.ckID, ""PROP"", 4)) {
+            char *prop_chunk;
+
+            if (dff_chunk_header.ckDataSize < 4 || dff_chunk_header.ckDataSize > 1024) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            if (debug_logging_mode)
+                error_line (""got PROP chunk of %d bytes total"", (int) dff_chunk_header.ckDataSize);
+
+            prop_chunk = malloc ((size_t) dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize, &bcount) ||
+                bcount != dff_chunk_header.ckDataSize) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize)) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+             if (!strncmp (prop_chunk, ""SND "", 4)) {
+                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;
+                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;
+                uint32_t sampleRate;
+ 
+                 while (eptr - cptr >= sizeof (dff_chunk_header)) {
+                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));
+                    cptr += sizeof (dff_chunk_header);
+                    WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+                    if (dff_chunk_header.ckDataSize > 0 && dff_chunk_header.ckDataSize <= eptr - cptr) {
+                        if (!strncmp (dff_chunk_header.ckID, ""FS  "", 4) && dff_chunk_header.ckDataSize == 4) {
+                            memcpy (&sampleRate, cptr, sizeof (sampleRate));
+                            WavpackBigEndianToNative (&sampleRate, ""L"");
+                            cptr += dff_chunk_header.ckDataSize;
+
+                            if (debug_logging_mode)
+                                error_line (""got sample rate of %u Hz"", sampleRate);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CHNL"", 4) && dff_chunk_header.ckDataSize >= 2) {
+                            memcpy (&numChannels, cptr, sizeof (numChannels));
+                            WavpackBigEndianToNative (&numChannels, ""S"");
+                            cptr += sizeof (numChannels);
+
+                            chansSpecified = (int)(dff_chunk_header.ckDataSize - sizeof (numChannels)) / 4;
+
+                            if (numChannels < chansSpecified || numChannels < 1 || numChannels > 256) {
+                                error_line (""%s is not a valid .DFF file!"", infilename);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            while (chansSpecified--) {
+                                if (!strncmp (cptr, ""SLFT"", 4) || !strncmp (cptr, ""MLFT"", 4))
+                                    chanMask |= 0x1;
+                                else if (!strncmp (cptr, ""SRGT"", 4) || !strncmp (cptr, ""MRGT"", 4))
+                                    chanMask |= 0x2;
+                                else if (!strncmp (cptr, ""LS  "", 4))
+                                    chanMask |= 0x10;
+                                else if (!strncmp (cptr, ""RS  "", 4))
+                                    chanMask |= 0x20;
+                                else if (!strncmp (cptr, ""C   "", 4))
+                                    chanMask |= 0x4;
+                                else if (!strncmp (cptr, ""LFE "", 4))
+                                    chanMask |= 0x8;
+                                else
+                                    if (debug_logging_mode)
+                                        error_line (""undefined channel ID %c%c%c%c"", cptr [0], cptr [1], cptr [2], cptr [3]);
+
+                                cptr += 4;
+                            }
+
+                            if (debug_logging_mode)
+                                error_line (""%d channels, mask = 0x%08x"", numChannels, chanMask);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CMPR"", 4) && dff_chunk_header.ckDataSize >= 4) {
+                            if (strncmp (cptr, ""DSD "", 4)) {
+                                error_line (""DSDIFF files must be uncompressed, not \""%c%c%c%c\""!"",
+                                    cptr [0], cptr [1], cptr [2], cptr [3]);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                        else {
+                            if (debug_logging_mode)
+                                error_line (""got PROP/SND chunk type \""%c%c%c%c\"" of %d bytes"", dff_chunk_header.ckID [0],
+                                    dff_chunk_header.ckID [1], dff_chunk_header.ckID [2], dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                    }
+                    else {
+                        error_line (""%s is not a valid .DFF file!"", infilename);
+                        free (prop_chunk);
+                        return WAVPACK_SOFT_ERROR;
+                    }
+                }
+
+                if (chanMask && (config->channel_mask || (config->qmode & QMODE_CHANS_UNASSIGNED))) {
+                    error_line (""this DSDIFF file already has channel order information!"");
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+                }
+                else if (chanMask)
+                    config->channel_mask = chanMask;
+
+                config->bits_per_sample = 8;
+                config->bytes_per_sample = 1;
+                config->num_channels = numChannels;
+                config->sample_rate = sampleRate / 8;
+                config->qmode |= QMODE_DSD_MSB_FIRST;
+            }
+            else if (debug_logging_mode)
+                error_line (""got unknown PROP chunk type \""%c%c%c%c\"" of %d bytes"",
+                    prop_chunk [0], prop_chunk [1], prop_chunk [2], prop_chunk [3], dff_chunk_header.ckDataSize);
+
+            free (prop_chunk);
+         }
+         else if (!strncmp (dff_chunk_header.ckID, ""DSD "", 4)) {
+ 
+            if (!config->num_channels) {
+                 error_line (""%s is not a valid .DFF file!"", infilename);
+                 return WAVPACK_SOFT_ERROR;
+             }
+
+            total_samples = dff_chunk_header.ckDataSize / config->num_channels;
+            break;
+        }
+        else {          // just copy unknown chunks to output file
+
+            int bytes_to_copy = (int)(((dff_chunk_header.ckDataSize) + 1) & ~(int64_t)1);
+            char *buff;
+
+            if (bytes_to_copy < 0 || bytes_to_copy > 4194304) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            buff = malloc (bytes_to_copy);
+
+            if (debug_logging_mode)
+                error_line (""extra unknown chunk \""%c%c%c%c\"" of %d bytes"",
+                    dff_chunk_header.ckID [0], dff_chunk_header.ckID [1], dff_chunk_header.ckID [2],
+                    dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, buff, bytes_to_copy, &bcount) ||
+                bcount != bytes_to_copy ||
+                (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, buff, bytes_to_copy))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (buff);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            free (buff);
+        }
+    }
+
+    if (debug_logging_mode)
+        error_line (""setting configuration with %lld samples"", total_samples);
+
+    if (!WavpackSetConfiguration64 (wpc, config, total_samples, NULL)) {
+        error_line (""%s: %s"", infilename, WavpackGetErrorMessage (wpc));
+        return WAVPACK_SOFT_ERROR;
+    }
+
+    return WAVPACK_NO_ERROR;
+}
+","int ParseDsdiffHeaderConfig (FILE *infile, char *infilename, char *fourcc, WavpackContext *wpc, WavpackConfig *config)
+{
+    int64_t infilesize, total_samples;
+    DFFFileHeader dff_file_header;
+    DFFChunkHeader dff_chunk_header;
+    uint32_t bcount;
+
+    infilesize = DoGetFileSize (infile);
+    memcpy (&dff_file_header, fourcc, 4);
+
+    if ((!DoReadFile (infile, ((char *) &dff_file_header) + 4, sizeof (DFFFileHeader) - 4, &bcount) ||
+        bcount != sizeof (DFFFileHeader) - 4) || strncmp (dff_file_header.formType, ""DSD "", 4)) {
+            error_line (""%s is not a valid .DFF file!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+    else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+        !WavpackAddWrapper (wpc, &dff_file_header, sizeof (DFFFileHeader))) {
+            error_line (""%s"", WavpackGetErrorMessage (wpc));
+            return WAVPACK_SOFT_ERROR;
+    }
+
+#if 1   // this might be a little too picky...
+    WavpackBigEndianToNative (&dff_file_header, DFFFileHeaderFormat);
+
+    if (infilesize && !(config->qmode & QMODE_IGNORE_LENGTH) &&
+        dff_file_header.ckDataSize && dff_file_header.ckDataSize + 1 && dff_file_header.ckDataSize + 12 != infilesize) {
+            error_line (""%s is not a valid .DFF file (by total size)!"", infilename);
+            return WAVPACK_SOFT_ERROR;
+    }
+
+    if (debug_logging_mode)
+        error_line (""file header indicated length = %lld"", dff_file_header.ckDataSize);
+
+#endif
+
+
+    while (1) {
+        if (!DoReadFile (infile, &dff_chunk_header, sizeof (DFFChunkHeader), &bcount) ||
+            bcount != sizeof (DFFChunkHeader)) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+        }
+        else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+            !WavpackAddWrapper (wpc, &dff_chunk_header, sizeof (DFFChunkHeader))) {
+                error_line (""%s"", WavpackGetErrorMessage (wpc));
+                return WAVPACK_SOFT_ERROR;
+        }
+
+        WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+        if (debug_logging_mode)
+            error_line (""chunk header indicated length = %lld"", dff_chunk_header.ckDataSize);
+
+        if (!strncmp (dff_chunk_header.ckID, ""FVER"", 4)) {
+            uint32_t version;
+
+            if (dff_chunk_header.ckDataSize != sizeof (version) ||
+                !DoReadFile (infile, &version, sizeof (version), &bcount) ||
+                bcount != sizeof (version)) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, &version, sizeof (version))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            WavpackBigEndianToNative (&version, ""L"");
+
+            if (debug_logging_mode)
+                error_line (""dsdiff file version = 0x%08x"", version);
+        }
+        else if (!strncmp (dff_chunk_header.ckID, ""PROP"", 4)) {
+            char *prop_chunk;
+
+            if (dff_chunk_header.ckDataSize < 4 || dff_chunk_header.ckDataSize > 1024) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            if (debug_logging_mode)
+                error_line (""got PROP chunk of %d bytes total"", (int) dff_chunk_header.ckDataSize);
+
+            prop_chunk = malloc ((size_t) dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize, &bcount) ||
+                bcount != dff_chunk_header.ckDataSize) {
+                    error_line (""%s is not a valid .DFF file!"", infilename);
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+            else if (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, prop_chunk, (uint32_t) dff_chunk_header.ckDataSize)) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+             if (!strncmp (prop_chunk, ""SND "", 4)) {
+                 char *cptr = prop_chunk + 4, *eptr = prop_chunk + dff_chunk_header.ckDataSize;
+                 uint16_t numChannels = 0, chansSpecified, chanMask = 0;
+                uint32_t sampleRate = 0;
+ 
+                 while (eptr - cptr >= sizeof (dff_chunk_header)) {
+                     memcpy (&dff_chunk_header, cptr, sizeof (dff_chunk_header));
+                    cptr += sizeof (dff_chunk_header);
+                    WavpackBigEndianToNative (&dff_chunk_header, DFFChunkHeaderFormat);
+
+                    if (dff_chunk_header.ckDataSize > 0 && dff_chunk_header.ckDataSize <= eptr - cptr) {
+                        if (!strncmp (dff_chunk_header.ckID, ""FS  "", 4) && dff_chunk_header.ckDataSize == 4) {
+                            memcpy (&sampleRate, cptr, sizeof (sampleRate));
+                            WavpackBigEndianToNative (&sampleRate, ""L"");
+                            cptr += dff_chunk_header.ckDataSize;
+
+                            if (debug_logging_mode)
+                                error_line (""got sample rate of %u Hz"", sampleRate);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CHNL"", 4) && dff_chunk_header.ckDataSize >= 2) {
+                            memcpy (&numChannels, cptr, sizeof (numChannels));
+                            WavpackBigEndianToNative (&numChannels, ""S"");
+                            cptr += sizeof (numChannels);
+
+                            chansSpecified = (int)(dff_chunk_header.ckDataSize - sizeof (numChannels)) / 4;
+
+                            if (numChannels < chansSpecified || numChannels < 1 || numChannels > 256) {
+                                error_line (""%s is not a valid .DFF file!"", infilename);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            while (chansSpecified--) {
+                                if (!strncmp (cptr, ""SLFT"", 4) || !strncmp (cptr, ""MLFT"", 4))
+                                    chanMask |= 0x1;
+                                else if (!strncmp (cptr, ""SRGT"", 4) || !strncmp (cptr, ""MRGT"", 4))
+                                    chanMask |= 0x2;
+                                else if (!strncmp (cptr, ""LS  "", 4))
+                                    chanMask |= 0x10;
+                                else if (!strncmp (cptr, ""RS  "", 4))
+                                    chanMask |= 0x20;
+                                else if (!strncmp (cptr, ""C   "", 4))
+                                    chanMask |= 0x4;
+                                else if (!strncmp (cptr, ""LFE "", 4))
+                                    chanMask |= 0x8;
+                                else
+                                    if (debug_logging_mode)
+                                        error_line (""undefined channel ID %c%c%c%c"", cptr [0], cptr [1], cptr [2], cptr [3]);
+
+                                cptr += 4;
+                            }
+
+                            if (debug_logging_mode)
+                                error_line (""%d channels, mask = 0x%08x"", numChannels, chanMask);
+                        }
+                        else if (!strncmp (dff_chunk_header.ckID, ""CMPR"", 4) && dff_chunk_header.ckDataSize >= 4) {
+                            if (strncmp (cptr, ""DSD "", 4)) {
+                                error_line (""DSDIFF files must be uncompressed, not \""%c%c%c%c\""!"",
+                                    cptr [0], cptr [1], cptr [2], cptr [3]);
+                                free (prop_chunk);
+                                return WAVPACK_SOFT_ERROR;
+                            }
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                        else {
+                            if (debug_logging_mode)
+                                error_line (""got PROP/SND chunk type \""%c%c%c%c\"" of %d bytes"", dff_chunk_header.ckID [0],
+                                    dff_chunk_header.ckID [1], dff_chunk_header.ckID [2], dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+                            cptr += dff_chunk_header.ckDataSize;
+                        }
+                    }
+                    else {
+                        error_line (""%s is not a valid .DFF file!"", infilename);
+                        free (prop_chunk);
+                        return WAVPACK_SOFT_ERROR;
+                    }
+                }
+
+                if (chanMask && (config->channel_mask || (config->qmode & QMODE_CHANS_UNASSIGNED))) {
+                    error_line (""this DSDIFF file already has channel order information!"");
+                    free (prop_chunk);
+                    return WAVPACK_SOFT_ERROR;
+                }
+                else if (chanMask)
+                    config->channel_mask = chanMask;
+
+                config->bits_per_sample = 8;
+                config->bytes_per_sample = 1;
+                config->num_channels = numChannels;
+                config->sample_rate = sampleRate / 8;
+                config->qmode |= QMODE_DSD_MSB_FIRST;
+            }
+            else if (debug_logging_mode)
+                error_line (""got unknown PROP chunk type \""%c%c%c%c\"" of %d bytes"",
+                    prop_chunk [0], prop_chunk [1], prop_chunk [2], prop_chunk [3], dff_chunk_header.ckDataSize);
+
+            free (prop_chunk);
+         }
+         else if (!strncmp (dff_chunk_header.ckID, ""DSD "", 4)) {
+ 
+            if (!config->num_channels || !config->sample_rate) {
+                 error_line (""%s is not a valid .DFF file!"", infilename);
+                 return WAVPACK_SOFT_ERROR;
+             }
+
+            total_samples = dff_chunk_header.ckDataSize / config->num_channels;
+            break;
+        }
+        else {          // just copy unknown chunks to output file
+
+            int bytes_to_copy = (int)(((dff_chunk_header.ckDataSize) + 1) & ~(int64_t)1);
+            char *buff;
+
+            if (bytes_to_copy < 0 || bytes_to_copy > 4194304) {
+                error_line (""%s is not a valid .DFF file!"", infilename);
+                return WAVPACK_SOFT_ERROR;
+            }
+
+            buff = malloc (bytes_to_copy);
+
+            if (debug_logging_mode)
+                error_line (""extra unknown chunk \""%c%c%c%c\"" of %d bytes"",
+                    dff_chunk_header.ckID [0], dff_chunk_header.ckID [1], dff_chunk_header.ckID [2],
+                    dff_chunk_header.ckID [3], dff_chunk_header.ckDataSize);
+
+            if (!DoReadFile (infile, buff, bytes_to_copy, &bcount) ||
+                bcount != bytes_to_copy ||
+                (!(config->qmode & QMODE_NO_STORE_WRAPPER) &&
+                !WavpackAddWrapper (wpc, buff, bytes_to_copy))) {
+                    error_line (""%s"", WavpackGetErrorMessage (wpc));
+                    free (buff);
+                    return WAVPACK_SOFT_ERROR;
+            }
+
+            free (buff);
+        }
+    }
+
+    if (debug_logging_mode)
+        error_line (""setting configuration with %lld samples"", total_samples);
+
+    if (!WavpackSetConfiguration64 (wpc, config, total_samples, NULL)) {
+        error_line (""%s: %s"", infilename, WavpackGetErrorMessage (wpc));
+        return WAVPACK_SOFT_ERROR;
+    }
+
+    return WAVPACK_NO_ERROR;
+}
+","The `ParseDsdiffHeaderConfig` function processes a DSDIFF (.DFF) audio file header and its associated chunks, validating the file's structure and extracting essential metadata such as sample rate, number of channels, and total samples. It begins by reading the file header and checking for validity, then iterates through the chunks, handling specific types like ""FVER"" for version, ""PROP"" for properties, and ""DSD"" for audio data. The function also manages error reporting and logging, ensuring that any inconsistencies or issues are flagged. Finally, it configures the Wavpack context with the parsed information, returning an error code if any issues arise.","The code processes a DSDIFF audio file by reading its header and validating its structure to ensure it conforms to the expected format. It extracts key metadata, such as the sample rate and number of channels, while handling various chunk types, including version and property information. The function checks for errors throughout the reading process, logging any issues encountered, and manages the storage of relevant data. Finally, it configures the audio context with the extracted information, returning an error code if any discrepancies are found, ensuring the integrity of the audio file being processed.","The vulnerability in the original code stemmed from the lack of validation for the sample rate before processing the audio data, which could lead to undefined behavior if the sample rate was not specified or was zero. This oversight could result in errors during playback or processing of the audio file. The fixed code addresses this issue by adding a check to ensure that both the number of channels and the sample rate are valid (non-zero) before proceeding with the calculation of total samples. This additional validation enhances the robustness of the code and prevents potential crashes or incorrect audio processing.","The vulnerability in the original code arose from the absence of checks to ensure that the sample rate was specified and non-zero before processing audio data, which could lead to undefined behavior or errors during playback. This lack of validation could result in incorrect calculations or crashes when handling audio files. The fixed code addresses this issue by implementing a validation step that confirms both the presence and validity of the sample rate before proceeding with further processing. This enhancement ensures that the audio data is handled correctly, thereby improving the overall stability and reliability of the code.","The vulnerability was fixed by adding a validation check for the sample rate and the number of channels before processing the audio data. In the updated code, a condition was introduced to verify that both `config->num_channels` and `config->sample_rate` are non-zero. If either of these values is invalid, an error message is generated, and the function returns an error code, preventing further processing of the audio file. This ensures that the subsequent calculation of `total_samples` is based on valid parameters, thereby enhancing the robustness and reliability of the audio processing functionality.","The vulnerability was addressed by implementing a validation step that checks the validity of critical parameters before proceeding with audio data processing. Specifically, the code now verifies that both the sample rate and the number of channels are specified and non-zero. If either of these conditions is not met, an error message is generated, and the function exits early with an error code. This enhancement prevents the processing of invalid audio configurations, ensuring that subsequent calculations and operations are based on valid and reliable data, thereby improving the overall stability and correctness of the audio handling functionality.","CWE-20, CWE-1254, CWE-684, CWE-754, CWE-391, CWE-1077, CWE-178, CWE-75, CWE-1289, CWE-74",N,-1.0,"5,5","5,5","4,4","4,5"

@@ -1,0 +1,1754 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,178499,178499,,Remote,Not required,,CVE-2018-0737,https://www.cvedetails.com/cve/CVE-2018-0737/,CWE-327,Medium,Partial,,,2018-04-16,4.3,The OpenSSL RSA Key generation algorithm has been shown to be vulnerable to a cache timing side channel attack. An attacker with sufficient access to mount cache timing attacks during the RSA key generation process could recover the private key. Fixed in OpenSSL 1.1.0i-dev (Affected 1.1.0-1.1.0h). Fixed in OpenSSL 1.0.2p-dev (Affected 1.0.2b-1.0.2o).,2019-10-02,,2,https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=6939eab03a6e23d2bd2c3f5e34fe1d48e542e787,6939eab03a6e23d2bd2c3f5e34fe1d48e542e787,,0,,,"static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_secure_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    {
+        BIGNUM *pr0 = BN_new();
+
+        if (pr0 == NULL)
+            goto err;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+        if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx)) {
+            BN_free(pr0);
+            goto err;               /* d */
+        }
+        /* We MUST free pr0 before any further use of r0 */
+        BN_free(pr0);
+    }
+
+    {
+        BIGNUM *d = BN_new();
+
+        if (d == NULL)
+            goto err;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+
+        if (   /* calculate d mod (p-1) */
+               !BN_mod(rsa->dmp1, d, r1, ctx)
+               /* calculate d mod (q-1) */
+            || !BN_mod(rsa->dmq1, d, r2, ctx)) {
+            BN_free(d);
+            goto err;
+        }
+        /* We MUST free d before any further use of rsa->d */
+        BN_free(d);
+    }
+
+    {
+        BIGNUM *p = BN_new();
+
+        if (p == NULL)
+            goto err;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+
+        /* calculate inverse of q mod p */
+        if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx)) {
+            BN_free(p);
+            goto err;
+        }
+        /* We MUST free p before any further use of rsa->p */
+        BN_free(p);
+    }
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL)
+        BN_CTX_end(ctx);
+    BN_CTX_free(ctx);
+
+    return ok;
+}
+","static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_secure_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    {
+        BIGNUM *pr0 = BN_new();
+
+        if (pr0 == NULL)
+            goto err;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+        if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx)) {
+            BN_free(pr0);
+            goto err;               /* d */
+        }
+        /* We MUST free pr0 before any further use of r0 */
+        BN_free(pr0);
+    }
+
+    {
+        BIGNUM *d = BN_new();
+
+        if (d == NULL)
+            goto err;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+
+        if (   /* calculate d mod (p-1) */
+               !BN_mod(rsa->dmp1, d, r1, ctx)
+               /* calculate d mod (q-1) */
+            || !BN_mod(rsa->dmq1, d, r2, ctx)) {
+            BN_free(d);
+            goto err;
+        }
+        /* We MUST free d before any further use of rsa->d */
+        BN_free(d);
+    }
+
+    {
+        BIGNUM *p = BN_new();
+
+        if (p == NULL)
+            goto err;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+
+        /* calculate inverse of q mod p */
+        if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx)) {
+            BN_free(p);
+            goto err;
+        }
+        /* We MUST free p before any further use of rsa->p */
+        BN_free(p);
+    }
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL)
+        BN_CTX_end(ctx);
+    BN_CTX_free(ctx);
+
+    return ok;
+}
+",C,"    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+",,e4fa7cc3fb9909c6aee411de15a06f918687b8e2,"@@ -89,6 +89,8 @@ static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
++    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
++    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {",openssl,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rsa/rsa_gen.c;h=79f77e3eafdf561d810e7d44341ae53cbbf3cd43;hb=6939eab03a6e23d2bd2c3f5e34fe1d48e542e787,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rsa/rsa_gen.c;h=9af43e058631a7c709af3ea4ec0762eef2021ed4,1,"static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_secure_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+//fix_flaw_line_below:
+//    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+//fix_flaw_line_below:
+//    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    {
+        BIGNUM *pr0 = BN_new();
+
+        if (pr0 == NULL)
+            goto err;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+        if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx)) {
+            BN_free(pr0);
+            goto err;               /* d */
+        }
+        /* We MUST free pr0 before any further use of r0 */
+        BN_free(pr0);
+    }
+
+    {
+        BIGNUM *d = BN_new();
+
+        if (d == NULL)
+            goto err;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+
+        if (   /* calculate d mod (p-1) */
+               !BN_mod(rsa->dmp1, d, r1, ctx)
+               /* calculate d mod (q-1) */
+            || !BN_mod(rsa->dmq1, d, r2, ctx)) {
+            BN_free(d);
+            goto err;
+        }
+        /* We MUST free d before any further use of rsa->d */
+        BN_free(d);
+    }
+
+    {
+        BIGNUM *p = BN_new();
+
+        if (p == NULL)
+            goto err;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+
+        /* calculate inverse of q mod p */
+        if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx)) {
+            BN_free(p);
+            goto err;
+        }
+        /* We MUST free p before any further use of rsa->p */
+        BN_free(p);
+    }
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL)
+        BN_CTX_end(ctx);
+    BN_CTX_free(ctx);
+
+    return ok;
+}
+",178499,"static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_secure_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    {
+        BIGNUM *pr0 = BN_new();
+
+        if (pr0 == NULL)
+            goto err;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+        if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx)) {
+            BN_free(pr0);
+            goto err;               /* d */
+        }
+        /* We MUST free pr0 before any further use of r0 */
+        BN_free(pr0);
+    }
+
+    {
+        BIGNUM *d = BN_new();
+
+        if (d == NULL)
+            goto err;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+
+        if (   /* calculate d mod (p-1) */
+               !BN_mod(rsa->dmp1, d, r1, ctx)
+               /* calculate d mod (q-1) */
+            || !BN_mod(rsa->dmq1, d, r2, ctx)) {
+            BN_free(d);
+            goto err;
+        }
+        /* We MUST free d before any further use of rsa->d */
+        BN_free(d);
+    }
+
+    {
+        BIGNUM *p = BN_new();
+
+        if (p == NULL)
+            goto err;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+
+        /* calculate inverse of q mod p */
+        if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx)) {
+            BN_free(p);
+            goto err;
+        }
+        /* We MUST free p before any further use of rsa->p */
+        BN_free(p);
+    }
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL)
+        BN_CTX_end(ctx);
+    BN_CTX_free(ctx);
+
+    return ok;
+}
+","static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_secure_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_secure_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    {
+        BIGNUM *pr0 = BN_new();
+
+        if (pr0 == NULL)
+            goto err;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+        if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx)) {
+            BN_free(pr0);
+            goto err;               /* d */
+        }
+        /* We MUST free pr0 before any further use of r0 */
+        BN_free(pr0);
+    }
+
+    {
+        BIGNUM *d = BN_new();
+
+        if (d == NULL)
+            goto err;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+
+        if (   /* calculate d mod (p-1) */
+               !BN_mod(rsa->dmp1, d, r1, ctx)
+               /* calculate d mod (q-1) */
+            || !BN_mod(rsa->dmq1, d, r2, ctx)) {
+            BN_free(d);
+            goto err;
+        }
+        /* We MUST free d before any further use of rsa->d */
+        BN_free(d);
+    }
+
+    {
+        BIGNUM *p = BN_new();
+
+        if (p == NULL)
+            goto err;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+
+        /* calculate inverse of q mod p */
+        if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx)) {
+            BN_free(p);
+            goto err;
+        }
+        /* We MUST free p before any further use of rsa->p */
+        BN_free(p);
+    }
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL)
+        BN_CTX_end(ctx);
+    BN_CTX_free(ctx);
+
+    return ok;
+}
+","The `rsa_builtin_keygen` function generates RSA key pairs by creating two large prime numbers, `p` and `q`, based on the specified bit length. It first checks if the bit size is adequate, then initializes necessary BIGNUM variables and a context for calculations. The function sets the public exponent `e` and ensures that `p` and `q` are coprime to `e` by using modular inverses. After generating the primes, it computes the RSA modulus `n`, the private exponent `d`, and the additional parameters required for efficient decryption. The function handles errors gracefully and returns a success indicator.","The code implements a function to generate RSA key pairs, ensuring the keys are of sufficient size for security. It begins by validating the bit length and initializing necessary components for calculations. The function sets a public exponent and generates two large prime numbers that are coprime to this exponent. After successfully generating the primes, it computes the RSA modulus and the private exponent, along with additional parameters for efficient decryption. The function includes error handling to manage any issues during the key generation process and returns a success status upon completion.","The vulnerability in the original code, identified as CWE-327, arises from the use of non-constant time operations during key generation, which can lead to timing attacks. Specifically, the code did not set constant time flags for the prime numbers, allowing an attacker to infer information about the generated keys based on the time taken for operations. In the fixed code, the addition of constant time flags to the prime variables ensures that operations involving these variables execute in a consistent time frame, regardless of their values, thereby mitigating the risk of timing attacks and enhancing the overall security of the key generation process.","The vulnerability identified as CWE-327 in the original code stems from the lack of constant-time operations during the key generation process, which can expose the system to timing attacks. This occurs when the execution time of cryptographic operations varies based on the input values, allowing attackers to glean sensitive information about the keys being generated. The fixed code addresses this issue by implementing constant-time flags for critical variables involved in the key generation, ensuring that all operations execute in a uniform time regardless of the values, thereby significantly reducing the risk of timing-based attacks and enhancing security.","The vulnerability was fixed by adding constant-time flags to critical variables involved in the key generation process. Specifically, the flags were set using the `BN_set_flags` function for the prime numbers and other relevant BIGNUM variables. This ensures that operations involving these variables, such as modular inverses and comparisons, execute in a consistent time frame, regardless of their values. By applying the `BN_FLG_CONSTTIME` flag to the prime numbers and other components, the code mitigates the risk of timing attacks, thereby enhancing the overall security of the RSA key generation process.","The vulnerability was fixed by implementing constant-time operations for critical variables involved in the key generation process. This was achieved by applying specific flags that ensure all operations execute in a uniform time, regardless of the values being processed. By enforcing this consistent timing, the code prevents variations in execution time that could be exploited by attackers to infer sensitive information about the generated keys. This enhancement significantly reduces the risk of timing attacks, thereby improving the overall security of the cryptographic key generation process.","CWE-208, CWE-203, CWE-385, CWE-325, CWE-326, CWE-327, CWE-338, CWE-310, CWE-311, CWE-613",N,-1.0,"4,5","4,3","4,4","4,4"
+1,1,178500,178500,,Remote,Not required,,CVE-2018-0737,https://www.cvedetails.com/cve/CVE-2018-0737/,CWE-327,Medium,Partial,,,2018-04-16,4.3,The OpenSSL RSA Key generation algorithm has been shown to be vulnerable to a cache timing side channel attack. An attacker with sufficient access to mount cache timing attacks during the RSA key generation process could recover the private key. Fixed in OpenSSL 1.1.0i-dev (Affected 1.1.0-1.1.0h). Fixed in OpenSSL 1.0.2p-dev (Affected 1.0.2b-1.0.2o).,2019-10-02,,2,https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=349a41da1ad88ad87825414752a8ff5fdd6a6c3f,349a41da1ad88ad87825414752a8ff5fdd6a6c3f,,0,,,"static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    BIGNUM local_r0, local_d, local_p;
+    BIGNUM *pr0, *d, *p;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        pr0 = &local_r0;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+    } else
+        pr0 = r0;
+    if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))
+        goto err;               /* d */
+
+    /* set up d for correct BN_FLG_CONSTTIME flag */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        d = &local_d;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+    } else
+        d = rsa->d;
+
+    /* calculate d mod (p-1) */
+    if (!BN_mod(rsa->dmp1, d, r1, ctx))
+        goto err;
+
+    /* calculate d mod (q-1) */
+    if (!BN_mod(rsa->dmq1, d, r2, ctx))
+        goto err;
+
+    /* calculate inverse of q mod p */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        p = &local_p;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+    } else
+        p = rsa->p;
+    if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx))
+        goto err;
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL) {
+        BN_CTX_end(ctx);
+        BN_CTX_free(ctx);
+    }
+
+    return ok;
+}
+","static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    BIGNUM local_r0, local_d, local_p;
+    BIGNUM *pr0, *d, *p;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        pr0 = &local_r0;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+    } else
+        pr0 = r0;
+    if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))
+        goto err;               /* d */
+
+    /* set up d for correct BN_FLG_CONSTTIME flag */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        d = &local_d;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+    } else
+        d = rsa->d;
+
+    /* calculate d mod (p-1) */
+    if (!BN_mod(rsa->dmp1, d, r1, ctx))
+        goto err;
+
+    /* calculate d mod (q-1) */
+    if (!BN_mod(rsa->dmq1, d, r2, ctx))
+        goto err;
+
+    /* calculate inverse of q mod p */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        p = &local_p;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+    } else
+        p = rsa->p;
+    if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx))
+        goto err;
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL) {
+        BN_CTX_end(ctx);
+        BN_CTX_free(ctx);
+    }
+
+    return ok;
+}
+",C,"    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+",,d1a64149b061172d120559aea289498ec680b497,"@@ -156,6 +156,8 @@ static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
++    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
++    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {",openssl,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rsa/rsa_gen.c;h=42b89a8dfaa03fec1beff843980a277c6cefb620;hb=349a41da1ad88ad87825414752a8ff5fdd6a6c3f,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rsa/rsa_gen.c;h=9ca5dfefb7073633828bf066dbbe07082a32564a,1,"static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    BIGNUM local_r0, local_d, local_p;
+    BIGNUM *pr0, *d, *p;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+//fix_flaw_line_below:
+//    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+//fix_flaw_line_below:
+//    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        pr0 = &local_r0;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+    } else
+        pr0 = r0;
+    if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))
+        goto err;               /* d */
+
+    /* set up d for correct BN_FLG_CONSTTIME flag */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        d = &local_d;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+    } else
+        d = rsa->d;
+
+    /* calculate d mod (p-1) */
+    if (!BN_mod(rsa->dmp1, d, r1, ctx))
+        goto err;
+
+    /* calculate d mod (q-1) */
+    if (!BN_mod(rsa->dmq1, d, r2, ctx))
+        goto err;
+
+    /* calculate inverse of q mod p */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        p = &local_p;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+    } else
+        p = rsa->p;
+    if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx))
+        goto err;
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL) {
+        BN_CTX_end(ctx);
+        BN_CTX_free(ctx);
+    }
+
+    return ok;
+}
+",178500,"static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    BIGNUM local_r0, local_d, local_p;
+    BIGNUM *pr0, *d, *p;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        pr0 = &local_r0;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+    } else
+        pr0 = r0;
+    if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))
+        goto err;               /* d */
+
+    /* set up d for correct BN_FLG_CONSTTIME flag */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        d = &local_d;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+    } else
+        d = rsa->d;
+
+    /* calculate d mod (p-1) */
+    if (!BN_mod(rsa->dmp1, d, r1, ctx))
+        goto err;
+
+    /* calculate d mod (q-1) */
+    if (!BN_mod(rsa->dmq1, d, r2, ctx))
+        goto err;
+
+    /* calculate inverse of q mod p */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        p = &local_p;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+    } else
+        p = rsa->p;
+    if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx))
+        goto err;
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL) {
+        BN_CTX_end(ctx);
+        BN_CTX_free(ctx);
+    }
+
+    return ok;
+}
+","static int rsa_builtin_keygen(RSA *rsa, int bits, BIGNUM *e_value,
+                              BN_GENCB *cb)
+{
+    BIGNUM *r0 = NULL, *r1 = NULL, *r2 = NULL, *r3 = NULL, *tmp;
+    BIGNUM local_r0, local_d, local_p;
+    BIGNUM *pr0, *d, *p;
+    int bitsp, bitsq, ok = -1, n = 0;
+    BN_CTX *ctx = NULL;
+    unsigned long error = 0;
+
+    /*
+     * When generating ridiculously small keys, we can get stuck
+     * continually regenerating the same prime values.
+     */
+    if (bits < 16) {
+        ok = 0;             /* we set our own err */
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, RSA_R_KEY_SIZE_TOO_SMALL);
+        goto err;
+    }
+
+    ctx = BN_CTX_new();
+    if (ctx == NULL)
+        goto err;
+    BN_CTX_start(ctx);
+    r0 = BN_CTX_get(ctx);
+    r1 = BN_CTX_get(ctx);
+    r2 = BN_CTX_get(ctx);
+    r3 = BN_CTX_get(ctx);
+    if (r3 == NULL)
+        goto err;
+
+    bitsp = (bits + 1) / 2;
+    bitsq = bits - bitsp;
+
+    /* We need the RSA components non-NULL */
+    if (!rsa->n && ((rsa->n = BN_new()) == NULL))
+        goto err;
+    if (!rsa->d && ((rsa->d = BN_new()) == NULL))
+        goto err;
+    if (!rsa->e && ((rsa->e = BN_new()) == NULL))
+        goto err;
+    if (!rsa->p && ((rsa->p = BN_new()) == NULL))
+        goto err;
+    if (!rsa->q && ((rsa->q = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmp1 && ((rsa->dmp1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->dmq1 && ((rsa->dmq1 = BN_new()) == NULL))
+        goto err;
+    if (!rsa->iqmp && ((rsa->iqmp = BN_new()) == NULL))
+        goto err;
+
+     if (BN_copy(rsa->e, e_value) == NULL)
+         goto err;
+ 
+    BN_set_flags(rsa->p, BN_FLG_CONSTTIME);
+    BN_set_flags(rsa->q, BN_FLG_CONSTTIME);
+     BN_set_flags(r2, BN_FLG_CONSTTIME);
+     /* generate p and q */
+     for (;;) {
+        if (!BN_sub(r2, rsa->p, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 0))
+        goto err;
+    for (;;) {
+        do {
+            if (!BN_generate_prime_ex(rsa->q, bitsq, 0, NULL, NULL, cb))
+                goto err;
+        } while (BN_cmp(rsa->p, rsa->q) == 0);
+        if (!BN_sub(r2, rsa->q, BN_value_one()))
+            goto err;
+        ERR_set_mark();
+        if (BN_mod_inverse(r1, r2, rsa->e, ctx) != NULL) {
+            /* GCD == 1 since inverse exists */
+            break;
+        }
+        error = ERR_peek_last_error();
+        if (ERR_GET_LIB(error) == ERR_LIB_BN
+            && ERR_GET_REASON(error) == BN_R_NO_INVERSE) {
+            /* GCD != 1 */
+            ERR_pop_to_mark();
+        } else {
+            goto err;
+        }
+        if (!BN_GENCB_call(cb, 2, n++))
+            goto err;
+    }
+    if (!BN_GENCB_call(cb, 3, 1))
+        goto err;
+    if (BN_cmp(rsa->p, rsa->q) < 0) {
+        tmp = rsa->p;
+        rsa->p = rsa->q;
+        rsa->q = tmp;
+    }
+
+    /* calculate n */
+    if (!BN_mul(rsa->n, rsa->p, rsa->q, ctx))
+        goto err;
+
+    /* calculate d */
+    if (!BN_sub(r1, rsa->p, BN_value_one()))
+        goto err;               /* p-1 */
+    if (!BN_sub(r2, rsa->q, BN_value_one()))
+        goto err;               /* q-1 */
+    if (!BN_mul(r0, r1, r2, ctx))
+        goto err;               /* (p-1)(q-1) */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        pr0 = &local_r0;
+        BN_with_flags(pr0, r0, BN_FLG_CONSTTIME);
+    } else
+        pr0 = r0;
+    if (!BN_mod_inverse(rsa->d, rsa->e, pr0, ctx))
+        goto err;               /* d */
+
+    /* set up d for correct BN_FLG_CONSTTIME flag */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        d = &local_d;
+        BN_with_flags(d, rsa->d, BN_FLG_CONSTTIME);
+    } else
+        d = rsa->d;
+
+    /* calculate d mod (p-1) */
+    if (!BN_mod(rsa->dmp1, d, r1, ctx))
+        goto err;
+
+    /* calculate d mod (q-1) */
+    if (!BN_mod(rsa->dmq1, d, r2, ctx))
+        goto err;
+
+    /* calculate inverse of q mod p */
+    if (!(rsa->flags & RSA_FLAG_NO_CONSTTIME)) {
+        p = &local_p;
+        BN_with_flags(p, rsa->p, BN_FLG_CONSTTIME);
+    } else
+        p = rsa->p;
+    if (!BN_mod_inverse(rsa->iqmp, rsa->q, p, ctx))
+        goto err;
+
+    ok = 1;
+ err:
+    if (ok == -1) {
+        RSAerr(RSA_F_RSA_BUILTIN_KEYGEN, ERR_LIB_BN);
+        ok = 0;
+    }
+    if (ctx != NULL) {
+        BN_CTX_end(ctx);
+        BN_CTX_free(ctx);
+    }
+
+    return ok;
+}
+","The `rsa_builtin_keygen` function generates RSA key pairs by creating two large prime numbers, `p` and `q`, based on the specified bit length. It first checks if the bit size is adequate and initializes necessary variables and contexts. The function then generates the primes while ensuring they are coprime to a given public exponent `e_value`. After obtaining `p` and `q`, it computes the modulus `n`, the private exponent `d`, and additional parameters for efficient decryption. The function employs constant-time operations to enhance security against timing attacks and handles errors gracefully, returning a success or failure status.","The code implements a function to generate RSA key pairs, ensuring the creation of two large prime numbers suitable for cryptographic use. It begins by validating the specified key size and initializing necessary resources. The function then iteratively generates the prime numbers while ensuring they are coprime to a given public exponent. Once the primes are established, it calculates the modulus and private exponent, along with additional parameters for efficient decryption. Throughout the process, it employs techniques to enhance security against timing attacks and manages errors effectively, returning a status indicating success or failure.","The vulnerability in the original code arises from the lack of constant-time operations when handling sensitive cryptographic data, which can lead to timing attacks. Specifically, the calculations involving the private exponent and prime numbers did not consistently use constant-time flags, making it possible for an attacker to infer information based on execution timing. In the fixed code, the use of constant-time flags is explicitly applied to the prime numbers and the private exponent, ensuring that operations like modular inverses and multiplications do not leak timing information, thus mitigating the risk of side-channel attacks.","The vulnerability in the original code stems from the absence of constant-time operations when processing sensitive cryptographic data, which can expose the system to timing attacks. This lack of uniform execution time for operations involving private keys and prime numbers allows attackers to potentially infer information based on the time taken for computations. The fixed code addresses this issue by implementing constant-time flags for critical calculations, ensuring that all operations execute in a consistent time frame regardless of input values. This enhancement significantly reduces the risk of side-channel attacks that exploit timing discrepancies to compromise security.","The vulnerability was fixed by incorporating constant-time flags into critical operations involving sensitive data. In the updated code, the flags are set for the prime numbers and the private exponent using functions like `BN_set_flags` and `BN_with_flags`. Specifically, the flags are applied to the prime numbers `p` and `q`, as well as to the private exponent `d`, ensuring that operations such as modular inverses and multiplications are executed in constant time. This change mitigates the risk of timing attacks by preventing attackers from gaining insights based on the execution time of cryptographic computations.","The vulnerability was addressed by implementing constant-time operations for sensitive cryptographic calculations, which helps prevent timing attacks. The updated code ensures that all critical computations involving private keys and prime numbers are executed in a consistent time frame, regardless of the input values. This was achieved by applying specific flags that enforce constant-time behavior during operations, thereby eliminating variations in execution time that could be exploited by attackers. As a result, the changes significantly enhance the security of the cryptographic process by reducing the risk of information leakage through timing discrepancies.","CWE-208, CWE-385, CWE-325, CWE-327, CWE-203, CWE-310, CWE-361, CWE-341, CWE-320, CWE-326",N,-1.0,"4,4","5,5","4,4","4,4"

@@ -1,0 +1,159 @@
+,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic
+0,186996,186996,,Remote,Not required,Partial,CVE-2019-5816,https://www.cvedetails.com/cve/CVE-2019-5816/,CWE-664,Medium,Partial,Partial,,2019-06-27,6.8,Process lifetime issue in Chrome in Google Chrome on Android prior to 74.0.3729.108 allowed a remote attacker to potentially persist an exploited process via a crafted HTML page.,2019-07-25,,1,https://github.com/chromium/chromium/commit/37a0e90a956194a066dd31edd5b5ac5045701d31,37a0e90a956194a066dd31edd5b5ac5045701d31,"android: Stop child process in GetTerminationInfo
+
+Android currently abuses TerminationStatus to pass whether process is
+""oom protected"" rather than whether it has died or not. This confuses
+cross-platform code about the state process.
+
+Only TERMINATION_STATUS_STILL_RUNNING is treated as still running, which
+android never passes. Also it appears to be ok to kill the process in
+getTerminationInfo as it's only called when the child process is dead or
+dying. Also posix kills the process on some calls.
+
+Bug: 940245
+Change-Id: Id165711848c279bbe77ef8a784c8cf0b14051877
+Reviewed-on: https://chromium-review.googlesource.com/c/chromium/src/+/1516284
+Reviewed-by: Robert Sesek <rsesek@chromium.org>
+Reviewed-by: ssid <ssid@chromium.org>
+Commit-Queue: Bo <boliu@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#639639}",1,content/browser/child_process_launcher_helper_android.cc,"{""sha"": ""c9c2f22ea7258c294436830f0ede7dbc2613d60c"", ""filename"": ""content/browser/child_process_launcher_helper_android.cc"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/chromium/chromium/blob/37a0e90a956194a066dd31edd5b5ac5045701d31/content/browser/child_process_launcher_helper_android.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/37a0e90a956194a066dd31edd5b5ac5045701d31/content/browser/child_process_launcher_helper_android.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/browser/child_process_launcher_helper_android.cc?ref=37a0e90a956194a066dd31edd5b5ac5045701d31"", ""patch"": ""@@ -159,7 +159,7 @@ ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(\n   if (!java_peer_avaiable_on_client_thread_)\n     return info;\n \n-  Java_ChildProcessLauncherHelperImpl_getTerminationInfo(\n+  Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop(\n       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));\n \n   base::android::ApplicationState app_state =""}<_**next**_>{""sha"": ""bbe5023065b07f7b489d38f20714ced2ed05ff5a"", ""filename"": ""content/public/android/java/src/org/chromium/content/browser/ChildProcessLauncherHelperImpl.java"", ""status"": ""modified"", ""additions"": 2, ""deletions"": 1, ""changes"": 3, ""blob_url"": ""https://github.com/chromium/chromium/blob/37a0e90a956194a066dd31edd5b5ac5045701d31/content/public/android/java/src/org/chromium/content/browser/ChildProcessLauncherHelperImpl.java"", ""raw_url"": ""https://github.com/chromium/chromium/raw/37a0e90a956194a066dd31edd5b5ac5045701d31/content/public/android/java/src/org/chromium/content/browser/ChildProcessLauncherHelperImpl.java"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/public/android/java/src/org/chromium/content/browser/ChildProcessLauncherHelperImpl.java?ref=37a0e90a956194a066dd31edd5b5ac5045701d31"", ""patch"": ""@@ -404,7 +404,7 @@ private String getProcessType() {\n \n     // Called on client (UI or IO) thread.\n     @CalledByNative\n-    private void getTerminationInfo(long terminationInfoPtr) {\n+    private void getTerminationInfoAndStop(long terminationInfoPtr) {\n         ChildProcessConnection connection = mLauncher.getConnection();\n         // Here we are accessing the connection from a thread other than the launcher thread, but it\n         // does not change once it's been set. So it is safe to test whether it's null here and\n@@ -416,6 +416,7 @@ private void getTerminationInfo(long terminationInfoPtr) {\n                 connection.isKilledByUs(), connection.hasCleanExit(),\n                 bindingCounts[ChildBindingState.STRONG], bindingCounts[ChildBindingState.MODERATE],\n                 bindingCounts[ChildBindingState.WAIVED]);\n+        LauncherThread.post(() -> mLauncher.stop());\n     }\n \n     @CalledByNative""}","ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+    const ChildProcessLauncherHelper::Process& process,
+    bool known_dead) {
+  ChildProcessTerminationInfo info;
+   if (!java_peer_avaiable_on_client_thread_)
+     return info;
+ 
+  Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop(
+       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));
+ 
+   base::android::ApplicationState app_state =
+      base::android::ApplicationStatusListener::GetState();
+  bool app_foreground =
+      app_state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
+      app_state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES;
+
+  if (app_foreground &&
+      (info.binding_state == base::android::ChildBindingState::MODERATE ||
+       info.binding_state == base::android::ChildBindingState::STRONG)) {
+    info.status = base::TERMINATION_STATUS_OOM_PROTECTED;
+  } else {
+    info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
+  }
+  return info;
+}
+","ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+    const ChildProcessLauncherHelper::Process& process,
+    bool known_dead) {
+  ChildProcessTerminationInfo info;
+   if (!java_peer_avaiable_on_client_thread_)
+     return info;
+ 
+  Java_ChildProcessLauncherHelperImpl_getTerminationInfo(
+       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));
+ 
+   base::android::ApplicationState app_state =
+      base::android::ApplicationStatusListener::GetState();
+  bool app_foreground =
+      app_state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
+      app_state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES;
+
+  if (app_foreground &&
+      (info.binding_state == base::android::ChildBindingState::MODERATE ||
+       info.binding_state == base::android::ChildBindingState::STRONG)) {
+    info.status = base::TERMINATION_STATUS_OOM_PROTECTED;
+  } else {
+    info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
+  }
+  return info;
+}
+",C,"  Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop(
+","  Java_ChildProcessLauncherHelperImpl_getTerminationInfo(
+",,"@@ -159,7 +159,7 @@ ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+   if (!java_peer_avaiable_on_client_thread_)
+     return info;
+ 
+-  Java_ChildProcessLauncherHelperImpl_getTerminationInfo(
++  Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop(
+       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));
+ 
+   base::android::ApplicationState app_state =",Chrome,37a0e90a956194a066dd31edd5b5ac5045701d31,2d627b5a8db11ddc794b98b205870d07ddbeaa7c,1,"ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+    const ChildProcessLauncherHelper::Process& process,
+    bool known_dead) {
+  ChildProcessTerminationInfo info;
+   if (!java_peer_avaiable_on_client_thread_)
+     return info;
+ 
+//flaw_line_below:
+  Java_ChildProcessLauncherHelperImpl_getTerminationInfo(
+//fix_flaw_line_below:
+//  Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop(
+       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));
+ 
+   base::android::ApplicationState app_state =
+      base::android::ApplicationStatusListener::GetState();
+  bool app_foreground =
+      app_state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
+      app_state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES;
+
+  if (app_foreground &&
+      (info.binding_state == base::android::ChildBindingState::MODERATE ||
+       info.binding_state == base::android::ChildBindingState::STRONG)) {
+    info.status = base::TERMINATION_STATUS_OOM_PROTECTED;
+  } else {
+    // Note waitpid does not work on Android since these are not actually child
+    // processes. So there is no need for base::GetTerminationInfo.
+    info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
+  }
+  return info;
+}
+",186996,"ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+    const ChildProcessLauncherHelper::Process& process,
+    bool known_dead) {
+  ChildProcessTerminationInfo info;
+   if (!java_peer_avaiable_on_client_thread_)
+     return info;
+ 
+  Java_ChildProcessLauncherHelperImpl_getTerminationInfo(
+       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));
+ 
+   base::android::ApplicationState app_state =
+      base::android::ApplicationStatusListener::GetState();
+  bool app_foreground =
+      app_state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
+      app_state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES;
+
+  if (app_foreground &&
+      (info.binding_state == base::android::ChildBindingState::MODERATE ||
+       info.binding_state == base::android::ChildBindingState::STRONG)) {
+    info.status = base::TERMINATION_STATUS_OOM_PROTECTED;
+  } else {
+    info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
+  }
+  return info;
+}
+","ChildProcessTerminationInfo ChildProcessLauncherHelper::GetTerminationInfo(
+    const ChildProcessLauncherHelper::Process& process,
+    bool known_dead) {
+  ChildProcessTerminationInfo info;
+   if (!java_peer_avaiable_on_client_thread_)
+     return info;
+ 
+  Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop(
+       AttachCurrentThread(), java_peer_, reinterpret_cast<intptr_t>(&info));
+ 
+   base::android::ApplicationState app_state =
+      base::android::ApplicationStatusListener::GetState();
+  bool app_foreground =
+      app_state == base::android::APPLICATION_STATE_HAS_RUNNING_ACTIVITIES ||
+      app_state == base::android::APPLICATION_STATE_HAS_PAUSED_ACTIVITIES;
+
+  if (app_foreground &&
+      (info.binding_state == base::android::ChildBindingState::MODERATE ||
+       info.binding_state == base::android::ChildBindingState::STRONG)) {
+    info.status = base::TERMINATION_STATUS_OOM_PROTECTED;
+  } else {
+    info.status = base::TERMINATION_STATUS_NORMAL_TERMINATION;
+  }
+  return info;
+}
+","The `GetTerminationInfo` function retrieves termination information for a child process in an Android application. It first checks if a Java peer is available on the client thread; if not, it returns an empty `ChildProcessTerminationInfo` object. If the Java peer is available, it calls a Java method to populate the `info` object with termination details. The function then assesses the application's foreground state and the binding state of the child process. Depending on these conditions, it sets the termination status to either `OOM_PROTECTED` if the app is in the foreground and the binding state is moderate or strong, or to `NORMAL_TERMINATION` otherwise, before returning the `info` object.","The function retrieves information about the termination status of a child process within an Android application. It first checks for the availability of a necessary Java interface; if it is not available, the function returns an empty status object. If the interface is accessible, it invokes a method to gather termination details. The function then evaluates whether the application is in the foreground and assesses the binding state of the child process. Based on these conditions, it determines the appropriate termination status, which is either protection from out-of-memory conditions or a normal termination, before returning the gathered information.","The vulnerability identified by CWE-664, which relates to the improper handling of resource management, was present in the original code due to the lack of a mechanism to stop the child process after retrieving termination information. In the fixed code, the function `Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop` was introduced, which not only retrieves the termination details but also ensures that the child process is stopped appropriately. This change mitigates the risk of resource leaks or unintended behavior by ensuring that the child process is properly terminated, thereby enhancing the overall stability and security of the application.","The vulnerability associated with CWE-664 arises from inadequate management of child process resources, leading to potential resource leaks or unintended behavior. In the original code, the process termination information was retrieved without ensuring that the child process was properly stopped afterward, which could result in lingering processes consuming system resources. The fix addressed this issue by incorporating a mechanism that not only retrieves the necessary termination details but also ensures the child process is appropriately terminated. This enhancement improves resource management and overall application stability, reducing the risk of resource exhaustion and related security concerns.","The vulnerability was fixed by replacing the original function call with a new one that includes a termination mechanism. In the updated code, the function `Java_ChildProcessLauncherHelperImpl_getTerminationInfoAndStop` was introduced, which not only retrieves the termination information into the `info` object but also ensures that the child process is stopped immediately afterward. This change effectively prevents resource leaks by guaranteeing that the child process does not continue running unnecessarily, thereby enhancing resource management and improving the overall stability and security of the application.","The vulnerability was fixed by implementing a new function that combines the retrieval of termination information with the immediate termination of the child process. This change ensures that, after obtaining the necessary details about the child's state, the process is properly stopped, preventing it from lingering and consuming system resources. By integrating the termination step directly into the information retrieval process, the fix enhances resource management and mitigates the risk of resource leaks, thereby improving the overall stability and security of the application. This approach ensures that all child processes are appropriately managed and terminated when no longer needed."

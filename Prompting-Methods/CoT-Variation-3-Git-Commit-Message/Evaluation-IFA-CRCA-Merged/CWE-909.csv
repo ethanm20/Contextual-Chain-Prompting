@@ -1,0 +1,198 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,188095,188095,,Local,Not required,Complete,CVE-2018-9511,https://www.cvedetails.com/cve/CVE-2018-9511/,CWE-909,Low,,,,2018-10-02,4.9,"In ipSecSetEncapSocketOwner of XfrmController.cpp, there is a possible failure to initialize a security feature due to uninitialized data. This could lead to local denial of service of IPsec on sockets with no additional execution privileges needed. User interaction is not needed for exploitation. Product: Android Versions: Android-9.0 Android ID: A-111650288",2019-10-02,DoS ,1,https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe,931418b16c7197ca2df34c2a5609e49791125abe,"Set optlen for UDP-encap check in XfrmController
+
+When setting the socket owner for an encap socket XfrmController will
+first attempt to verify that the socket has the UDP-encap socket option
+set. When doing so it would pass in an uninitialized optlen parameter
+which could cause the call to not modify the option value if the optlen
+happened to be too short. So for example if the stack happened to
+contain a zero where optlen was located the check would fail and the
+socket owner would not be changed.
+
+Fix this by setting optlen to the size of the option value parameter.
+
+Test: run cts -m CtsNetTestCases
+BUG: 111650288
+Change-Id: I57b6e9dba09c1acda71e3ec2084652e961667bd9
+(cherry picked from commit fc42a105147310bd680952d4b71fe32974bd8506)
+",1,server/XfrmController.cpp,"{""filename"": ""server/XfrmController.cpp"", ""raw_url"": ""https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe/server/XfrmController.cpp"", ""patch"": ""@@ -436,7 +436,7 @@\n\n     }\n \n     int optval;\n-    socklen_t optlen;\n+    socklen_t optlen = sizeof(optval);\n     netdutils::Status status =\n         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);\n     if (status != netdutils::status::ok) {\n""}","netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+","netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen;
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+",C,"    socklen_t optlen = sizeof(optval);
+","    socklen_t optlen;
+",,"@@ -436,7 +436,7 @@
+
+     }
+ 
+     int optval;
+-    socklen_t optlen;
++    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+",Android,https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe/,https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe%5E/,1,"netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+//flaw_line_below:
+    socklen_t optlen;
+//fix_flaw_line_below:
+//    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+",188095,"netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen;
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+","netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+","The `ipSecSetEncapSocketOwner` function in the `XfrmController` class is designed to change the ownership of a specified socket to a new user ID (`newUid`). It first verifies that the caller is the owner of the socket by checking the socket's user ID against the `callerUid`. The function also ensures that the provided file descriptor corresponds to a valid socket and checks if the socket has the appropriate UDP encapsulation options set. If all conditions are met, it attempts to change the socket's ownership using `fchown`. The function returns a status indicating success or the specific error encountered during execution.","The function is responsible for changing the ownership of a specified socket to a new user ID, ensuring that only the current owner can perform this action. It first checks if the caller is the owner of the socket and verifies that the provided file descriptor is indeed a socket. Additionally, it confirms that the socket has the correct encapsulation options set for UDP. If all conditions are satisfied, it attempts to change the socket's ownership. The function returns a status indicating either success or the specific error encountered during the process.","The vulnerability in the original code stemmed from passing an uninitialized `optlen` parameter when checking the UDP encapsulation socket option. This could lead to a situation where the length of the option value was incorrectly interpreted, potentially causing the check to fail if `optlen` was too short, thus allowing unauthorized changes to the socket owner. The fix involved explicitly setting `optlen` to the size of the option value parameter before the `getsockopt` call, ensuring that the correct length is used and preventing the possibility of bypassing the ownership check.","The vulnerability in the original code arose from using an uninitialized parameter when checking for a specific socket option, which could lead to incorrect behavior if the parameter's value was unexpectedly short. This flaw could allow the ownership change of a socket to proceed without proper validation, potentially compromising security. The fix involved explicitly initializing the parameter to the correct size of the option value before performing the check. This change ensures that the socket option is accurately assessed, thereby preventing unauthorized modifications to the socket's ownership and enhancing overall security.","The vulnerability was fixed by explicitly setting the `optlen` variable to the size of the `optval` parameter before calling the `getsockopt` function. In the original code, `optlen` was uninitialized, which could lead to incorrect behavior if it contained a value that was too short, potentially allowing unauthorized changes to the socket owner. By initializing `optlen` to `sizeof(optval)`, the code ensures that the correct length is used during the socket option check, thereby preventing the possibility of bypassing the ownership validation and enhancing the security of the socket ownership change process.","The vulnerability was addressed by ensuring that the length parameter used in the socket option check was properly initialized to the correct size of the option value. This change prevents the possibility of using an uninitialized length, which could lead to incorrect behavior during the validation process. By explicitly setting the length to the appropriate value, the code guarantees that the socket option is accurately assessed, thereby ensuring that the ownership change is only permitted when the necessary conditions are met. This fix enhances the security of the socket ownership management process.","CWE-908, CWE-665, CWE-457, CWE-824, CWE-119, CWE-788, CWE-122, CWE-125, CWE-787, CWE-126",N,-1.0,"5,5","5,5","5,5","4,5"

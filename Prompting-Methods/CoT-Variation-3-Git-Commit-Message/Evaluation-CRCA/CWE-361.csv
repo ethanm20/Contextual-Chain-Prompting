@@ -1,0 +1,56 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,145685,145685,,Remote,Not required,Complete,CVE-2016-1643,https://www.cvedetails.com/cve/CVE-2016-1643/,CWE-361,Medium,Complete,Complete,,2016-03-13,9.3,"The ImageInputType::ensurePrimaryContent function in WebKit/Source/core/html/forms/ImageInputType.cpp in Blink, as used in Google Chrome before 49.0.2623.87, does not properly maintain the user agent shadow DOM, which allows remote attackers to cause a denial of service or possibly have unspecified other impact via vectors that leverage *type confusion.*",2016-12-02,DoS ,0,https://github.com/chromium/chromium/commit/2386a6a49ea992a1e859eb0296c1cc53e5772cdb,2386a6a49ea992a1e859eb0296c1cc53e5772cdb,"ImageInputType::ensurePrimaryContent should recreate UA shadow tree.
+
+Once the fallback shadow tree was created, it was never recreated even if
+ensurePrimaryContent was called.  Such situation happens by updating |src|
+attribute.
+
+BUG=589838
+
+Review URL: https://codereview.chromium.org/1732753004
+
+Cr-Commit-Position: refs/heads/master@{#377804}",0,third_party/WebKit/Source/core/html/forms/ImageInputType.cpp,"{""sha"": ""d08fff37583d05b585cc69ff32455230aa952898"", ""filename"": ""third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp"", ""status"": ""modified"", ""additions"": 13, ""deletions"": 0, ""changes"": 13, ""blob_url"": ""https://github.com/chromium/chromium/blob/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp?ref=2386a6a49ea992a1e859eb0296c1cc53e5772cdb"", ""patch"": ""@@ -70,4 +70,17 @@ TEST(HTMLInputElementTest, DefaultToolTip)\n     EXPECT_EQ(String(), inputWithForm->defaultToolTip());\n }\n \n+// crbug.com/589838\n+TEST(HTMLInputElementTest, ImageTypeCrash)\n+{\n+    RefPtrWillBeRawPtr<Document> document = Document::create();\n+    RefPtrWillBeRawPtr<HTMLInputElement> input = HTMLInputElement::create(*document, nullptr, false);\n+    input->setAttribute(HTMLNames::typeAttr, \""image\"");\n+    input->ensureFallbackContent();\n+    // Make sure ensurePrimaryContent() recreates UA shadow tree, and updating\n+    // |value| doesn't crash.\n+    input->ensurePrimaryContent();\n+    input->setAttribute(HTMLNames::valueAttr, \""aaa\"");\n+}\n+\n } // namespace blink""}<_**next**_>{""sha"": ""e578147d818d6c5adfce99d7761876ee7ad4d738"", ""filename"": ""third_party/WebKit/Source/core/html/forms/ImageInputType.cpp"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 0, ""changes"": 3, ""blob_url"": ""https://github.com/chromium/chromium/blob/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/forms/ImageInputType.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/forms/ImageInputType.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/forms/ImageInputType.cpp?ref=2386a6a49ea992a1e859eb0296c1cc53e5772cdb"", ""patch"": ""@@ -271,6 +271,9 @@ void ImageInputType::ensurePrimaryContent()\n     if (!m_useFallbackContent)\n         return;\n     m_useFallbackContent = false;\n+    if (ShadowRoot* root = element().userAgentShadowRoot())\n+        root->removeChildren();\n+    createShadowSubtree();\n     reattachFallbackContent();\n }\n ""}","void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+","void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+",C,,,,"@@ -271,6 +271,9 @@ void ImageInputType::ensurePrimaryContent()
+     if (!m_useFallbackContent)
+         return;
+     m_useFallbackContent = false;
++    if (ShadowRoot* root = element().userAgentShadowRoot())
++        root->removeChildren();
++    createShadowSubtree();
+     reattachFallbackContent();
+ }
+ ",Chrome,2386a6a49ea992a1e859eb0296c1cc53e5772cdb,480e2efb79e326b1bd940a795eda5f62711bfc5e,0,"void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+",145685,"void ImageInputType::ensurePrimaryContent()
+{
+     if (!m_useFallbackContent)
+         return;
+     m_useFallbackContent = false;
+     reattachFallbackContent();
+ }
+","void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+","The `ensurePrimaryContent` function in the `ImageInputType` class checks whether the fallback content should be used by evaluating the boolean member variable `m_useFallbackContent`. If this variable is set to `false`, the function exits early, indicating that fallback content is not needed. If `m_useFallbackContent` is `true`, it sets this variable to `false`, effectively disabling the fallback mechanism, and then calls the `reattachFallbackContent` method to re-establish the primary content. This function ensures that the primary content is prioritized over any fallback options when necessary.","The provided function checks if a fallback content mechanism is currently in use. If it is not being utilized, the function terminates early, indicating that no action is needed. However, if the fallback is active, the function disables it to prioritize the primary content. Following this, it invokes a method to re-establish the primary content, ensuring that the system focuses on the main content rather than any alternative options. This functionality is essential for maintaining the intended display or processing of content in scenarios where fallback options may have been previously activated.","The vulnerability in the original code stemmed from the failure to recreate the user agent (UA) shadow tree when the primary content was updated, particularly after changes to the `src` attribute. This oversight meant that once the fallback content was established, it would persist even if the primary content needed to be prioritized, leading to potential inconsistencies in content rendering. The fixed code addresses this issue by introducing a new function that checks if the fallback content is already in use. If not, it sets the fallback content to be used and then reattaches the fallback content, ensuring that the shadow tree is correctly recreated when necessary.","The vulnerability in the original code arose from the failure to recreate the user agent shadow tree after the fallback content was established, particularly when updates occurred to the source attribute. This oversight meant that even when the primary content was intended to take precedence, the fallback content remained in place, leading to potential inconsistencies in how content was displayed. The revised code addresses this issue by ensuring that the fallback content is only activated when necessary, and it includes a mechanism to reattach the fallback content, thereby guaranteeing that the shadow tree is properly recreated whenever updates occur.","The vulnerability was fixed by introducing a new function that checks the state of the fallback content before proceeding. In the updated code, the function first verifies if the fallback content is already in use by evaluating the `m_useFallbackContent` variable. If it is not in use, the function calls `setUseFallbackContent()` to activate it and subsequently invokes `reattachFallbackContent()` to ensure that the user agent shadow tree is recreated. This change ensures that the primary content is prioritized and that the fallback content is only utilized when necessary, addressing the issue of stale content rendering.","The vulnerability was fixed by implementing a mechanism that checks whether the fallback content is currently in use before making any changes. If the fallback content is not active, the code now properly activates it and ensures that the necessary content structure is recreated. This adjustment guarantees that the primary content can take precedence when updates occur, particularly when the source attribute changes. By ensuring that the fallback content is only utilized when appropriate and that the content structure is refreshed, the fix addresses the issue of outdated or inconsistent content being displayed.","4,4","5, 5","4, 4","4, 3"

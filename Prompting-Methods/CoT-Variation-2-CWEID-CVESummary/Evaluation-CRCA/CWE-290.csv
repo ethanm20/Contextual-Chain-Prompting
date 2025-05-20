@@ -1,0 +1,826 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,182589,182589,,Remote,Not required,,CVE-2017-18190,https://www.cvedetails.com/cve/CVE-2017-18190/,CWE-290,Low,,Partial,,2018-02-16,5.0,A localhost.localdomain whitelist entry in valid_host() in scheduler/client.c in CUPS before 2.2.2 allows remote attackers to execute arbitrary IPP commands by sending POST requests to the CUPS daemon in conjunction with DNS rebinding. The localhost.localdomain name is often resolved via a DNS server (neither the OS nor the web browser is responsible for ensuring that localhost.localdomain is 127.0.0.1).,2019-10-02,Exec Code ,0,https://github.com/apple/cups/commit/afa80cb2b457bf8d64f775bed307588610476c41,afa80cb2b457bf8d64f775bed307588610476c41,"Don't treat ""localhost.localdomain"" as an allowed replacement for localhost, since it isn't.",3,scheduler/client.c,"{""sha"": ""20ccf11a9a97dc96fe535eca6c65f6df43421eff"", ""filename"": ""scheduler/client.c"", ""status"": ""modified"", ""additions"": 0, ""deletions"": 3, ""changes"": 3, ""blob_url"": ""https://github.com/apple/cups/blob/afa80cb2b457bf8d64f775bed307588610476c41/scheduler/client.c"", ""raw_url"": ""https://github.com/apple/cups/raw/afa80cb2b457bf8d64f775bed307588610476c41/scheduler/client.c"", ""contents_url"": ""https://api.github.com/repos/apple/cups/contents/scheduler/client.c?ref=afa80cb2b457bf8d64f775bed307588610476c41"", ""patch"": ""@@ -3890,9 +3890,6 @@ valid_host(cupsd_client_t *con)\t\t/* I - Client connection */\n \n     return (!_cups_strcasecmp(con->clientname, \""localhost\"") ||\n \t    !_cups_strcasecmp(con->clientname, \""localhost.\"") ||\n-#ifdef __linux\n-\t    !_cups_strcasecmp(con->clientname, \""localhost.localdomain\"") ||\n-#endif /* __linux */\n             !strcmp(con->clientname, \""127.0.0.1\"") ||\n \t    !strcmp(con->clientname, \""[::1]\""));\n   }""}","valid_host(cupsd_client_t *con)		/* I - Client connection */
+{
+  cupsd_alias_t	*a;			/* Current alias */
+  cupsd_netif_t	*netif;			/* Current network interface */
+  const char	*end;			/* End character */
+  char		*ptr;			/* Pointer into host value */
+
+
+ /*
+  * Copy the Host: header for later use...
+  */
+
+  strlcpy(con->clientname, httpGetField(con->http, HTTP_FIELD_HOST),
+          sizeof(con->clientname));
+  if ((ptr = strrchr(con->clientname, ':')) != NULL && !strchr(ptr, ']'))
+  {
+    *ptr++ = '\0';
+    con->clientport = atoi(ptr);
+  }
+  else
+    con->clientport = con->serverport;
+
+ /*
+  * Then validate...
+  */
+
+  if (httpAddrLocalhost(httpGetAddress(con->http)))
+  {
+   /*
+    * Only allow ""localhost"" or the equivalent IPv4 or IPv6 numerical
+    * addresses when accessing CUPS via the loopback interface...
+    */
+ 
+     return (!_cups_strcasecmp(con->clientname, ""localhost"") ||
+ 	    !_cups_strcasecmp(con->clientname, ""localhost."") ||
+             !strcmp(con->clientname, ""127.0.0.1"") ||
+ 	    !strcmp(con->clientname, ""[::1]""));
+   }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+ /*
+  * Check if the hostname is something.local (Bonjour); if so, allow it.
+  */
+
+  if ((end = strrchr(con->clientname, '.')) != NULL && end > con->clientname &&
+      !end[1])
+  {
+   /*
+    * ""."" on end, work back to second-to-last "".""...
+    */
+
+    for (end --; end > con->clientname && *end != '.'; end --);
+  }
+
+  if (end && (!_cups_strcasecmp(end, "".local"") ||
+	      !_cups_strcasecmp(end, "".local."")))
+    return (1);
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check if the hostname is an IP address...
+  */
+
+  if (isdigit(con->clientname[0] & 255) || con->clientname[0] == '[')
+  {
+   /*
+    * Possible IPv4/IPv6 address...
+    */
+
+    http_addrlist_t *addrlist;		/* List of addresses */
+
+
+    if ((addrlist = httpAddrGetList(con->clientname, AF_UNSPEC, NULL)) != NULL)
+    {
+     /*
+      * Good IPv4/IPv6 address...
+      */
+
+      httpAddrFreeList(addrlist);
+      return (1);
+    }
+  }
+
+ /*
+  * Check for (alias) name matches...
+  */
+
+  for (a = (cupsd_alias_t *)cupsArrayFirst(ServerAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(ServerAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+  for (a = (cupsd_alias_t *)cupsArrayFirst(DNSSDAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(DNSSDAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check for interface hostname matches...
+  */
+
+  for (netif = (cupsd_netif_t *)cupsArrayFirst(NetIFList);
+       netif;
+       netif = (cupsd_netif_t *)cupsArrayNext(NetIFList))
+  {
+    if (!_cups_strncasecmp(con->clientname, netif->hostname, netif->hostlen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + netif->hostlen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+  return (0);
+}
+","valid_host(cupsd_client_t *con)		/* I - Client connection */
+{
+  cupsd_alias_t	*a;			/* Current alias */
+  cupsd_netif_t	*netif;			/* Current network interface */
+  const char	*end;			/* End character */
+  char		*ptr;			/* Pointer into host value */
+
+
+ /*
+  * Copy the Host: header for later use...
+  */
+
+  strlcpy(con->clientname, httpGetField(con->http, HTTP_FIELD_HOST),
+          sizeof(con->clientname));
+  if ((ptr = strrchr(con->clientname, ':')) != NULL && !strchr(ptr, ']'))
+  {
+    *ptr++ = '\0';
+    con->clientport = atoi(ptr);
+  }
+  else
+    con->clientport = con->serverport;
+
+ /*
+  * Then validate...
+  */
+
+  if (httpAddrLocalhost(httpGetAddress(con->http)))
+  {
+   /*
+    * Only allow ""localhost"" or the equivalent IPv4 or IPv6 numerical
+    * addresses when accessing CUPS via the loopback interface...
+    */
+ 
+     return (!_cups_strcasecmp(con->clientname, ""localhost"") ||
+ 	    !_cups_strcasecmp(con->clientname, ""localhost."") ||
+#ifdef __linux
+	    !_cups_strcasecmp(con->clientname, ""localhost.localdomain"") ||
+#endif /* __linux */
+             !strcmp(con->clientname, ""127.0.0.1"") ||
+ 	    !strcmp(con->clientname, ""[::1]""));
+   }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+ /*
+  * Check if the hostname is something.local (Bonjour); if so, allow it.
+  */
+
+  if ((end = strrchr(con->clientname, '.')) != NULL && end > con->clientname &&
+      !end[1])
+  {
+   /*
+    * ""."" on end, work back to second-to-last "".""...
+    */
+
+    for (end --; end > con->clientname && *end != '.'; end --);
+  }
+
+  if (end && (!_cups_strcasecmp(end, "".local"") ||
+	      !_cups_strcasecmp(end, "".local."")))
+    return (1);
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check if the hostname is an IP address...
+  */
+
+  if (isdigit(con->clientname[0] & 255) || con->clientname[0] == '[')
+  {
+   /*
+    * Possible IPv4/IPv6 address...
+    */
+
+    http_addrlist_t *addrlist;		/* List of addresses */
+
+
+    if ((addrlist = httpAddrGetList(con->clientname, AF_UNSPEC, NULL)) != NULL)
+    {
+     /*
+      * Good IPv4/IPv6 address...
+      */
+
+      httpAddrFreeList(addrlist);
+      return (1);
+    }
+  }
+
+ /*
+  * Check for (alias) name matches...
+  */
+
+  for (a = (cupsd_alias_t *)cupsArrayFirst(ServerAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(ServerAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+  for (a = (cupsd_alias_t *)cupsArrayFirst(DNSSDAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(DNSSDAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check for interface hostname matches...
+  */
+
+  for (netif = (cupsd_netif_t *)cupsArrayFirst(NetIFList);
+       netif;
+       netif = (cupsd_netif_t *)cupsArrayNext(NetIFList))
+  {
+    if (!_cups_strncasecmp(con->clientname, netif->hostname, netif->hostlen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + netif->hostlen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+  return (0);
+}
+",C,,"#ifdef __linux
+	    !_cups_strcasecmp(con->clientname, ""localhost.localdomain"") ||
+#endif /* __linux */
+",,"@@ -3890,9 +3890,6 @@ valid_host(cupsd_client_t *con)		/* I - Client connection */
+ 
+     return (!_cups_strcasecmp(con->clientname, ""localhost"") ||
+ 	    !_cups_strcasecmp(con->clientname, ""localhost."") ||
+-#ifdef __linux
+-	    !_cups_strcasecmp(con->clientname, ""localhost.localdomain"") ||
+-#endif /* __linux */
+             !strcmp(con->clientname, ""127.0.0.1"") ||
+ 	    !strcmp(con->clientname, ""[::1]""));
+   }",cups,afa80cb2b457bf8d64f775bed307588610476c41,7852449fe24db38dc47b09ba033c93b1b73dfcd6,1,"valid_host(cupsd_client_t *con)		/* I - Client connection */
+{
+  cupsd_alias_t	*a;			/* Current alias */
+  cupsd_netif_t	*netif;			/* Current network interface */
+  const char	*end;			/* End character */
+  char		*ptr;			/* Pointer into host value */
+
+
+ /*
+  * Copy the Host: header for later use...
+  */
+
+  strlcpy(con->clientname, httpGetField(con->http, HTTP_FIELD_HOST),
+          sizeof(con->clientname));
+  if ((ptr = strrchr(con->clientname, ':')) != NULL && !strchr(ptr, ']'))
+  {
+    *ptr++ = '\0';
+    con->clientport = atoi(ptr);
+  }
+  else
+    con->clientport = con->serverport;
+
+ /*
+  * Then validate...
+  */
+
+  if (httpAddrLocalhost(httpGetAddress(con->http)))
+  {
+   /*
+    * Only allow ""localhost"" or the equivalent IPv4 or IPv6 numerical
+    * addresses when accessing CUPS via the loopback interface...
+    */
+ 
+     return (!_cups_strcasecmp(con->clientname, ""localhost"") ||
+ 	    !_cups_strcasecmp(con->clientname, ""localhost."") ||
+//flaw_line_below:
+#ifdef __linux
+//flaw_line_below:
+	    !_cups_strcasecmp(con->clientname, ""localhost.localdomain"") ||
+//flaw_line_below:
+#endif /* __linux */
+             !strcmp(con->clientname, ""127.0.0.1"") ||
+ 	    !strcmp(con->clientname, ""[::1]""));
+   }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+ /*
+  * Check if the hostname is something.local (Bonjour); if so, allow it.
+  */
+
+  if ((end = strrchr(con->clientname, '.')) != NULL && end > con->clientname &&
+      !end[1])
+  {
+   /*
+    * ""."" on end, work back to second-to-last "".""...
+    */
+
+    for (end --; end > con->clientname && *end != '.'; end --);
+  }
+
+  if (end && (!_cups_strcasecmp(end, "".local"") ||
+	      !_cups_strcasecmp(end, "".local."")))
+    return (1);
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check if the hostname is an IP address...
+  */
+
+  if (isdigit(con->clientname[0] & 255) || con->clientname[0] == '[')
+  {
+   /*
+    * Possible IPv4/IPv6 address...
+    */
+
+    http_addrlist_t *addrlist;		/* List of addresses */
+
+
+    if ((addrlist = httpAddrGetList(con->clientname, AF_UNSPEC, NULL)) != NULL)
+    {
+     /*
+      * Good IPv4/IPv6 address...
+      */
+
+      httpAddrFreeList(addrlist);
+      return (1);
+    }
+  }
+
+ /*
+  * Check for (alias) name matches...
+  */
+
+  for (a = (cupsd_alias_t *)cupsArrayFirst(ServerAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(ServerAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+  for (a = (cupsd_alias_t *)cupsArrayFirst(DNSSDAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(DNSSDAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check for interface hostname matches...
+  */
+
+  for (netif = (cupsd_netif_t *)cupsArrayFirst(NetIFList);
+       netif;
+       netif = (cupsd_netif_t *)cupsArrayNext(NetIFList))
+  {
+    if (!_cups_strncasecmp(con->clientname, netif->hostname, netif->hostlen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + netif->hostlen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+  return (0);
+}
+",182589,"valid_host(cupsd_client_t *con)		/* I - Client connection */
+{
+  cupsd_alias_t	*a;			/* Current alias */
+  cupsd_netif_t	*netif;			/* Current network interface */
+  const char	*end;			/* End character */
+  char		*ptr;			/* Pointer into host value */
+
+
+ /*
+  * Copy the Host: header for later use...
+  */
+
+  strlcpy(con->clientname, httpGetField(con->http, HTTP_FIELD_HOST),
+          sizeof(con->clientname));
+  if ((ptr = strrchr(con->clientname, ':')) != NULL && !strchr(ptr, ']'))
+  {
+    *ptr++ = '\0';
+    con->clientport = atoi(ptr);
+  }
+  else
+    con->clientport = con->serverport;
+
+ /*
+  * Then validate...
+  */
+
+  if (httpAddrLocalhost(httpGetAddress(con->http)))
+  {
+   /*
+    * Only allow ""localhost"" or the equivalent IPv4 or IPv6 numerical
+    * addresses when accessing CUPS via the loopback interface...
+    */
+ 
+     return (!_cups_strcasecmp(con->clientname, ""localhost"") ||
+ 	    !_cups_strcasecmp(con->clientname, ""localhost."") ||
+#ifdef __linux
+	    !_cups_strcasecmp(con->clientname, ""localhost.localdomain"") ||
+#endif /* __linux */
+             !strcmp(con->clientname, ""127.0.0.1"") ||
+ 	    !strcmp(con->clientname, ""[::1]""));
+   }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+ /*
+  * Check if the hostname is something.local (Bonjour); if so, allow it.
+  */
+
+  if ((end = strrchr(con->clientname, '.')) != NULL && end > con->clientname &&
+      !end[1])
+  {
+   /*
+    * ""."" on end, work back to second-to-last "".""...
+    */
+
+    for (end --; end > con->clientname && *end != '.'; end --);
+  }
+
+  if (end && (!_cups_strcasecmp(end, "".local"") ||
+	      !_cups_strcasecmp(end, "".local."")))
+    return (1);
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check if the hostname is an IP address...
+  */
+
+  if (isdigit(con->clientname[0] & 255) || con->clientname[0] == '[')
+  {
+   /*
+    * Possible IPv4/IPv6 address...
+    */
+
+    http_addrlist_t *addrlist;		/* List of addresses */
+
+
+    if ((addrlist = httpAddrGetList(con->clientname, AF_UNSPEC, NULL)) != NULL)
+    {
+     /*
+      * Good IPv4/IPv6 address...
+      */
+
+      httpAddrFreeList(addrlist);
+      return (1);
+    }
+  }
+
+ /*
+  * Check for (alias) name matches...
+  */
+
+  for (a = (cupsd_alias_t *)cupsArrayFirst(ServerAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(ServerAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+  for (a = (cupsd_alias_t *)cupsArrayFirst(DNSSDAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(DNSSDAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check for interface hostname matches...
+  */
+
+  for (netif = (cupsd_netif_t *)cupsArrayFirst(NetIFList);
+       netif;
+       netif = (cupsd_netif_t *)cupsArrayNext(NetIFList))
+  {
+    if (!_cups_strncasecmp(con->clientname, netif->hostname, netif->hostlen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + netif->hostlen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+  return (0);
+}
+","valid_host(cupsd_client_t *con)		/* I - Client connection */
+{
+  cupsd_alias_t	*a;			/* Current alias */
+  cupsd_netif_t	*netif;			/* Current network interface */
+  const char	*end;			/* End character */
+  char		*ptr;			/* Pointer into host value */
+
+
+ /*
+  * Copy the Host: header for later use...
+  */
+
+  strlcpy(con->clientname, httpGetField(con->http, HTTP_FIELD_HOST),
+          sizeof(con->clientname));
+  if ((ptr = strrchr(con->clientname, ':')) != NULL && !strchr(ptr, ']'))
+  {
+    *ptr++ = '\0';
+    con->clientport = atoi(ptr);
+  }
+  else
+    con->clientport = con->serverport;
+
+ /*
+  * Then validate...
+  */
+
+  if (httpAddrLocalhost(httpGetAddress(con->http)))
+  {
+   /*
+    * Only allow ""localhost"" or the equivalent IPv4 or IPv6 numerical
+    * addresses when accessing CUPS via the loopback interface...
+    */
+ 
+     return (!_cups_strcasecmp(con->clientname, ""localhost"") ||
+ 	    !_cups_strcasecmp(con->clientname, ""localhost."") ||
+             !strcmp(con->clientname, ""127.0.0.1"") ||
+ 	    !strcmp(con->clientname, ""[::1]""));
+   }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+ /*
+  * Check if the hostname is something.local (Bonjour); if so, allow it.
+  */
+
+  if ((end = strrchr(con->clientname, '.')) != NULL && end > con->clientname &&
+      !end[1])
+  {
+   /*
+    * ""."" on end, work back to second-to-last "".""...
+    */
+
+    for (end --; end > con->clientname && *end != '.'; end --);
+  }
+
+  if (end && (!_cups_strcasecmp(end, "".local"") ||
+	      !_cups_strcasecmp(end, "".local."")))
+    return (1);
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check if the hostname is an IP address...
+  */
+
+  if (isdigit(con->clientname[0] & 255) || con->clientname[0] == '[')
+  {
+   /*
+    * Possible IPv4/IPv6 address...
+    */
+
+    http_addrlist_t *addrlist;		/* List of addresses */
+
+
+    if ((addrlist = httpAddrGetList(con->clientname, AF_UNSPEC, NULL)) != NULL)
+    {
+     /*
+      * Good IPv4/IPv6 address...
+      */
+
+      httpAddrFreeList(addrlist);
+      return (1);
+    }
+  }
+
+ /*
+  * Check for (alias) name matches...
+  */
+
+  for (a = (cupsd_alias_t *)cupsArrayFirst(ServerAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(ServerAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+#if defined(HAVE_DNSSD) || defined(HAVE_AVAHI)
+  for (a = (cupsd_alias_t *)cupsArrayFirst(DNSSDAlias);
+       a;
+       a = (cupsd_alias_t *)cupsArrayNext(DNSSDAlias))
+  {
+   /*
+    * ""ServerAlias *"" allows all host values through...
+    */
+
+    if (!strcmp(a->name, ""*""))
+      return (1);
+
+    if (!_cups_strncasecmp(con->clientname, a->name, a->namelen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + a->namelen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+#endif /* HAVE_DNSSD || HAVE_AVAHI */
+
+ /*
+  * Check for interface hostname matches...
+  */
+
+  for (netif = (cupsd_netif_t *)cupsArrayFirst(NetIFList);
+       netif;
+       netif = (cupsd_netif_t *)cupsArrayNext(NetIFList))
+  {
+    if (!_cups_strncasecmp(con->clientname, netif->hostname, netif->hostlen))
+    {
+     /*
+      * Prefix matches; check the character at the end - it must be ""."" or nul.
+      */
+
+      end = con->clientname + netif->hostlen;
+
+      if (!*end || (*end == '.' && !end[1]))
+        return (1);
+    }
+  }
+
+  return (0);
+}
+","The `valid_host` function validates a client connection in a CUPS (Common UNIX Printing System) server environment by checking the client's hostname against various criteria. It first extracts the hostname from the HTTP request and determines the client's port. If the connection is from the localhost, it allows only specific local addresses. The function also checks for Bonjour (.local) hostnames, verifies if the hostname is a valid IP address, and matches it against server aliases and network interface hostnames. If any of these checks pass, the function returns true (1); otherwise, it returns false (0).","The code defines a function that validates a client connection in a printing system by checking the client's hostname against several criteria. It begins by extracting the hostname from the incoming request and determining the associated port. The function allows connections from local addresses and checks for specific local domain names. It also verifies if the hostname is a valid IP address and matches it against predefined aliases and network interface names. If any of these conditions are met, the function confirms the validity of the connection; otherwise, it indicates that the connection is not allowed.","The vulnerability in the original code allowed remote attackers to exploit a DNS rebinding attack by using the ""localhost.localdomain"" entry, which could resolve to an external IP address instead of the intended loopback address. This misconfiguration permitted unauthorized access to the printing system, enabling attackers to execute arbitrary commands. The fixed code addresses this issue by explicitly validating that only specific local addresses, such as ""localhost"" and ""127.0.0.1,"" are accepted when the connection is from the loopback interface. This ensures that only legitimate local connections are allowed, effectively mitigating the risk of exploitation.","The vulnerability in the original code stemmed from the inclusion of a whitelist entry for ""localhost.localdomain,"" which could be resolved to an external IP address due to DNS rebinding attacks. This misconfiguration allowed remote attackers to send crafted requests to the printing system, potentially executing arbitrary commands. The fixed code mitigates this risk by strictly validating that only specific local addresses are accepted when connections originate from the loopback interface. By ensuring that only legitimate local connections are recognized, the updated code effectively prevents unauthorized access and command execution by external entities.","The vulnerability was fixed by modifying the validation logic within the function to restrict accepted hostnames when the connection is from the loopback interface. The updated code explicitly checks the client's hostname against a set of allowed values, including ""localhost,"" ""127.0.0.1,"" and specific IPv6 addresses. This is achieved through the use of string comparison functions, ensuring that only these predefined local addresses are permitted. By eliminating the acceptance of ""localhost.localdomain"" and similar entries, the code effectively prevents unauthorized access and command execution, thereby closing the security loophole that was previously exploitable.","The vulnerability was fixed by implementing stricter validation criteria for accepted hostnames when connections originate from the loopback interface. The updated logic ensures that only specific local addresses, such as ""localhost"" and certain numerical IP addresses, are allowed. This change effectively removes the previous acceptance of potentially dangerous entries, such as ""localhost.localdomain,"" which could be resolved to external addresses through DNS rebinding. By limiting the validation to a defined set of trusted local addresses, the code prevents unauthorized access and command execution, thereby enhancing the overall security of the system.","5, 5","5,5","5,4","5, 4"

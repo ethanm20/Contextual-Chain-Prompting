@@ -1,0 +1,560 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,181561,181561,,Local,Not required,,CVE-2017-5549,https://www.cvedetails.com/cve/CVE-2017-5549/,CWE-532,Low,Partial,,,2017-02-06,2.1,"The klsi_105_get_line_state function in drivers/usb/serial/kl5kusb105.c in the Linux kernel before 4.9.5 places uninitialized heap-memory contents into a log entry upon a failure to read the line status, which allows local users to obtain sensitive information by reading the log.",2018-08-24,+Info ,5,https://github.com/torvalds/linux/commit/146cc8a17a3b4996f6805ee5c080e7101277c410,146cc8a17a3b4996f6805ee5c080e7101277c410,"USB: serial: kl5kusb105: fix line-state error handling
+
+The current implementation failed to detect short transfers when
+attempting to read the line state, and also, to make things worse,
+logged the content of the uninitialised heap transfer buffer.
+
+Fixes: abf492e7b3ae (""USB: kl5kusb105: fix DMA buffers on stack"")
+Fixes: 1da177e4c3f4 (""Linux-2.6.12-rc2"")
+Cc: stable <stable@vger.kernel.org>
+Reviewed-by: Greg Kroah-Hartman <gregkh@linuxfoundation.org>
+Signed-off-by: Johan Hovold <johan@kernel.org>",4,drivers/usb/serial/kl5kusb105.c,"{""sha"": ""6cb45757818fae2222383358b4d38d7c87b2dbf4"", ""filename"": ""drivers/usb/serial/kl5kusb105.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 4, ""changes"": 9, ""blob_url"": ""https://github.com/torvalds/linux/blob/146cc8a17a3b4996f6805ee5c080e7101277c410/drivers/usb/serial/kl5kusb105.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/146cc8a17a3b4996f6805ee5c080e7101277c410/drivers/usb/serial/kl5kusb105.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/usb/serial/kl5kusb105.c?ref=146cc8a17a3b4996f6805ee5c080e7101277c410"", ""patch"": ""@@ -192,10 +192,11 @@ static int klsi_105_get_line_state(struct usb_serial_port *port,\n \t\t\t     status_buf, KLSI_STATUSBUF_LEN,\n \t\t\t     10000\n \t\t\t     );\n-\tif (rc < 0)\n-\t\tdev_err(&port->dev, \""Reading line status failed (error = %d)\\n\"",\n-\t\t\trc);\n-\telse {\n+\tif (rc != KLSI_STATUSBUF_LEN) {\n+\t\tdev_err(&port->dev, \""reading line status failed: %d\\n\"", rc);\n+\t\tif (rc >= 0)\n+\t\t\trc = -EIO;\n+\t} else {\n \t\tstatus = get_unaligned_le16(status_buf);\n \n \t\tdev_info(&port->serial->dev->dev, \""read status %x %x\\n\"",""}","static int klsi_105_get_line_state(struct usb_serial_port *port,
+				   unsigned long *line_state_p)
+{
+	int rc;
+	u8 *status_buf;
+	__u16 status;
+
+	dev_info(&port->serial->dev->dev, ""sending SIO Poll request\n"");
+
+	status_buf = kmalloc(KLSI_STATUSBUF_LEN, GFP_KERNEL);
+	if (!status_buf)
+		return -ENOMEM;
+
+	status_buf[0] = 0xff;
+	status_buf[1] = 0xff;
+	rc = usb_control_msg(port->serial->dev,
+			     usb_rcvctrlpipe(port->serial->dev, 0),
+			     KL5KUSB105A_SIO_POLL,
+			     USB_TYPE_VENDOR | USB_DIR_IN,
+			     0, /* value */
+			     0, /* index */
+ 			     status_buf, KLSI_STATUSBUF_LEN,
+ 			     10000
+ 			     );
+	if (rc != KLSI_STATUSBUF_LEN) {
+		dev_err(&port->dev, ""reading line status failed: %d\n"", rc);
+		if (rc >= 0)
+			rc = -EIO;
+	} else {
+ 		status = get_unaligned_le16(status_buf);
+ 
+ 		dev_info(&port->serial->dev->dev, ""read status %x %x\n"",
+			 status_buf[0], status_buf[1]);
+
+		*line_state_p = klsi_105_status2linestate(status);
+	}
+
+	kfree(status_buf);
+	return rc;
+}
+","static int klsi_105_get_line_state(struct usb_serial_port *port,
+				   unsigned long *line_state_p)
+{
+	int rc;
+	u8 *status_buf;
+	__u16 status;
+
+	dev_info(&port->serial->dev->dev, ""sending SIO Poll request\n"");
+
+	status_buf = kmalloc(KLSI_STATUSBUF_LEN, GFP_KERNEL);
+	if (!status_buf)
+		return -ENOMEM;
+
+	status_buf[0] = 0xff;
+	status_buf[1] = 0xff;
+	rc = usb_control_msg(port->serial->dev,
+			     usb_rcvctrlpipe(port->serial->dev, 0),
+			     KL5KUSB105A_SIO_POLL,
+			     USB_TYPE_VENDOR | USB_DIR_IN,
+			     0, /* value */
+			     0, /* index */
+ 			     status_buf, KLSI_STATUSBUF_LEN,
+ 			     10000
+ 			     );
+	if (rc < 0)
+		dev_err(&port->dev, ""Reading line status failed (error = %d)\n"",
+			rc);
+	else {
+ 		status = get_unaligned_le16(status_buf);
+ 
+ 		dev_info(&port->serial->dev->dev, ""read status %x %x\n"",
+			 status_buf[0], status_buf[1]);
+
+		*line_state_p = klsi_105_status2linestate(status);
+	}
+
+	kfree(status_buf);
+	return rc;
+}
+",C,"	if (rc != KLSI_STATUSBUF_LEN) {
+		dev_err(&port->dev, ""reading line status failed: %d\n"", rc);
+		if (rc >= 0)
+			rc = -EIO;
+	} else {
+","	if (rc < 0)
+		dev_err(&port->dev, ""Reading line status failed (error = %d)\n"",
+			rc);
+	else {
+",,"@@ -192,10 +192,11 @@ static int klsi_105_get_line_state(struct usb_serial_port *port,
+ 			     status_buf, KLSI_STATUSBUF_LEN,
+ 			     10000
+ 			     );
+-	if (rc < 0)
+-		dev_err(&port->dev, ""Reading line status failed (error = %d)\n"",
+-			rc);
+-	else {
++	if (rc != KLSI_STATUSBUF_LEN) {
++		dev_err(&port->dev, ""reading line status failed: %d\n"", rc);
++		if (rc >= 0)
++			rc = -EIO;
++	} else {
+ 		status = get_unaligned_le16(status_buf);
+ 
+ 		dev_info(&port->serial->dev->dev, ""read status %x %x\n"",",linux,146cc8a17a3b4996f6805ee5c080e7101277c410,55fa15b5987db22b4f35d3f0798928c126be5f1c,1,"static int klsi_105_get_line_state(struct usb_serial_port *port,
+				   unsigned long *line_state_p)
+{
+	int rc;
+	u8 *status_buf;
+	__u16 status;
+
+	dev_info(&port->serial->dev->dev, ""sending SIO Poll request\n"");
+
+	status_buf = kmalloc(KLSI_STATUSBUF_LEN, GFP_KERNEL);
+	if (!status_buf)
+		return -ENOMEM;
+
+	status_buf[0] = 0xff;
+	status_buf[1] = 0xff;
+	rc = usb_control_msg(port->serial->dev,
+			     usb_rcvctrlpipe(port->serial->dev, 0),
+			     KL5KUSB105A_SIO_POLL,
+			     USB_TYPE_VENDOR | USB_DIR_IN,
+			     0, /* value */
+			     0, /* index */
+ 			     status_buf, KLSI_STATUSBUF_LEN,
+ 			     10000
+ 			     );
+//flaw_line_below:
+	if (rc < 0)
+//flaw_line_below:
+		dev_err(&port->dev, ""Reading line status failed (error = %d)\n"",
+//flaw_line_below:
+			rc);
+//flaw_line_below:
+	else {
+//fix_flaw_line_below:
+//	if (rc != KLSI_STATUSBUF_LEN) {
+//fix_flaw_line_below:
+//		dev_err(&port->dev, ""reading line status failed: %d\n"", rc);
+//fix_flaw_line_below:
+//		if (rc >= 0)
+//fix_flaw_line_below:
+//			rc = -EIO;
+//fix_flaw_line_below:
+//	} else {
+ 		status = get_unaligned_le16(status_buf);
+ 
+ 		dev_info(&port->serial->dev->dev, ""read status %x %x\n"",
+			 status_buf[0], status_buf[1]);
+
+		*line_state_p = klsi_105_status2linestate(status);
+	}
+
+	kfree(status_buf);
+	return rc;
+}
+",181561,"static int klsi_105_get_line_state(struct usb_serial_port *port,
+				   unsigned long *line_state_p)
+{
+	int rc;
+	u8 *status_buf;
+	__u16 status;
+
+	dev_info(&port->serial->dev->dev, ""sending SIO Poll request\n"");
+
+	status_buf = kmalloc(KLSI_STATUSBUF_LEN, GFP_KERNEL);
+	if (!status_buf)
+		return -ENOMEM;
+
+	status_buf[0] = 0xff;
+	status_buf[1] = 0xff;
+	rc = usb_control_msg(port->serial->dev,
+			     usb_rcvctrlpipe(port->serial->dev, 0),
+			     KL5KUSB105A_SIO_POLL,
+			     USB_TYPE_VENDOR | USB_DIR_IN,
+			     0, /* value */
+			     0, /* index */
+ 			     status_buf, KLSI_STATUSBUF_LEN,
+ 			     10000
+ 			     );
+	if (rc < 0)
+		dev_err(&port->dev, ""Reading line status failed (error = %d)\n"",
+			rc);
+	else {
+ 		status = get_unaligned_le16(status_buf);
+ 
+ 		dev_info(&port->serial->dev->dev, ""read status %x %x\n"",
+			 status_buf[0], status_buf[1]);
+
+		*line_state_p = klsi_105_status2linestate(status);
+	}
+
+	kfree(status_buf);
+	return rc;
+}
+","static int klsi_105_get_line_state(struct usb_serial_port *port,
+				   unsigned long *line_state_p)
+{
+	int rc;
+	u8 *status_buf;
+	__u16 status;
+
+	dev_info(&port->serial->dev->dev, ""sending SIO Poll request\n"");
+
+	status_buf = kmalloc(KLSI_STATUSBUF_LEN, GFP_KERNEL);
+	if (!status_buf)
+		return -ENOMEM;
+
+	status_buf[0] = 0xff;
+	status_buf[1] = 0xff;
+	rc = usb_control_msg(port->serial->dev,
+			     usb_rcvctrlpipe(port->serial->dev, 0),
+			     KL5KUSB105A_SIO_POLL,
+			     USB_TYPE_VENDOR | USB_DIR_IN,
+			     0, /* value */
+			     0, /* index */
+ 			     status_buf, KLSI_STATUSBUF_LEN,
+ 			     10000
+ 			     );
+	if (rc != KLSI_STATUSBUF_LEN) {
+		dev_err(&port->dev, ""reading line status failed: %d\n"", rc);
+		if (rc >= 0)
+			rc = -EIO;
+	} else {
+ 		status = get_unaligned_le16(status_buf);
+ 
+ 		dev_info(&port->serial->dev->dev, ""read status %x %x\n"",
+			 status_buf[0], status_buf[1]);
+
+		*line_state_p = klsi_105_status2linestate(status);
+	}
+
+	kfree(status_buf);
+	return rc;
+}
+","The vulnerability in the original code lies in the error handling of the `usb_control_msg` function, where any negative return value is logged, but the function continues execution, potentially leading to undefined behavior if the expected data is not received. Specifically, if `rc` is less than `KLSI_STATUSBUF_LEN`, the code does not handle this case properly, risking the use of uninitialized or invalid data. In the fixed code, the check is updated to ensure that `rc` equals `KLSI_STATUSBUF_LEN`, and if not, it sets `rc` to `-EIO` for better error reporting, thus preventing further processing of invalid data.","The vulnerability in the original code stems from inadequate error handling after a critical operation that retrieves data. If the operation fails, the code continues to process potentially invalid or uninitialized data, which can lead to undefined behavior or crashes. This oversight allows the program to proceed without ensuring that the expected data was successfully received, increasing the risk of using erroneous information. The revised code addresses this issue by implementing a more robust error check, ensuring that the operation's success is verified before proceeding, and appropriately handling any errors to prevent further execution with invalid data.",3,5,4,4,"CWE-391, CWE-252, CWE-248, CWE-754, CWE-690, CWE-703, CWE-457, CWE-456, CWE-824, CWE-573",N,-1
+1,1,1,181621,181621,,Remote,Not required,,CVE-2017-0380,https://www.cvedetails.com/cve/CVE-2017-0380/,CWE-532,Medium,Partial,,,2017-09-18,4.3,"The rend_service_intro_established function in or/rendservice.c in Tor before 0.2.8.15, 0.2.9.x before 0.2.9.12, 0.3.0.x before 0.3.0.11, 0.3.1.x before 0.3.1.7, and 0.3.2.x before 0.3.2.1-alpha, when SafeLogging is disabled, allows attackers to obtain sensitive information by leveraging access to the log files of a hidden service, because uninitialized stack data is included in an error message about construction of an introduction point circuit.",2017-11-05,+Info ,2,https://github.com/torproject/tor/commit/09ea89764a4d3a907808ed7d4fe42abfe64bd486,09ea89764a4d3a907808ed7d4fe42abfe64bd486,"Fix log-uninitialized-stack bug in rend_service_intro_established.
+
+Fixes bug 23490; bugfix on 0.2.7.2-alpha.
+
+TROVE-2017-008
+CVE-2017-0380",2,src/or/rendservice.c,"{""sha"": ""4b9c5b0a127bbb78d94809aa1658a45f72608762"", ""filename"": ""changes/trove-2017-008"", ""status"": ""added"", ""additions"": 5, ""deletions"": 0, ""changes"": 5, ""blob_url"": ""https://github.com/torproject/tor/blob/09ea89764a4d3a907808ed7d4fe42abfe64bd486/changes/trove-2017-008"", ""raw_url"": ""https://github.com/torproject/tor/raw/09ea89764a4d3a907808ed7d4fe42abfe64bd486/changes/trove-2017-008"", ""contents_url"": ""https://api.github.com/repos/torproject/tor/contents/changes/trove-2017-008?ref=09ea89764a4d3a907808ed7d4fe42abfe64bd486"", ""patch"": ""@@ -0,0 +1,5 @@\n+  o Major bugfixes (security, hidden services, loggging):\n+    - Fix a bug where we could log uninitialized stack when a certain\n+      hidden service error occurred while SafeLogging was disabled.\n+      Fixes bug #23490; bugfix on 0.2.7.2-alpha.\n+      This is also tracked as TROVE-2017-008 and CVE-2017-0380.""}<_**next**_>{""sha"": ""8087e884998ce2b299c09f445119e8eb6a0b0473"", ""filename"": ""src/or/rendservice.c"", ""status"": ""modified"", ""additions"": 2, ""deletions"": 2, ""changes"": 4, ""blob_url"": ""https://github.com/torproject/tor/blob/09ea89764a4d3a907808ed7d4fe42abfe64bd486/src/or/rendservice.c"", ""raw_url"": ""https://github.com/torproject/tor/raw/09ea89764a4d3a907808ed7d4fe42abfe64bd486/src/or/rendservice.c"", ""contents_url"": ""https://api.github.com/repos/torproject/tor/contents/src/or/rendservice.c?ref=09ea89764a4d3a907808ed7d4fe42abfe64bd486"", ""patch"": ""@@ -3372,6 +3372,8 @@ rend_service_intro_established(origin_circuit_t *circuit,\n              (unsigned)circuit->base_.n_circ_id);\n     goto err;\n   }\n+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,\n+                rend_pk_digest, REND_SERVICE_ID_LEN);\n   /* We've just successfully established a intro circuit to one of our\n    * introduction point, account for it. */\n   intro = find_intro_point(circuit);\n@@ -3388,8 +3390,6 @@ rend_service_intro_established(origin_circuit_t *circuit,\n   service->desc_is_dirty = time(NULL);\n   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);\n \n-  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,\n-                rend_pk_digest, REND_SERVICE_ID_LEN);\n   log_info(LD_REND,\n            \""Received INTRO_ESTABLISHED cell on circuit %u for service %s\"",\n            (unsigned)circuit->base_.n_circ_id, serviceid);""}","rend_service_intro_established(origin_circuit_t *circuit,
+                               const uint8_t *request,
+                               size_t request_len)
+{
+  rend_service_t *service;
+  rend_intro_point_t *intro;
+  char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+  (void) request;
+  (void) request_len;
+  tor_assert(circuit->rend_data);
+  /* XXX: This is version 2 specific (only supported one for now). */
+  const char *rend_pk_digest =
+    (char *) rend_data_get_pk_digest(circuit->rend_data, NULL);
+
+  if (circuit->base_.purpose != CIRCUIT_PURPOSE_S_ESTABLISH_INTRO) {
+    log_warn(LD_PROTOCOL,
+             ""received INTRO_ESTABLISHED cell on non-intro circuit."");
+    goto err;
+  }
+  service = rend_service_get_by_pk_digest(rend_pk_digest);
+  if (!service) {
+    log_warn(LD_REND, ""Unknown service on introduction circuit %u."",
+              (unsigned)circuit->base_.n_circ_id);
+     goto err;
+   }
+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+   /* We've just successfully established a intro circuit to one of our
+    * introduction point, account for it. */
+   intro = find_intro_point(circuit);
+  if (intro == NULL) {
+    log_warn(LD_REND,
+             ""Introduction circuit established without a rend_intro_point_t ""
+             ""object for service %s on circuit %u"",
+             safe_str_client(serviceid), (unsigned)circuit->base_.n_circ_id);
+    goto err;
+  }
+  intro->circuit_established = 1;
+  /* We might not have every introduction point ready but at this point we
+   * know that the descriptor needs to be uploaded. */
+   service->desc_is_dirty = time(NULL);
+   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);
+ 
+   log_info(LD_REND,
+            ""Received INTRO_ESTABLISHED cell on circuit %u for service %s"",
+            (unsigned)circuit->base_.n_circ_id, serviceid);
+
+  /* Getting a valid INTRODUCE_ESTABLISHED means we've successfully
+   * used the circ */
+  pathbias_mark_use_success(circuit);
+
+  return 0;
+ err:
+  circuit_mark_for_close(TO_CIRCUIT(circuit), END_CIRC_REASON_TORPROTOCOL);
+  return -1;
+}
+","rend_service_intro_established(origin_circuit_t *circuit,
+                               const uint8_t *request,
+                               size_t request_len)
+{
+  rend_service_t *service;
+  rend_intro_point_t *intro;
+  char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+  (void) request;
+  (void) request_len;
+  tor_assert(circuit->rend_data);
+  /* XXX: This is version 2 specific (only supported one for now). */
+  const char *rend_pk_digest =
+    (char *) rend_data_get_pk_digest(circuit->rend_data, NULL);
+
+  if (circuit->base_.purpose != CIRCUIT_PURPOSE_S_ESTABLISH_INTRO) {
+    log_warn(LD_PROTOCOL,
+             ""received INTRO_ESTABLISHED cell on non-intro circuit."");
+    goto err;
+  }
+  service = rend_service_get_by_pk_digest(rend_pk_digest);
+  if (!service) {
+    log_warn(LD_REND, ""Unknown service on introduction circuit %u."",
+              (unsigned)circuit->base_.n_circ_id);
+     goto err;
+   }
+   /* We've just successfully established a intro circuit to one of our
+    * introduction point, account for it. */
+   intro = find_intro_point(circuit);
+  if (intro == NULL) {
+    log_warn(LD_REND,
+             ""Introduction circuit established without a rend_intro_point_t ""
+             ""object for service %s on circuit %u"",
+             safe_str_client(serviceid), (unsigned)circuit->base_.n_circ_id);
+    goto err;
+  }
+  intro->circuit_established = 1;
+  /* We might not have every introduction point ready but at this point we
+   * know that the descriptor needs to be uploaded. */
+   service->desc_is_dirty = time(NULL);
+   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);
+ 
+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+   log_info(LD_REND,
+            ""Received INTRO_ESTABLISHED cell on circuit %u for service %s"",
+            (unsigned)circuit->base_.n_circ_id, serviceid);
+
+  /* Getting a valid INTRODUCE_ESTABLISHED means we've successfully
+   * used the circ */
+  pathbias_mark_use_success(circuit);
+
+  return 0;
+ err:
+  circuit_mark_for_close(TO_CIRCUIT(circuit), END_CIRC_REASON_TORPROTOCOL);
+  return -1;
+}
+",C,"  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+","  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+",,"@@ -3372,6 +3372,8 @@ rend_service_intro_established(origin_circuit_t *circuit,
+              (unsigned)circuit->base_.n_circ_id);
+     goto err;
+   }
++  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
++                rend_pk_digest, REND_SERVICE_ID_LEN);
+   /* We've just successfully established a intro circuit to one of our
+    * introduction point, account for it. */
+   intro = find_intro_point(circuit);
+@@ -3388,8 +3390,6 @@ rend_service_intro_established(origin_circuit_t *circuit,
+   service->desc_is_dirty = time(NULL);
+   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);
+ 
+-  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+-                rend_pk_digest, REND_SERVICE_ID_LEN);
+   log_info(LD_REND,
+            ""Received INTRO_ESTABLISHED cell on circuit %u for service %s"",
+            (unsigned)circuit->base_.n_circ_id, serviceid);",tor,09ea89764a4d3a907808ed7d4fe42abfe64bd486,e468498469ebb2a676e74884a34fa017fa8ac3a4,1,"rend_service_intro_established(origin_circuit_t *circuit,
+                               const uint8_t *request,
+                               size_t request_len)
+{
+  rend_service_t *service;
+  rend_intro_point_t *intro;
+  char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+  (void) request;
+  (void) request_len;
+  tor_assert(circuit->rend_data);
+  /* XXX: This is version 2 specific (only supported one for now). */
+  const char *rend_pk_digest =
+    (char *) rend_data_get_pk_digest(circuit->rend_data, NULL);
+
+  if (circuit->base_.purpose != CIRCUIT_PURPOSE_S_ESTABLISH_INTRO) {
+    log_warn(LD_PROTOCOL,
+             ""received INTRO_ESTABLISHED cell on non-intro circuit."");
+    goto err;
+  }
+  service = rend_service_get_by_pk_digest(rend_pk_digest);
+  if (!service) {
+    log_warn(LD_REND, ""Unknown service on introduction circuit %u."",
+              (unsigned)circuit->base_.n_circ_id);
+     goto err;
+   }
+//fix_flaw_line_below:
+//  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+//fix_flaw_line_below:
+//                rend_pk_digest, REND_SERVICE_ID_LEN);
+   /* We've just successfully established a intro circuit to one of our
+    * introduction point, account for it. */
+   intro = find_intro_point(circuit);
+  if (intro == NULL) {
+    log_warn(LD_REND,
+             ""Introduction circuit established without a rend_intro_point_t ""
+             ""object for service %s on circuit %u"",
+             safe_str_client(serviceid), (unsigned)circuit->base_.n_circ_id);
+    goto err;
+  }
+  intro->circuit_established = 1;
+  /* We might not have every introduction point ready but at this point we
+   * know that the descriptor needs to be uploaded. */
+   service->desc_is_dirty = time(NULL);
+   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);
+ 
+//flaw_line_below:
+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+//flaw_line_below:
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+   log_info(LD_REND,
+            ""Received INTRO_ESTABLISHED cell on circuit %u for service %s"",
+            (unsigned)circuit->base_.n_circ_id, serviceid);
+
+  /* Getting a valid INTRODUCE_ESTABLISHED means we've successfully
+   * used the circ */
+  pathbias_mark_use_success(circuit);
+
+  return 0;
+ err:
+  circuit_mark_for_close(TO_CIRCUIT(circuit), END_CIRC_REASON_TORPROTOCOL);
+  return -1;
+}
+",181621,"rend_service_intro_established(origin_circuit_t *circuit,
+                               const uint8_t *request,
+                               size_t request_len)
+{
+  rend_service_t *service;
+  rend_intro_point_t *intro;
+  char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+  (void) request;
+  (void) request_len;
+  tor_assert(circuit->rend_data);
+  /* XXX: This is version 2 specific (only supported one for now). */
+  const char *rend_pk_digest =
+    (char *) rend_data_get_pk_digest(circuit->rend_data, NULL);
+
+  if (circuit->base_.purpose != CIRCUIT_PURPOSE_S_ESTABLISH_INTRO) {
+    log_warn(LD_PROTOCOL,
+             ""received INTRO_ESTABLISHED cell on non-intro circuit."");
+    goto err;
+  }
+  service = rend_service_get_by_pk_digest(rend_pk_digest);
+  if (!service) {
+    log_warn(LD_REND, ""Unknown service on introduction circuit %u."",
+              (unsigned)circuit->base_.n_circ_id);
+     goto err;
+   }
+   /* We've just successfully established a intro circuit to one of our
+    * introduction point, account for it. */
+   intro = find_intro_point(circuit);
+  if (intro == NULL) {
+    log_warn(LD_REND,
+             ""Introduction circuit established without a rend_intro_point_t ""
+             ""object for service %s on circuit %u"",
+             safe_str_client(serviceid), (unsigned)circuit->base_.n_circ_id);
+    goto err;
+  }
+  intro->circuit_established = 1;
+  /* We might not have every introduction point ready but at this point we
+   * know that the descriptor needs to be uploaded. */
+   service->desc_is_dirty = time(NULL);
+   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);
+ 
+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+   log_info(LD_REND,
+            ""Received INTRO_ESTABLISHED cell on circuit %u for service %s"",
+            (unsigned)circuit->base_.n_circ_id, serviceid);
+
+  /* Getting a valid INTRODUCE_ESTABLISHED means we've successfully
+   * used the circ */
+  pathbias_mark_use_success(circuit);
+
+  return 0;
+ err:
+  circuit_mark_for_close(TO_CIRCUIT(circuit), END_CIRC_REASON_TORPROTOCOL);
+  return -1;
+}
+","rend_service_intro_established(origin_circuit_t *circuit,
+                               const uint8_t *request,
+                               size_t request_len)
+{
+  rend_service_t *service;
+  rend_intro_point_t *intro;
+  char serviceid[REND_SERVICE_ID_LEN_BASE32+1];
+  (void) request;
+  (void) request_len;
+  tor_assert(circuit->rend_data);
+  /* XXX: This is version 2 specific (only supported one for now). */
+  const char *rend_pk_digest =
+    (char *) rend_data_get_pk_digest(circuit->rend_data, NULL);
+
+  if (circuit->base_.purpose != CIRCUIT_PURPOSE_S_ESTABLISH_INTRO) {
+    log_warn(LD_PROTOCOL,
+             ""received INTRO_ESTABLISHED cell on non-intro circuit."");
+    goto err;
+  }
+  service = rend_service_get_by_pk_digest(rend_pk_digest);
+  if (!service) {
+    log_warn(LD_REND, ""Unknown service on introduction circuit %u."",
+              (unsigned)circuit->base_.n_circ_id);
+     goto err;
+   }
+  base32_encode(serviceid, REND_SERVICE_ID_LEN_BASE32 + 1,
+                rend_pk_digest, REND_SERVICE_ID_LEN);
+   /* We've just successfully established a intro circuit to one of our
+    * introduction point, account for it. */
+   intro = find_intro_point(circuit);
+  if (intro == NULL) {
+    log_warn(LD_REND,
+             ""Introduction circuit established without a rend_intro_point_t ""
+             ""object for service %s on circuit %u"",
+             safe_str_client(serviceid), (unsigned)circuit->base_.n_circ_id);
+    goto err;
+  }
+  intro->circuit_established = 1;
+  /* We might not have every introduction point ready but at this point we
+   * know that the descriptor needs to be uploaded. */
+   service->desc_is_dirty = time(NULL);
+   circuit_change_purpose(TO_CIRCUIT(circuit), CIRCUIT_PURPOSE_S_INTRO);
+ 
+   log_info(LD_REND,
+            ""Received INTRO_ESTABLISHED cell on circuit %u for service %s"",
+            (unsigned)circuit->base_.n_circ_id, serviceid);
+
+  /* Getting a valid INTRODUCE_ESTABLISHED means we've successfully
+   * used the circ */
+  pathbias_mark_use_success(circuit);
+
+  return 0;
+ err:
+  circuit_mark_for_close(TO_CIRCUIT(circuit), END_CIRC_REASON_TORPROTOCOL);
+  return -1;
+}
+","The vulnerability in the original code lies in the order of operations, specifically the placement of the `base32_encode` function. In the vulnerable code, `base32_encode` is called after the `find_intro_point` function, which relies on the `serviceid` variable being correctly populated. If `find_intro_point` fails and returns `NULL`, the `serviceid` may not be valid when logged, leading to potential information leakage or incorrect logging. The fixed code addresses this by moving the `base32_encode` call before the `find_intro_point` function, ensuring that `serviceid` is always correctly populated before any operations that depend on it.","The vulnerability in the original code stems from the improper sequence of operations, which could lead to the use of uninitialized or incorrect data in subsequent logic. Specifically, if a critical check fails, the program may attempt to log or utilize data that hasn't been properly set, potentially exposing sensitive information or causing incorrect behavior. The fix rearranges the order of operations to ensure that all necessary data is correctly initialized and validated before any dependent actions are taken. This change enhances the robustness of the code by preventing reliance on potentially invalid or uninitialized data.",4,5,4,3,"CWE-457, CWE-456, CWE-665, CWE-908, CWE-824, CWE-476, CWE-252, CWE-755, CWE-571, CWE-691",N,-1

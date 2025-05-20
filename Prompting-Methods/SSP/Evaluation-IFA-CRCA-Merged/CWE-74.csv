@@ -1,0 +1,301 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5
+0,0,182009,182009,,Local,Not required,Partial,CVE-2016-3695,https://www.cvedetails.com/cve/CVE-2016-3695/,CWE-74,Low,,,,2017-12-29,2.1,The einj_error_inject function in drivers/acpi/apei/einj.c in the Linux kernel allows local users to simulate hardware errors and consequently cause a denial of service by leveraging failure to disable APEI error injection through EINJ when securelevel is set.,2018-01-10,DoS ,3,https://github.com/mjg59/linux/commit/d7a6be58edc01b1c66ecd8fcc91236bfbce0a420,d7a6be58edc01b1c66ecd8fcc91236bfbce0a420,"acpi: Disable APEI error injection if securelevel is set
+
+ACPI provides an error injection mechanism, EINJ, for debugging and testing
+the ACPI Platform Error Interface (APEI) and other RAS features. If
+supported by the firmware, ACPI specification 5.0 and later provide for a
+way to specify a physical memory address to which to inject the error.
+
+Injecting errors through EINJ can produce errors which to the platform are
+indistinguishable from real hardware errors. This can have undesirable
+side-effects, such as causing the platform to mark hardware as needing
+replacement.
+
+While it does not provide a method to load unauthenticated privileged code,
+the effect of these errors may persist across reboots and affect trust in
+the underlying hardware, so disable error injection through EINJ if
+securelevel is set.
+
+Signed-off-by: Linn Crosetto <linn@hpe.com>",0,drivers/acpi/apei/einj.c,"{""sha"": ""8c1e5f17fb3da11d6151fa873db6de1684829211"", ""filename"": ""drivers/acpi/apei/einj.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/mjg59/linux/blob/d7a6be58edc01b1c66ecd8fcc91236bfbce0a420/drivers/acpi/apei/einj.c"", ""raw_url"": ""https://github.com/mjg59/linux/raw/d7a6be58edc01b1c66ecd8fcc91236bfbce0a420/drivers/acpi/apei/einj.c"", ""contents_url"": ""https://api.github.com/repos/mjg59/linux/contents/drivers/acpi/apei/einj.c?ref=d7a6be58edc01b1c66ecd8fcc91236bfbce0a420"", ""patch"": ""@@ -29,6 +29,7 @@\n #include <linux/nmi.h>\n #include <linux/delay.h>\n #include <linux/mm.h>\n+#include <linux/security.h>\n #include <asm/unaligned.h>\n \n #include \""apei-internal.h\""\n@@ -521,6 +522,9 @@ static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,\n \tint rc;\n \tu64 base_addr, size;\n \n+\tif (get_securelevel() > 0)\n+\t\treturn -EPERM;\n+\n \t/* If user manually set \""flags\"", make sure it is legal */\n \tif (flags && (flags &\n \t\t~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))""}","static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+	if (get_securelevel() > 0)
+		return -EPERM;
+
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+","static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+",C,"	if (get_securelevel() > 0)
+		return -EPERM;
+
+",,,"@@ -29,6 +29,7 @@
+ #include <linux/nmi.h>
+ #include <linux/delay.h>
+ #include <linux/mm.h>
++#include <linux/security.h>
+ #include <asm/unaligned.h>
+ 
+ #include ""apei-internal.h""
+@@ -521,6 +522,9 @@ static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+ 	int rc;
+ 	u64 base_addr, size;
+ 
++	if (get_securelevel() > 0)
++		return -EPERM;
++
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))",linux,d7a6be58edc01b1c66ecd8fcc91236bfbce0a420,a4a5ed2835e8ea042868b7401dced3f517cafa76,1,"static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+//fix_flaw_line_below:
+//	if (get_securelevel() > 0)
+//fix_flaw_line_below:
+//		return -EPERM;
+//fix_flaw_line_below:
+//
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+",182009,"static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+","static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+	if (get_securelevel() > 0)
+		return -EPERM;
+
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+","The vulnerability in the original code lies in the lack of a security check before executing the error injection process, which could allow unauthorized users to manipulate memory errors by calling the `einj_error_inject` function. Specifically, the absence of a check for the system's security level could lead to privilege escalation. In the fixed code, the addition of the line `if (get_securelevel() > 0) return -EPERM;` ensures that only users with the appropriate security level can perform the injection, effectively mitigating the risk of unauthorized access and enhancing the overall security of the function.","The vulnerability in the original code stems from the absence of a security check, allowing unauthorized users to potentially manipulate memory error injections. This oversight could lead to privilege escalation, as the function could be executed without verifying the caller's permissions. In the revised code, a security level check was introduced at the beginning of the function, ensuring that only users with the appropriate permissions can proceed with the error injection process. This enhancement effectively mitigates the risk of unauthorized access, thereby improving the overall security of the function and protecting the system from potential exploitation.","CWE-269,CWE-284,CWE-264,CWE-732,CWE-863,CWE-120,CWE-633,CWE-250,CWE-266,CWE-20",N,-1.0,3.0,4.0,3.0,4.0

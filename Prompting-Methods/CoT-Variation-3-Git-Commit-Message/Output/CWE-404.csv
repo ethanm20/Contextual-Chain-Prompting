@@ -1,0 +1,67 @@
+,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic
+0,181360,181360,,Local,Not required,Partial,CVE-2017-8925,https://www.cvedetails.com/cve/CVE-2017-8925/,CWE-404,Low,,,,2017-05-12,2.1,The omninet_open function in drivers/usb/serial/omninet.c in the Linux kernel before 4.10.4 allows local users to cause a denial of service (tty exhaustion) by leveraging reference count mishandling.,2019-10-02,DoS ,0,https://github.com/torvalds/linux/commit/30572418b445d85fcfe6c8fe84c947d2606767d8,30572418b445d85fcfe6c8fe84c947d2606767d8,"USB: serial: omninet: fix reference leaks at open
+
+This driver needlessly took another reference to the tty on open, a
+reference which was then never released on close. This lead to not just
+a leak of the tty, but also a driver reference leak that prevented the
+driver from being unloaded after a port had once been opened.
+
+Fixes: 4a90f09b20f4 (""tty: usb-serial krefs"")
+Cc: stable <stable@vger.kernel.org>	# 2.6.28
+Signed-off-by: Johan Hovold <johan@kernel.org>",4,drivers/usb/serial/omninet.c,"{""sha"": ""76564b3bebb9bc3b1c6c2ec5761b74b2bcefcd1e"", ""filename"": ""drivers/usb/serial/omninet.c"", ""status"": ""modified"", ""additions"": 0, ""deletions"": 6, ""changes"": 6, ""blob_url"": ""https://github.com/torvalds/linux/blob/30572418b445d85fcfe6c8fe84c947d2606767d8/drivers/usb/serial/omninet.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/30572418b445d85fcfe6c8fe84c947d2606767d8/drivers/usb/serial/omninet.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/usb/serial/omninet.c?ref=30572418b445d85fcfe6c8fe84c947d2606767d8"", ""patch"": ""@@ -142,12 +142,6 @@ static int omninet_port_remove(struct usb_serial_port *port)\n \n static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)\n {\n-\tstruct usb_serial\t*serial = port->serial;\n-\tstruct usb_serial_port\t*wport;\n-\n-\twport = serial->port[1];\n-\ttty_port_tty_set(&wport->port, tty);\n-\n \treturn usb_serial_generic_open(tty, port);\n }\n ""}"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+ 	return usb_serial_generic_open(tty, port);
+ }
+"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+ 	return usb_serial_generic_open(tty, port);
+ }
+",C,,"	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+",,"@@ -142,12 +142,6 @@ static int omninet_port_remove(struct usb_serial_port *port)
+ 
+ static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+-	struct usb_serial	*serial = port->serial;
+-	struct usb_serial_port	*wport;
+-
+-	wport = serial->port[1];
+-	tty_port_tty_set(&wport->port, tty);
+-
+ 	return usb_serial_generic_open(tty, port);
+ }
+ ",linux,30572418b445d85fcfe6c8fe84c947d2606767d8,0b1d250afb8eb9d65afb568bac9b9f9253a82b49,1," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+//flaw_line_below:
+	struct usb_serial	*serial = port->serial;
+//flaw_line_below:
+	struct usb_serial_port	*wport;
+//flaw_line_below:
+
+//flaw_line_below:
+	wport = serial->port[1];
+//flaw_line_below:
+	tty_port_tty_set(&wport->port, tty);
+//flaw_line_below:
+
+ 	return usb_serial_generic_open(tty, port);
+ }
+",181360," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+ 	return usb_serial_generic_open(tty, port);
+ }
+"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+ 	return usb_serial_generic_open(tty, port);
+ }
+","The provided code defines a function `omninet_open` that is responsible for opening a USB serial port in a Linux kernel module. It takes two parameters: a pointer to a `tty_struct` representing the terminal interface and a pointer to a `usb_serial_port` representing the USB serial port. The function retrieves the associated `usb_serial` structure and identifies a secondary port (the second port in the array). It then associates the terminal with this secondary port using `tty_port_tty_set`. Finally, it calls `usb_serial_generic_open` to perform the standard operations required to open the USB serial connection.","The code defines a function that facilitates the opening of a USB serial port within a Linux kernel module. It accepts parameters representing a terminal interface and a USB serial port. The function identifies a secondary port associated with the USB serial device and links the terminal interface to this port. Subsequently, it invokes a standard procedure to execute the necessary operations for establishing the USB serial connection. This process ensures that the terminal can communicate effectively with the specified USB serial device, enabling data transmission and reception.","The vulnerability in the original code stemmed from an unnecessary reference being taken on the terminal interface during the opening of the USB serial port, which was never released upon closing. This led to a memory leak of the terminal reference and a driver reference leak, preventing the driver from being unloaded after the port was opened. In the fixed code, the redundant reference acquisition was removed, directly calling the standard opening function without additional reference handling. This change ensures that references are managed correctly, allowing for proper resource cleanup and enabling the driver to be unloaded as intended.","The vulnerability in the original code arose from the unnecessary acquisition of an additional reference to the terminal interface during the opening process, which was not released when the port was closed. This oversight resulted in memory leaks for both the terminal and the driver, ultimately preventing the driver from being unloaded after its initial use. The fix addressed this issue by eliminating the redundant reference acquisition, allowing the opening process to proceed without creating additional references. This change ensures proper management of resources, facilitating correct cleanup and enabling the driver to be unloaded as needed.","The vulnerability was fixed by removing the unnecessary reference acquisition to the terminal interface in the `omninet_open` function. In the original code, the function called `tty_port_tty_set`, which took an additional reference that was never released, leading to memory leaks. The revised code directly calls `usb_serial_generic_open` without the extra reference handling, streamlining the process. This change ensures that references are managed correctly, preventing leaks and allowing for proper resource cleanup when the port is closed, thus enabling the driver to be unloaded without issues after it has been used.","The vulnerability was fixed by eliminating the unnecessary acquisition of an additional reference to the terminal interface during the opening process. The original implementation created a reference that was never released, leading to memory leaks and preventing the driver from being unloaded. The revised code streamlined the opening procedure by directly invoking the standard function responsible for opening the USB serial port, thereby avoiding the redundant reference handling. This adjustment ensures proper management of resources, allowing for effective cleanup and enabling the driver to be unloaded without encountering issues related to lingering references."

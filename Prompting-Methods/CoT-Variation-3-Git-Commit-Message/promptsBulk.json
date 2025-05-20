@@ -1,0 +1,46 @@
+{
+    "prompts": [ 
+            {
+                "column_prefix": "C1",
+                "column_name": "C1_Description_of_Functionality_In_Context",
+                "conditional": false,
+                "response_length": 100,
+                "prompt": "Please provide a clear and comprehensive description of the functionality of the code. In the outputted description please ensure that: \n 1. The description is limited to one paragraph and between 90-100 words. \n Code: \n $primevul_func_before_fix"
+            },
+            {
+                "column_prefix": "C2",
+                "column_name": "C2_Description_of_Functionality_Generic",
+                "conditional": false,
+                "response_length": 100,
+                "prompt": "Please provide a clear and comprehensive description of the functionality of the code that was given to you in the first prompt. In the outputted description please ensure that: \n 1. The description is limited to one paragraph and between 90-100 words. \n 2. Do not include any variable/function/expression names in the description."
+            },
+            {
+                "column_prefix": "C3",
+                "column_name": "C3_Explanation_of_Vulnerability_In_Context",
+                "conditional": false,
+                "response_length": 100,
+                "prompt": "Please explain the vulnerability in the Vulnerable Code (with Git Commit Message below) and then explain how the vulnerability was fixed in the changed code. To explain the cause of the vulnerability, get the context from the changed code on how the vulnerability was fixed. In your response please ensure that: \n 1. The response is limited to one paragraph and between 90-100 words. \n 2. The response should include variable/function/expression names from the code. \n Code before Change/Fix (Vulnerable Code): \n The code provided in the first prompt. \n Code after Change/Fix (Fixed Code): \n $primevul_func_after_fix \n Git Commit Message for Code Change: \n $git_commit_message  \n"
+            },
+            {
+                "column_prefix": "C4",
+                "column_name": "C4_Explanation_of_Vulnerability_Generic",
+                "conditional": false,
+                "response_length": 100,
+                "prompt": "Please explain the vulnerability in the Vulnerable Code (with Git Commit Message below) and then explain how the vulnerability was fixed in the changed code. To explain the cause of the vulnerability, get the context from the changed code on how the vulnerability was fixed. In your response please ensure that: \n 1. The response is limited to one paragraph and between 90-100 words. \n 2. Do not include any variable/function/expression names in the description. \n Git Commit Message for Code Change: \n $git_commit_message  \n"
+            },
+            {
+                "column_prefix": "C5",
+                "column_name": "C5_Explanation_Vulnerability_Fixed_In_Context",
+                "conditional": false,
+                "response_length": 100,
+                "prompt": "Please explain how the vulnerability was fixed. In your response please ensure that: \n 1. The response is limited to one paragraph and between 90-100 words. \n 2. The response should include variable/fuction/expression names from the code. \n"
+            },
+            {
+                "column_prefix": "C6",
+                "column_name": "C6_Explanation_Vulnerability_Fixed_Generic",
+                "conditional": false, 
+                "response_length": 100,
+                "prompt": "Please explain how the vulnerability was fixed. In your response please ensure that: \n 1. The response is limited to one paragraph and between 90-100 words. \n 2. Do not include any variable/function/expression names in the description. \n"
+            }
+]
+}

@@ -1,0 +1,198 @@
+,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic
+0,188095,188095,,Local,Not required,Complete,CVE-2018-9511,https://www.cvedetails.com/cve/CVE-2018-9511/,CWE-909,Low,,,,2018-10-02,4.9,"In ipSecSetEncapSocketOwner of XfrmController.cpp, there is a possible failure to initialize a security feature due to uninitialized data. This could lead to local denial of service of IPsec on sockets with no additional execution privileges needed. User interaction is not needed for exploitation. Product: Android Versions: Android-9.0 Android ID: A-111650288",2019-10-02,DoS ,1,https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe,931418b16c7197ca2df34c2a5609e49791125abe,"Set optlen for UDP-encap check in XfrmController
+
+When setting the socket owner for an encap socket XfrmController will
+first attempt to verify that the socket has the UDP-encap socket option
+set. When doing so it would pass in an uninitialized optlen parameter
+which could cause the call to not modify the option value if the optlen
+happened to be too short. So for example if the stack happened to
+contain a zero where optlen was located the check would fail and the
+socket owner would not be changed.
+
+Fix this by setting optlen to the size of the option value parameter.
+
+Test: run cts -m CtsNetTestCases
+BUG: 111650288
+Change-Id: I57b6e9dba09c1acda71e3ec2084652e961667bd9
+(cherry picked from commit fc42a105147310bd680952d4b71fe32974bd8506)
+",1,server/XfrmController.cpp,"{""filename"": ""server/XfrmController.cpp"", ""raw_url"": ""https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe/server/XfrmController.cpp"", ""patch"": ""@@ -436,7 +436,7 @@\n\n     }\n \n     int optval;\n-    socklen_t optlen;\n+    socklen_t optlen = sizeof(optval);\n     netdutils::Status status =\n         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);\n     if (status != netdutils::status::ok) {\n""}","netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+","netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen;
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+",C,"    socklen_t optlen = sizeof(optval);
+","    socklen_t optlen;
+",,"@@ -436,7 +436,7 @@
+
+     }
+ 
+     int optval;
+-    socklen_t optlen;
++    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+",Android,https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe/,https://android.googlesource.com/platform/system/netd/+/931418b16c7197ca2df34c2a5609e49791125abe%5E/,1,"netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+//flaw_line_below:
+    socklen_t optlen;
+//fix_flaw_line_below:
+//    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+",188095,"netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen;
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+","netdutils::Status XfrmController::ipSecSetEncapSocketOwner(const android::base::unique_fd& socket,
+ int newUid, uid_t callerUid) {
+    ALOGD(""XfrmController:%s, line=%d"", __FUNCTION__, __LINE__);
+
+ const int fd = socket.get();
+ struct stat info;
+ if (fstat(fd, &info)) {
+ return netdutils::statusFromErrno(errno, ""Failed to stat socket file descriptor"");
+ }
+ if (info.st_uid != callerUid) {
+ return netdutils::statusFromErrno(EPERM, ""fchown disabled for non-owner calls"");
+ }
+ if (S_ISSOCK(info.st_mode) == 0) {
+ return netdutils::statusFromErrno(EINVAL, ""File descriptor was not a socket"");
+
+     }
+ 
+     int optval;
+    socklen_t optlen = sizeof(optval);
+     netdutils::Status status =
+         getSyscallInstance().getsockopt(Fd(socket), IPPROTO_UDP, UDP_ENCAP, &optval, &optlen);
+     if (status != netdutils::status::ok) {
+ return status;
+ }
+ if (optval != UDP_ENCAP_ESPINUDP && optval != UDP_ENCAP_ESPINUDP_NON_IKE) {
+ return netdutils::statusFromErrno(EINVAL, ""Socket did not have UDP-encap sockopt set"");
+ }
+ if (fchown(fd, newUid, -1)) {
+ return netdutils::statusFromErrno(errno, ""Failed to fchown socket file descriptor"");
+ }
+
+ return netdutils::status::ok;
+}
+","The vulnerability in the original code lies in the uninitialized variable `optlen`, which is used in the `getsockopt` function call. If `optlen` is not set to the size of `optval`, it could lead to buffer overflows or incorrect memory access, potentially allowing an attacker to manipulate socket options improperly. In the fixed code, `socklen_t optlen = sizeof(optval);` initializes `optlen` correctly, ensuring that the size of `optval` is passed to `getsockopt`. This change mitigates the risk of memory-related vulnerabilities by ensuring proper memory management during socket option retrieval.","The vulnerability in the original code stems from the use of an uninitialized variable that is critical for determining the size of a buffer during a system call. This oversight can lead to memory corruption or buffer overflow, potentially allowing an attacker to exploit the application by manipulating memory access. The fixed code addresses this issue by properly initializing the variable to the size of the buffer before it is used in the system call. This ensures that the correct amount of memory is referenced, thereby enhancing the security and stability of the application by preventing unintended memory access."

@@ -1,0 +1,929 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5
+0,0,182331,182331,,Remote,Not required,Partial,CVE-2018-13302,https://www.cvedetails.com/cve/CVE-2018-13302/,CWE-129,Medium,Partial,Partial,,2018-07-05,6.8,"In FFmpeg 4.0.1, improper handling of frame types (other than EAC3_FRAME_TYPE_INDEPENDENT) that have multiple independent substreams in the handle_eac3 function in libavformat/movenc.c may trigger an out-of-array access while converting a crafted AVI file to MPEG4, leading to a denial of service or possibly unspecified other impact.",2019-10-02,DoS ,6,https://github.com/FFmpeg/FFmpeg/commit/ed22dc22216f74c75ee7901f82649e1ff725ba50,ed22dc22216f74c75ee7901f82649e1ff725ba50,"avformat/movenc: Check that frame_types other than EAC3_FRAME_TYPE_INDEPENDENT have a supported substream id
+
+Fixes: out of array access
+Fixes: ffmpeg_bof_1.avi
+
+Found-by: Thuan Pham, Marcel Böhme, Andrew Santosa and Alexandru Razvan Caciulescu with AFLSmart
+Signed-off-by: Michael Niedermayer <michael@niedermayer.cc>",0,libavformat/movenc.c,"{""sha"": ""6eabf32fce319dadf84346a4d92dbc2b207a594e"", ""filename"": ""libavformat/movenc.c"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 0, ""changes"": 6, ""blob_url"": ""https://github.com/FFmpeg/FFmpeg/blob/ed22dc22216f74c75ee7901f82649e1ff725ba50/libavformat/movenc.c"", ""raw_url"": ""https://github.com/FFmpeg/FFmpeg/raw/ed22dc22216f74c75ee7901f82649e1ff725ba50/libavformat/movenc.c"", ""contents_url"": ""https://api.github.com/repos/FFmpeg/FFmpeg/contents/libavformat/movenc.c?ref=ed22dc22216f74c75ee7901f82649e1ff725ba50"", ""patch"": ""@@ -437,6 +437,12 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)\n                 info->ec3_done = 1;\n                 goto concatenate;\n             }\n+        } else {\n+            if (hdr->substreamid != 0) {\n+                avpriv_request_sample(mov->fc, \""Multiple non EAC3 independent substreams\"");\n+                ret = AVERROR_PATCHWELCOME;\n+                goto end;\n+            }\n         }\n \n         /* fill the info needed for the \""dec3\"" atom */""}","static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+{
+    AC3HeaderInfo *hdr = NULL;
+    struct eac3_info *info;
+    int num_blocks, ret;
+
+    if (!track->eac3_priv && !(track->eac3_priv = av_mallocz(sizeof(*info))))
+        return AVERROR(ENOMEM);
+    info = track->eac3_priv;
+
+    if (avpriv_ac3_parse_header(&hdr, pkt->data, pkt->size) < 0) {
+        /* drop the packets until we see a good one */
+        if (!track->entry) {
+            av_log(mov, AV_LOG_WARNING, ""Dropping invalid packet from start of the stream\n"");
+            ret = 0;
+        } else
+            ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    info->data_rate = FFMAX(info->data_rate, hdr->bit_rate / 1000);
+    num_blocks = hdr->num_blocks;
+
+    if (!info->ec3_done) {
+        /* AC-3 substream must be the first one */
+        if (hdr->bitstream_id <= 10 && hdr->substreamid != 0) {
+            ret = AVERROR(EINVAL);
+            goto end;
+        }
+
+        /* this should always be the case, given that our AC-3 parser
+         * concatenates dependent frames to their independent parent */
+        if (hdr->frame_type == EAC3_FRAME_TYPE_INDEPENDENT) {
+            /* substream ids must be incremental */
+            if (hdr->substreamid > info->num_ind_sub + 1) {
+                ret = AVERROR(EINVAL);
+                goto end;
+            }
+
+            if (hdr->substreamid == info->num_ind_sub + 1) {
+                avpriv_request_sample(track->par, ""Multiple independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            } else if (hdr->substreamid < info->num_ind_sub ||
+                       hdr->substreamid == 0 && info->substream[0].bsid) {
+                 info->ec3_done = 1;
+                 goto concatenate;
+             }
+        } else {
+            if (hdr->substreamid != 0) {
+                avpriv_request_sample(mov->fc, ""Multiple non EAC3 independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            }
+         }
+ 
+         /* fill the info needed for the ""dec3"" atom */
+        info->substream[hdr->substreamid].fscod = hdr->sr_code;
+        info->substream[hdr->substreamid].bsid  = hdr->bitstream_id;
+        info->substream[hdr->substreamid].bsmod = hdr->bitstream_mode;
+        info->substream[hdr->substreamid].acmod = hdr->channel_mode;
+        info->substream[hdr->substreamid].lfeon = hdr->lfe_on;
+
+        /* Parse dependent substream(s), if any */
+        if (pkt->size != hdr->frame_size) {
+            int cumul_size = hdr->frame_size;
+            int parent = hdr->substreamid;
+
+            while (cumul_size != pkt->size) {
+                GetBitContext gbc;
+                int i;
+                ret = avpriv_ac3_parse_header(&hdr, pkt->data + cumul_size, pkt->size - cumul_size);
+                if (ret < 0)
+                    goto end;
+                if (hdr->frame_type != EAC3_FRAME_TYPE_DEPENDENT) {
+                    ret = AVERROR(EINVAL);
+                    goto end;
+                }
+                info->substream[parent].num_dep_sub++;
+                ret /= 8;
+
+                /* header is parsed up to lfeon, but custom channel map may be needed */
+                init_get_bits8(&gbc, pkt->data + cumul_size + ret, pkt->size - cumul_size - ret);
+                /* skip bsid */
+                skip_bits(&gbc, 5);
+                /* skip volume control params */
+                for (i = 0; i < (hdr->channel_mode ? 1 : 2); i++) {
+                    skip_bits(&gbc, 5); // skip dialog normalization
+                    if (get_bits1(&gbc)) {
+                        skip_bits(&gbc, 8); // skip compression gain word
+                    }
+                }
+                /* get the dependent stream channel map, if exists */
+                if (get_bits1(&gbc))
+                    info->substream[parent].chan_loc |= (get_bits(&gbc, 16) >> 5) & 0x1f;
+                else
+                    info->substream[parent].chan_loc |= hdr->channel_mode;
+                cumul_size += hdr->frame_size;
+            }
+        }
+    }
+
+concatenate:
+    if (!info->num_blocks && num_blocks == 6) {
+        ret = pkt->size;
+        goto end;
+    }
+    else if (info->num_blocks + num_blocks > 6) {
+        ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    if (!info->num_blocks) {
+        ret = av_packet_ref(&info->pkt, pkt);
+        if (!ret)
+            info->num_blocks = num_blocks;
+        goto end;
+    } else {
+        if ((ret = av_grow_packet(&info->pkt, pkt->size)) < 0)
+            goto end;
+        memcpy(info->pkt.data + info->pkt.size - pkt->size, pkt->data, pkt->size);
+        info->num_blocks += num_blocks;
+        info->pkt.duration += pkt->duration;
+        if ((ret = av_copy_packet_side_data(&info->pkt, pkt)) < 0)
+            goto end;
+        if (info->num_blocks != 6)
+            goto end;
+        av_packet_unref(pkt);
+        av_packet_move_ref(pkt, &info->pkt);
+        info->num_blocks = 0;
+    }
+    ret = pkt->size;
+
+end:
+    av_free(hdr);
+
+    return ret;
+}
+","static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+{
+    AC3HeaderInfo *hdr = NULL;
+    struct eac3_info *info;
+    int num_blocks, ret;
+
+    if (!track->eac3_priv && !(track->eac3_priv = av_mallocz(sizeof(*info))))
+        return AVERROR(ENOMEM);
+    info = track->eac3_priv;
+
+    if (avpriv_ac3_parse_header(&hdr, pkt->data, pkt->size) < 0) {
+        /* drop the packets until we see a good one */
+        if (!track->entry) {
+            av_log(mov, AV_LOG_WARNING, ""Dropping invalid packet from start of the stream\n"");
+            ret = 0;
+        } else
+            ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    info->data_rate = FFMAX(info->data_rate, hdr->bit_rate / 1000);
+    num_blocks = hdr->num_blocks;
+
+    if (!info->ec3_done) {
+        /* AC-3 substream must be the first one */
+        if (hdr->bitstream_id <= 10 && hdr->substreamid != 0) {
+            ret = AVERROR(EINVAL);
+            goto end;
+        }
+
+        /* this should always be the case, given that our AC-3 parser
+         * concatenates dependent frames to their independent parent */
+        if (hdr->frame_type == EAC3_FRAME_TYPE_INDEPENDENT) {
+            /* substream ids must be incremental */
+            if (hdr->substreamid > info->num_ind_sub + 1) {
+                ret = AVERROR(EINVAL);
+                goto end;
+            }
+
+            if (hdr->substreamid == info->num_ind_sub + 1) {
+                avpriv_request_sample(track->par, ""Multiple independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            } else if (hdr->substreamid < info->num_ind_sub ||
+                       hdr->substreamid == 0 && info->substream[0].bsid) {
+                 info->ec3_done = 1;
+                 goto concatenate;
+             }
+         }
+ 
+         /* fill the info needed for the ""dec3"" atom */
+        info->substream[hdr->substreamid].fscod = hdr->sr_code;
+        info->substream[hdr->substreamid].bsid  = hdr->bitstream_id;
+        info->substream[hdr->substreamid].bsmod = hdr->bitstream_mode;
+        info->substream[hdr->substreamid].acmod = hdr->channel_mode;
+        info->substream[hdr->substreamid].lfeon = hdr->lfe_on;
+
+        /* Parse dependent substream(s), if any */
+        if (pkt->size != hdr->frame_size) {
+            int cumul_size = hdr->frame_size;
+            int parent = hdr->substreamid;
+
+            while (cumul_size != pkt->size) {
+                GetBitContext gbc;
+                int i;
+                ret = avpriv_ac3_parse_header(&hdr, pkt->data + cumul_size, pkt->size - cumul_size);
+                if (ret < 0)
+                    goto end;
+                if (hdr->frame_type != EAC3_FRAME_TYPE_DEPENDENT) {
+                    ret = AVERROR(EINVAL);
+                    goto end;
+                }
+                info->substream[parent].num_dep_sub++;
+                ret /= 8;
+
+                /* header is parsed up to lfeon, but custom channel map may be needed */
+                init_get_bits8(&gbc, pkt->data + cumul_size + ret, pkt->size - cumul_size - ret);
+                /* skip bsid */
+                skip_bits(&gbc, 5);
+                /* skip volume control params */
+                for (i = 0; i < (hdr->channel_mode ? 1 : 2); i++) {
+                    skip_bits(&gbc, 5); // skip dialog normalization
+                    if (get_bits1(&gbc)) {
+                        skip_bits(&gbc, 8); // skip compression gain word
+                    }
+                }
+                /* get the dependent stream channel map, if exists */
+                if (get_bits1(&gbc))
+                    info->substream[parent].chan_loc |= (get_bits(&gbc, 16) >> 5) & 0x1f;
+                else
+                    info->substream[parent].chan_loc |= hdr->channel_mode;
+                cumul_size += hdr->frame_size;
+            }
+        }
+    }
+
+concatenate:
+    if (!info->num_blocks && num_blocks == 6) {
+        ret = pkt->size;
+        goto end;
+    }
+    else if (info->num_blocks + num_blocks > 6) {
+        ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    if (!info->num_blocks) {
+        ret = av_packet_ref(&info->pkt, pkt);
+        if (!ret)
+            info->num_blocks = num_blocks;
+        goto end;
+    } else {
+        if ((ret = av_grow_packet(&info->pkt, pkt->size)) < 0)
+            goto end;
+        memcpy(info->pkt.data + info->pkt.size - pkt->size, pkt->data, pkt->size);
+        info->num_blocks += num_blocks;
+        info->pkt.duration += pkt->duration;
+        if ((ret = av_copy_packet_side_data(&info->pkt, pkt)) < 0)
+            goto end;
+        if (info->num_blocks != 6)
+            goto end;
+        av_packet_unref(pkt);
+        av_packet_move_ref(pkt, &info->pkt);
+        info->num_blocks = 0;
+    }
+    ret = pkt->size;
+
+end:
+    av_free(hdr);
+
+    return ret;
+}
+",C,"        } else {
+            if (hdr->substreamid != 0) {
+                avpriv_request_sample(mov->fc, ""Multiple non EAC3 independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            }
+",,,"@@ -437,6 +437,12 @@ static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+                 info->ec3_done = 1;
+                 goto concatenate;
+             }
++        } else {
++            if (hdr->substreamid != 0) {
++                avpriv_request_sample(mov->fc, ""Multiple non EAC3 independent substreams"");
++                ret = AVERROR_PATCHWELCOME;
++                goto end;
++            }
+         }
+ 
+         /* fill the info needed for the ""dec3"" atom */",FFmpeg,ed22dc22216f74c75ee7901f82649e1ff725ba50,75a2db552423295b509546f3b0f8b2b46d3424b1,1,"static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+{
+    AC3HeaderInfo *hdr = NULL;
+    struct eac3_info *info;
+    int num_blocks, ret;
+
+    if (!track->eac3_priv && !(track->eac3_priv = av_mallocz(sizeof(*info))))
+        return AVERROR(ENOMEM);
+    info = track->eac3_priv;
+
+    if (avpriv_ac3_parse_header(&hdr, pkt->data, pkt->size) < 0) {
+        /* drop the packets until we see a good one */
+        if (!track->entry) {
+            av_log(mov, AV_LOG_WARNING, ""Dropping invalid packet from start of the stream\n"");
+            ret = 0;
+        } else
+            ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    info->data_rate = FFMAX(info->data_rate, hdr->bit_rate / 1000);
+    num_blocks = hdr->num_blocks;
+
+    if (!info->ec3_done) {
+        /* AC-3 substream must be the first one */
+        if (hdr->bitstream_id <= 10 && hdr->substreamid != 0) {
+            ret = AVERROR(EINVAL);
+            goto end;
+        }
+
+        /* this should always be the case, given that our AC-3 parser
+         * concatenates dependent frames to their independent parent */
+        if (hdr->frame_type == EAC3_FRAME_TYPE_INDEPENDENT) {
+            /* substream ids must be incremental */
+            if (hdr->substreamid > info->num_ind_sub + 1) {
+                ret = AVERROR(EINVAL);
+                goto end;
+            }
+
+            if (hdr->substreamid == info->num_ind_sub + 1) {
+                //info->num_ind_sub++;
+                avpriv_request_sample(track->par, ""Multiple independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            } else if (hdr->substreamid < info->num_ind_sub ||
+                       hdr->substreamid == 0 && info->substream[0].bsid) {
+                 info->ec3_done = 1;
+                 goto concatenate;
+             }
+//fix_flaw_line_below:
+//        } else {
+//fix_flaw_line_below:
+//            if (hdr->substreamid != 0) {
+//fix_flaw_line_below:
+//                avpriv_request_sample(mov->fc, ""Multiple non EAC3 independent substreams"");
+//fix_flaw_line_below:
+//                ret = AVERROR_PATCHWELCOME;
+//fix_flaw_line_below:
+//                goto end;
+//fix_flaw_line_below:
+//            }
+         }
+ 
+         /* fill the info needed for the ""dec3"" atom */
+        info->substream[hdr->substreamid].fscod = hdr->sr_code;
+        info->substream[hdr->substreamid].bsid  = hdr->bitstream_id;
+        info->substream[hdr->substreamid].bsmod = hdr->bitstream_mode;
+        info->substream[hdr->substreamid].acmod = hdr->channel_mode;
+        info->substream[hdr->substreamid].lfeon = hdr->lfe_on;
+
+        /* Parse dependent substream(s), if any */
+        if (pkt->size != hdr->frame_size) {
+            int cumul_size = hdr->frame_size;
+            int parent = hdr->substreamid;
+
+            while (cumul_size != pkt->size) {
+                GetBitContext gbc;
+                int i;
+                ret = avpriv_ac3_parse_header(&hdr, pkt->data + cumul_size, pkt->size - cumul_size);
+                if (ret < 0)
+                    goto end;
+                if (hdr->frame_type != EAC3_FRAME_TYPE_DEPENDENT) {
+                    ret = AVERROR(EINVAL);
+                    goto end;
+                }
+                info->substream[parent].num_dep_sub++;
+                ret /= 8;
+
+                /* header is parsed up to lfeon, but custom channel map may be needed */
+                init_get_bits8(&gbc, pkt->data + cumul_size + ret, pkt->size - cumul_size - ret);
+                /* skip bsid */
+                skip_bits(&gbc, 5);
+                /* skip volume control params */
+                for (i = 0; i < (hdr->channel_mode ? 1 : 2); i++) {
+                    skip_bits(&gbc, 5); // skip dialog normalization
+                    if (get_bits1(&gbc)) {
+                        skip_bits(&gbc, 8); // skip compression gain word
+                    }
+                }
+                /* get the dependent stream channel map, if exists */
+                if (get_bits1(&gbc))
+                    info->substream[parent].chan_loc |= (get_bits(&gbc, 16) >> 5) & 0x1f;
+                else
+                    info->substream[parent].chan_loc |= hdr->channel_mode;
+                cumul_size += hdr->frame_size;
+            }
+        }
+    }
+
+concatenate:
+    if (!info->num_blocks && num_blocks == 6) {
+        ret = pkt->size;
+        goto end;
+    }
+    else if (info->num_blocks + num_blocks > 6) {
+        ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    if (!info->num_blocks) {
+        ret = av_packet_ref(&info->pkt, pkt);
+        if (!ret)
+            info->num_blocks = num_blocks;
+        goto end;
+    } else {
+        if ((ret = av_grow_packet(&info->pkt, pkt->size)) < 0)
+            goto end;
+        memcpy(info->pkt.data + info->pkt.size - pkt->size, pkt->data, pkt->size);
+        info->num_blocks += num_blocks;
+        info->pkt.duration += pkt->duration;
+        if ((ret = av_copy_packet_side_data(&info->pkt, pkt)) < 0)
+            goto end;
+        if (info->num_blocks != 6)
+            goto end;
+        av_packet_unref(pkt);
+        av_packet_move_ref(pkt, &info->pkt);
+        info->num_blocks = 0;
+    }
+    ret = pkt->size;
+
+end:
+    av_free(hdr);
+
+    return ret;
+}
+",182331,"static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+{
+    AC3HeaderInfo *hdr = NULL;
+    struct eac3_info *info;
+    int num_blocks, ret;
+
+    if (!track->eac3_priv && !(track->eac3_priv = av_mallocz(sizeof(*info))))
+        return AVERROR(ENOMEM);
+    info = track->eac3_priv;
+
+    if (avpriv_ac3_parse_header(&hdr, pkt->data, pkt->size) < 0) {
+        /* drop the packets until we see a good one */
+        if (!track->entry) {
+            av_log(mov, AV_LOG_WARNING, ""Dropping invalid packet from start of the stream\n"");
+            ret = 0;
+        } else
+            ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    info->data_rate = FFMAX(info->data_rate, hdr->bit_rate / 1000);
+    num_blocks = hdr->num_blocks;
+
+    if (!info->ec3_done) {
+        /* AC-3 substream must be the first one */
+        if (hdr->bitstream_id <= 10 && hdr->substreamid != 0) {
+            ret = AVERROR(EINVAL);
+            goto end;
+        }
+
+        /* this should always be the case, given that our AC-3 parser
+         * concatenates dependent frames to their independent parent */
+        if (hdr->frame_type == EAC3_FRAME_TYPE_INDEPENDENT) {
+            /* substream ids must be incremental */
+            if (hdr->substreamid > info->num_ind_sub + 1) {
+                ret = AVERROR(EINVAL);
+                goto end;
+            }
+
+            if (hdr->substreamid == info->num_ind_sub + 1) {
+                //info->num_ind_sub++;
+                avpriv_request_sample(track->par, ""Multiple independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            } else if (hdr->substreamid < info->num_ind_sub ||
+                       hdr->substreamid == 0 && info->substream[0].bsid) {
+                info->ec3_done = 1;
+                goto concatenate;
+            }
+        }
+
+        /* fill the info needed for the ""dec3"" atom */
+        info->substream[hdr->substreamid].fscod = hdr->sr_code;
+        info->substream[hdr->substreamid].bsid  = hdr->bitstream_id;
+        info->substream[hdr->substreamid].bsmod = hdr->bitstream_mode;
+        info->substream[hdr->substreamid].acmod = hdr->channel_mode;
+        info->substream[hdr->substreamid].lfeon = hdr->lfe_on;
+
+        /* Parse dependent substream(s), if any */
+        if (pkt->size != hdr->frame_size) {
+            int cumul_size = hdr->frame_size;
+            int parent = hdr->substreamid;
+
+            while (cumul_size != pkt->size) {
+                GetBitContext gbc;
+                int i;
+                ret = avpriv_ac3_parse_header(&hdr, pkt->data + cumul_size, pkt->size - cumul_size);
+                if (ret < 0)
+                    goto end;
+                if (hdr->frame_type != EAC3_FRAME_TYPE_DEPENDENT) {
+                    ret = AVERROR(EINVAL);
+                    goto end;
+                }
+                info->substream[parent].num_dep_sub++;
+                ret /= 8;
+
+                /* header is parsed up to lfeon, but custom channel map may be needed */
+                init_get_bits8(&gbc, pkt->data + cumul_size + ret, pkt->size - cumul_size - ret);
+                /* skip bsid */
+                skip_bits(&gbc, 5);
+                /* skip volume control params */
+                for (i = 0; i < (hdr->channel_mode ? 1 : 2); i++) {
+                    skip_bits(&gbc, 5); // skip dialog normalization
+                    if (get_bits1(&gbc)) {
+                        skip_bits(&gbc, 8); // skip compression gain word
+                    }
+                }
+                /* get the dependent stream channel map, if exists */
+                if (get_bits1(&gbc))
+                    info->substream[parent].chan_loc |= (get_bits(&gbc, 16) >> 5) & 0x1f;
+                else
+                    info->substream[parent].chan_loc |= hdr->channel_mode;
+                cumul_size += hdr->frame_size;
+            }
+        }
+    }
+
+concatenate:
+    if (!info->num_blocks && num_blocks == 6) {
+        ret = pkt->size;
+        goto end;
+    }
+    else if (info->num_blocks + num_blocks > 6) {
+        ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    if (!info->num_blocks) {
+        ret = av_packet_ref(&info->pkt, pkt);
+        if (!ret)
+            info->num_blocks = num_blocks;
+        goto end;
+    } else {
+        if ((ret = av_grow_packet(&info->pkt, pkt->size)) < 0)
+            goto end;
+        memcpy(info->pkt.data + info->pkt.size - pkt->size, pkt->data, pkt->size);
+        info->num_blocks += num_blocks;
+        info->pkt.duration += pkt->duration;
+        if ((ret = av_copy_packet_side_data(&info->pkt, pkt)) < 0)
+            goto end;
+        if (info->num_blocks != 6)
+            goto end;
+        av_packet_unref(pkt);
+        av_packet_move_ref(pkt, &info->pkt);
+        info->num_blocks = 0;
+    }
+    ret = pkt->size;
+
+end:
+    av_free(hdr);
+
+    return ret;
+}","static int handle_eac3(MOVMuxContext *mov, AVPacket *pkt, MOVTrack *track)
+{
+    AC3HeaderInfo *hdr = NULL;
+    struct eac3_info *info;
+    int num_blocks, ret;
+
+    if (!track->eac3_priv && !(track->eac3_priv = av_mallocz(sizeof(*info))))
+        return AVERROR(ENOMEM);
+    info = track->eac3_priv;
+
+    if (avpriv_ac3_parse_header(&hdr, pkt->data, pkt->size) < 0) {
+        /* drop the packets until we see a good one */
+        if (!track->entry) {
+            av_log(mov, AV_LOG_WARNING, ""Dropping invalid packet from start of the stream\n"");
+            ret = 0;
+        } else
+            ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    info->data_rate = FFMAX(info->data_rate, hdr->bit_rate / 1000);
+    num_blocks = hdr->num_blocks;
+
+    if (!info->ec3_done) {
+        /* AC-3 substream must be the first one */
+        if (hdr->bitstream_id <= 10 && hdr->substreamid != 0) {
+            ret = AVERROR(EINVAL);
+            goto end;
+        }
+
+        /* this should always be the case, given that our AC-3 parser
+         * concatenates dependent frames to their independent parent */
+        if (hdr->frame_type == EAC3_FRAME_TYPE_INDEPENDENT) {
+            /* substream ids must be incremental */
+            if (hdr->substreamid > info->num_ind_sub + 1) {
+                ret = AVERROR(EINVAL);
+                goto end;
+            }
+
+            if (hdr->substreamid == info->num_ind_sub + 1) {
+                avpriv_request_sample(track->par, ""Multiple independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            } else if (hdr->substreamid < info->num_ind_sub ||
+                       hdr->substreamid == 0 && info->substream[0].bsid) {
+                 info->ec3_done = 1;
+                 goto concatenate;
+             }
+        } else {
+            if (hdr->substreamid != 0) {
+                avpriv_request_sample(mov->fc, ""Multiple non EAC3 independent substreams"");
+                ret = AVERROR_PATCHWELCOME;
+                goto end;
+            }
+         }
+ 
+         /* fill the info needed for the ""dec3"" atom */
+        info->substream[hdr->substreamid].fscod = hdr->sr_code;
+        info->substream[hdr->substreamid].bsid  = hdr->bitstream_id;
+        info->substream[hdr->substreamid].bsmod = hdr->bitstream_mode;
+        info->substream[hdr->substreamid].acmod = hdr->channel_mode;
+        info->substream[hdr->substreamid].lfeon = hdr->lfe_on;
+
+        /* Parse dependent substream(s), if any */
+        if (pkt->size != hdr->frame_size) {
+            int cumul_size = hdr->frame_size;
+            int parent = hdr->substreamid;
+
+            while (cumul_size != pkt->size) {
+                GetBitContext gbc;
+                int i;
+                ret = avpriv_ac3_parse_header(&hdr, pkt->data + cumul_size, pkt->size - cumul_size);
+                if (ret < 0)
+                    goto end;
+                if (hdr->frame_type != EAC3_FRAME_TYPE_DEPENDENT) {
+                    ret = AVERROR(EINVAL);
+                    goto end;
+                }
+                info->substream[parent].num_dep_sub++;
+                ret /= 8;
+
+                /* header is parsed up to lfeon, but custom channel map may be needed */
+                init_get_bits8(&gbc, pkt->data + cumul_size + ret, pkt->size - cumul_size - ret);
+                /* skip bsid */
+                skip_bits(&gbc, 5);
+                /* skip volume control params */
+                for (i = 0; i < (hdr->channel_mode ? 1 : 2); i++) {
+                    skip_bits(&gbc, 5); // skip dialog normalization
+                    if (get_bits1(&gbc)) {
+                        skip_bits(&gbc, 8); // skip compression gain word
+                    }
+                }
+                /* get the dependent stream channel map, if exists */
+                if (get_bits1(&gbc))
+                    info->substream[parent].chan_loc |= (get_bits(&gbc, 16) >> 5) & 0x1f;
+                else
+                    info->substream[parent].chan_loc |= hdr->channel_mode;
+                cumul_size += hdr->frame_size;
+            }
+        }
+    }
+
+concatenate:
+    if (!info->num_blocks && num_blocks == 6) {
+        ret = pkt->size;
+        goto end;
+    }
+    else if (info->num_blocks + num_blocks > 6) {
+        ret = AVERROR_INVALIDDATA;
+        goto end;
+    }
+
+    if (!info->num_blocks) {
+        ret = av_packet_ref(&info->pkt, pkt);
+        if (!ret)
+            info->num_blocks = num_blocks;
+        goto end;
+    } else {
+        if ((ret = av_grow_packet(&info->pkt, pkt->size)) < 0)
+            goto end;
+        memcpy(info->pkt.data + info->pkt.size - pkt->size, pkt->data, pkt->size);
+        info->num_blocks += num_blocks;
+        info->pkt.duration += pkt->duration;
+        if ((ret = av_copy_packet_side_data(&info->pkt, pkt)) < 0)
+            goto end;
+        if (info->num_blocks != 6)
+            goto end;
+        av_packet_unref(pkt);
+        av_packet_move_ref(pkt, &info->pkt);
+        info->num_blocks = 0;
+    }
+    ret = pkt->size;
+
+end:
+    av_free(hdr);
+
+    return ret;
+}
+","The vulnerability in the original code arises from insufficient validation of the `hdr->substreamid` when handling independent EAC3 substreams. Specifically, if `hdr->frame_type` is not independent, the code does not check if `hdr->substreamid` is zero, potentially allowing multiple non-EAC3 independent substreams, which could lead to undefined behavior or memory corruption. The fix introduces a check for `hdr->substreamid` in the `else` block, ensuring that if `hdr->frame_type` is not independent, it correctly handles the case by logging a request for a sample and returning an error, thus preventing the vulnerability.","The vulnerability in the original code stems from inadequate validation of substream identifiers, particularly when handling independent substreams. This oversight could allow multiple independent substreams to be processed incorrectly, leading to potential memory corruption or undefined behavior. The fix addresses this issue by introducing a validation check that ensures only a single independent substream is allowed when the frame type is not independent. This additional validation step prevents the processing of invalid substreams, thereby enhancing the robustness of the code and mitigating the risk of exploitation or crashes due to improper handling of stream data.",2,5,4,4
+1,1,182895,182895,,Local,Not required,Partial,CVE-2019-9162,https://www.cvedetails.com/cve/CVE-2019-9162/,CWE-129,Low,Partial,Partial,,2019-02-25,4.6,"In the Linux kernel before 4.20.12, net/ipv4/netfilter/nf_nat_snmp_basic_main.c in the SNMP NAT module has insufficient ASN.1 length checks (aka an array index error), making out-of-bounds read and write operations possible, leading to an OOPS or local privilege escalation. This affects snmp_version and snmp_helper.",2019-06-14,,4,https://github.com/torvalds/linux/commit/c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc,c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc,"netfilter: nf_nat_snmp_basic: add missing length checks in ASN.1 cbs
+
+The generic ASN.1 decoder infrastructure doesn't guarantee that callbacks
+will get as much data as they expect; callbacks have to check the `datalen`
+parameter before looking at `data`. Make sure that snmp_version() and
+snmp_helper() don't read/write beyond the end of the packet data.
+
+(Also move the assignment to `pdata` down below the check to make it clear
+that it isn't necessarily a pointer we can use before the `datalen` check.)
+
+Fixes: cc2d58634e0f (""netfilter: nf_nat_snmp_basic: use asn1 decoder library"")
+Signed-off-by: Jann Horn <jannh@google.com>
+Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>",1,net/ipv4/netfilter/nf_nat_snmp_basic_main.c,"{""sha"": ""0a8a60c1bf9af107ff88ea57569a687df666d5af"", ""filename"": ""net/ipv4/netfilter/nf_nat_snmp_basic_main.c"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 1, ""changes"": 7, ""blob_url"": ""https://github.com/torvalds/linux/blob/c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc/net/ipv4/netfilter/nf_nat_snmp_basic_main.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc/net/ipv4/netfilter/nf_nat_snmp_basic_main.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/net/ipv4/netfilter/nf_nat_snmp_basic_main.c?ref=c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc"", ""patch"": ""@@ -105,6 +105,8 @@ static void fast_csum(struct snmp_ctx *ctx, unsigned char offset)\n int snmp_version(void *context, size_t hdrlen, unsigned char tag,\n \t\t const void *data, size_t datalen)\n {\n+\tif (datalen != 1)\n+\t\treturn -EINVAL;\n \tif (*(unsigned char *)data > 1)\n \t\treturn -ENOTSUPP;\n \treturn 1;\n@@ -114,8 +116,11 @@ int snmp_helper(void *context, size_t hdrlen, unsigned char tag,\n \t\tconst void *data, size_t datalen)\n {\n \tstruct snmp_ctx *ctx = (struct snmp_ctx *)context;\n-\t__be32 *pdata = (__be32 *)data;\n+\t__be32 *pdata;\n \n+\tif (datalen != 4)\n+\t\treturn -EINVAL;\n+\tpdata = (__be32 *)data;\n \tif (*pdata == ctx->from) {\n \t\tpr_debug(\""%s: %pI4 to %pI4\\n\"", __func__,\n \t\t\t (void *)&ctx->from, (void *)&ctx->to);""}","int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+	__be32 *pdata;
+ 
+	if (datalen != 4)
+		return -EINVAL;
+	pdata = (__be32 *)data;
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);
+
+		if (*ctx->check)
+			fast_csum(ctx, (unsigned char *)data - ctx->begin);
+		*pdata = ctx->to;
+	}
+
+	return 1;
+}
+","int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+	__be32 *pdata = (__be32 *)data;
+ 
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);
+
+		if (*ctx->check)
+			fast_csum(ctx, (unsigned char *)data - ctx->begin);
+		*pdata = ctx->to;
+	}
+
+	return 1;
+}
+",C,"	__be32 *pdata;
+	if (datalen != 4)
+		return -EINVAL;
+	pdata = (__be32 *)data;
+","	__be32 *pdata = (__be32 *)data;
+",,"@@ -105,6 +105,8 @@ static void fast_csum(struct snmp_ctx *ctx, unsigned char offset)
+ int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
++	if (datalen != 1)
++		return -EINVAL;
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+@@ -114,8 +116,11 @@ int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+-	__be32 *pdata = (__be32 *)data;
++	__be32 *pdata;
+ 
++	if (datalen != 4)
++		return -EINVAL;
++	pdata = (__be32 *)data;
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);",linux,c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc,31b58ad0c3279817cd246eab27eaf53b626dfcde,1,"int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+//flaw_line_below:
+	__be32 *pdata = (__be32 *)data;
+//fix_flaw_line_below:
+//	__be32 *pdata;
+ 
+//fix_flaw_line_below:
+//	if (datalen != 4)
+//fix_flaw_line_below:
+//		return -EINVAL;
+//fix_flaw_line_below:
+//	pdata = (__be32 *)data;
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);
+
+		if (*ctx->check)
+			fast_csum(ctx, (unsigned char *)data - ctx->begin);
+		*pdata = ctx->to;
+	}
+
+	return 1;
+}
+",182895,"int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+	__be32 *pdata = (__be32 *)data;
+ 
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);
+
+		if (*ctx->check)
+			fast_csum(ctx, (unsigned char *)data - ctx->begin);
+		*pdata = ctx->to;
+	}
+
+	return 1;
+}
+","int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+	__be32 *pdata;
+ 
+	if (datalen != 4)
+		return -EINVAL;
+	pdata = (__be32 *)data;
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);
+
+		if (*ctx->check)
+			fast_csum(ctx, (unsigned char *)data - ctx->begin);
+		*pdata = ctx->to;
+	}
+
+	return 1;
+}
+","The vulnerability in the original code arises from the lack of validation for the `datalen` parameter, which could lead to dereferencing a pointer to an invalid memory location if `data` does not point to a valid 4-byte block. This could result in undefined behavior or memory corruption. In the fixed code, a check is added to ensure that `datalen` is exactly 4 bytes before proceeding with the dereferencing of `pdata`. This validation prevents potential exploitation by ensuring that the function only operates on valid data, thereby enhancing the overall security of the code.","The vulnerability in the original code stems from the absence of validation for the length of the data being processed, which could allow for the dereferencing of a pointer to an invalid memory location. This oversight could lead to undefined behavior, including potential memory corruption or crashes if the data is not the expected size. The fixed code addresses this issue by introducing a check to ensure that the length of the data is exactly what is required before any operations are performed. This added validation significantly enhances the security and stability of the function by preventing improper memory access.",3,5,4,4
+2,2,182896,182896,,Local,Not required,Partial,CVE-2019-9162,https://www.cvedetails.com/cve/CVE-2019-9162/,CWE-129,Low,Partial,Partial,,2019-02-25,4.6,"In the Linux kernel before 4.20.12, net/ipv4/netfilter/nf_nat_snmp_basic_main.c in the SNMP NAT module has insufficient ASN.1 length checks (aka an array index error), making out-of-bounds read and write operations possible, leading to an OOPS or local privilege escalation. This affects snmp_version and snmp_helper.",2019-06-14,,2,https://github.com/torvalds/linux/commit/c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc,c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc,"netfilter: nf_nat_snmp_basic: add missing length checks in ASN.1 cbs
+
+The generic ASN.1 decoder infrastructure doesn't guarantee that callbacks
+will get as much data as they expect; callbacks have to check the `datalen`
+parameter before looking at `data`. Make sure that snmp_version() and
+snmp_helper() don't read/write beyond the end of the packet data.
+
+(Also move the assignment to `pdata` down below the check to make it clear
+that it isn't necessarily a pointer we can use before the `datalen` check.)
+
+Fixes: cc2d58634e0f (""netfilter: nf_nat_snmp_basic: use asn1 decoder library"")
+Signed-off-by: Jann Horn <jannh@google.com>
+Signed-off-by: Pablo Neira Ayuso <pablo@netfilter.org>",0,net/ipv4/netfilter/nf_nat_snmp_basic_main.c,"{""sha"": ""0a8a60c1bf9af107ff88ea57569a687df666d5af"", ""filename"": ""net/ipv4/netfilter/nf_nat_snmp_basic_main.c"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 1, ""changes"": 7, ""blob_url"": ""https://github.com/torvalds/linux/blob/c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc/net/ipv4/netfilter/nf_nat_snmp_basic_main.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc/net/ipv4/netfilter/nf_nat_snmp_basic_main.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/net/ipv4/netfilter/nf_nat_snmp_basic_main.c?ref=c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc"", ""patch"": ""@@ -105,6 +105,8 @@ static void fast_csum(struct snmp_ctx *ctx, unsigned char offset)\n int snmp_version(void *context, size_t hdrlen, unsigned char tag,\n \t\t const void *data, size_t datalen)\n {\n+\tif (datalen != 1)\n+\t\treturn -EINVAL;\n \tif (*(unsigned char *)data > 1)\n \t\treturn -ENOTSUPP;\n \treturn 1;\n@@ -114,8 +116,11 @@ int snmp_helper(void *context, size_t hdrlen, unsigned char tag,\n \t\tconst void *data, size_t datalen)\n {\n \tstruct snmp_ctx *ctx = (struct snmp_ctx *)context;\n-\t__be32 *pdata = (__be32 *)data;\n+\t__be32 *pdata;\n \n+\tif (datalen != 4)\n+\t\treturn -EINVAL;\n+\tpdata = (__be32 *)data;\n \tif (*pdata == ctx->from) {\n \t\tpr_debug(\""%s: %pI4 to %pI4\\n\"", __func__,\n \t\t\t (void *)&ctx->from, (void *)&ctx->to);""}"," int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
+	if (datalen != 1)
+		return -EINVAL;
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+}
+"," int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+}
+",C,"	if (datalen != 1)
+		return -EINVAL;
+",,,"@@ -105,6 +105,8 @@ static void fast_csum(struct snmp_ctx *ctx, unsigned char offset)
+ int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
++	if (datalen != 1)
++		return -EINVAL;
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+@@ -114,8 +116,11 @@ int snmp_helper(void *context, size_t hdrlen, unsigned char tag,
+ 		const void *data, size_t datalen)
+ {
+ 	struct snmp_ctx *ctx = (struct snmp_ctx *)context;
+-	__be32 *pdata = (__be32 *)data;
++	__be32 *pdata;
+ 
++	if (datalen != 4)
++		return -EINVAL;
++	pdata = (__be32 *)data;
+ 	if (*pdata == ctx->from) {
+ 		pr_debug(""%s: %pI4 to %pI4\n"", __func__,
+ 			 (void *)&ctx->from, (void *)&ctx->to);",linux,c4c07b4d6fa1f11880eab8e076d3d060ef3f55fc,31b58ad0c3279817cd246eab27eaf53b626dfcde,1," int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
+//fix_flaw_line_below:
+//	if (datalen != 1)
+//fix_flaw_line_below:
+//		return -EINVAL;
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+}
+",182896," int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+}
+"," int snmp_version(void *context, size_t hdrlen, unsigned char tag,
+ 		 const void *data, size_t datalen)
+ {
+	if (datalen != 1)
+		return -EINVAL;
+ 	if (*(unsigned char *)data > 1)
+ 		return -ENOTSUPP;
+ 	return 1;
+}
+","The vulnerability in the original `snmp_version` function arises from a lack of validation for the `datalen` parameter, allowing potential buffer over-read if `data` points to an insufficiently sized buffer. This could lead to undefined behavior or security issues when dereferencing `*(unsigned char *)data`. The fixed code addresses this vulnerability by adding a check for `datalen` to ensure it equals 1 before dereferencing the pointer. This prevents the function from accessing memory outside the intended bounds, thereby enhancing the function's robustness and security against potential exploitation.","The vulnerability in the original code stems from the absence of validation for the length of the data being processed, which could lead to accessing memory beyond the intended buffer. This oversight allows for potential buffer over-read, resulting in undefined behavior or security risks if the data pointer points to an insufficiently sized memory area. The revised code rectifies this issue by introducing a check to ensure that the length of the data matches the expected size before any dereferencing occurs. This enhancement effectively prevents unauthorized memory access, thereby improving the overall security and stability of the function.",2,4,0,2

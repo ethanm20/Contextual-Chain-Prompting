@@ -1,0 +1,3857 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,177856,177856,,Remote,Not required,Complete,CVE-2019-13638,https://www.cvedetails.com/cve/CVE-2019-13638/,CWE-78,Medium,Complete,Complete,,2019-07-26,9.3,GNU patch through 2.7.6 is vulnerable to OS shell command injection that can be exploited by opening a crafted patch file that contains an ed style diff payload with shell metacharacters. The ed editor does not need to be present on the vulnerable system. This is different from CVE-2018-1000156.,2019-08-16,,2,https://git.savannah.gnu.org/cgit/patch.git/commit/?id=3fcd042d26d70856e826a42b5f93dc4854d80bf0,3fcd042d26d70856e826a42b5f93dc4854d80bf0,,4,,,"do_ed_script (char const *inname, char const *outname,
+	      bool *outname_needs_removal, FILE *ofp)
+{
+    static char const editor_program[] = EDITOR_PROGRAM;
+
+    file_offset beginning_of_this_line;
+    size_t chars_read;
+    FILE *tmpfp = 0;
+    char const *tmpname;
+    int tmpfd;
+    pid_t pid;
+
+    if (! dry_run && ! skip_rest_of_patch)
+      {
+	/* Write ed script to a temporary file.  This causes ed to abort on
+	   invalid commands such as when line numbers or ranges exceed the
+	   number of available lines.  When ed reads from a pipe, it rejects
+	   invalid commands and treats the next line as a new command, which
+	   can lead to arbitrary command execution.  */
+
+	tmpfd = make_tempfile (&tmpname, 'e', NULL, O_RDWR | O_BINARY, 0);
+	if (tmpfd == -1)
+	  pfatal (""Can't create temporary file %s"", quotearg (tmpname));
+	tmpfp = fdopen (tmpfd, ""w+b"");
+	if (! tmpfp)
+	  pfatal (""Can't open stream for file %s"", quotearg (tmpname));
+      }
+
+    for (;;) {
+	char ed_command_letter;
+	beginning_of_this_line = file_tell (pfp);
+	chars_read = get_line ();
+	if (! chars_read) {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+	ed_command_letter = get_ed_command_letter (buf);
+	if (ed_command_letter) {
+	    if (tmpfp)
+		if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+		    write_fatal ();
+	    if (ed_command_letter != 'd' && ed_command_letter != 's') {
+	        p_pass_comments_through = true;
+		while ((chars_read = get_line ()) != 0) {
+		    if (tmpfp)
+			if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+			    write_fatal ();
+		    if (chars_read == 2  &&  strEQ (buf, "".\n""))
+			break;
+		}
+		p_pass_comments_through = false;
+	    }
+	}
+	else {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+    }
+    if (!tmpfp)
+      return;
+    if (fwrite (""w\nq\n"", sizeof (char), (size_t) 4, tmpfp) == 0
+	|| fflush (tmpfp) != 0)
+      write_fatal ();
+
+    if (lseek (tmpfd, 0, SEEK_SET) == -1)
+      pfatal (""Can't rewind to the beginning of file %s"", quotearg (tmpname));
+
+    if (! dry_run && ! skip_rest_of_patch) {
+	int exclusive = *outname_needs_removal ? 0 : O_EXCL;
+	*outname_needs_removal = true;
+	if (inerrno != ENOENT)
+	  {
+ 	    *outname_needs_removal = true;
+ 	    copy_file (inname, outname, 0, exclusive, instat.st_mode, true);
+ 	  }
+ 	fflush (stdout);
+ 
+ 	pid = fork();
+	fflush (stdout);
+
+ 	else if (pid == 0)
+ 	  {
+ 	    dup2 (tmpfd, 0);
+	    assert (outname[0] != '!' && outname[0] != '-');
+	    execlp (editor_program, editor_program, ""-"", outname, (char  *) NULL);
+ 	    _exit (2);
+ 	  }
+ 	else
+	  }
+	else
+	  {
+	    int wstatus;
+	    if (waitpid (pid, &wstatus, 0) == -1
+	        || ! WIFEXITED (wstatus)
+		|| WEXITSTATUS (wstatus) != 0)
+	      fatal (""%s FAILED"", editor_program);
+	  }
+    }
+","do_ed_script (char const *inname, char const *outname,
+	      bool *outname_needs_removal, FILE *ofp)
+{
+    static char const editor_program[] = EDITOR_PROGRAM;
+
+    file_offset beginning_of_this_line;
+    size_t chars_read;
+    FILE *tmpfp = 0;
+    char const *tmpname;
+    int tmpfd;
+    pid_t pid;
+
+    if (! dry_run && ! skip_rest_of_patch)
+      {
+	/* Write ed script to a temporary file.  This causes ed to abort on
+	   invalid commands such as when line numbers or ranges exceed the
+	   number of available lines.  When ed reads from a pipe, it rejects
+	   invalid commands and treats the next line as a new command, which
+	   can lead to arbitrary command execution.  */
+
+	tmpfd = make_tempfile (&tmpname, 'e', NULL, O_RDWR | O_BINARY, 0);
+	if (tmpfd == -1)
+	  pfatal (""Can't create temporary file %s"", quotearg (tmpname));
+	tmpfp = fdopen (tmpfd, ""w+b"");
+	if (! tmpfp)
+	  pfatal (""Can't open stream for file %s"", quotearg (tmpname));
+      }
+
+    for (;;) {
+	char ed_command_letter;
+	beginning_of_this_line = file_tell (pfp);
+	chars_read = get_line ();
+	if (! chars_read) {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+	ed_command_letter = get_ed_command_letter (buf);
+	if (ed_command_letter) {
+	    if (tmpfp)
+		if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+		    write_fatal ();
+	    if (ed_command_letter != 'd' && ed_command_letter != 's') {
+	        p_pass_comments_through = true;
+		while ((chars_read = get_line ()) != 0) {
+		    if (tmpfp)
+			if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+			    write_fatal ();
+		    if (chars_read == 2  &&  strEQ (buf, "".\n""))
+			break;
+		}
+		p_pass_comments_through = false;
+	    }
+	}
+	else {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+    }
+    if (!tmpfp)
+      return;
+    if (fwrite (""w\nq\n"", sizeof (char), (size_t) 4, tmpfp) == 0
+	|| fflush (tmpfp) != 0)
+      write_fatal ();
+
+    if (lseek (tmpfd, 0, SEEK_SET) == -1)
+      pfatal (""Can't rewind to the beginning of file %s"", quotearg (tmpname));
+
+    if (! dry_run && ! skip_rest_of_patch) {
+	int exclusive = *outname_needs_removal ? 0 : O_EXCL;
+	*outname_needs_removal = true;
+	if (inerrno != ENOENT)
+	  {
+ 	    *outname_needs_removal = true;
+ 	    copy_file (inname, outname, 0, exclusive, instat.st_mode, true);
+ 	  }
+	sprintf (buf, ""%s %s%s"", editor_program,
+		 verbosity == VERBOSE ? """" : ""- "",
+		 outname);
+ 	fflush (stdout);
+ 
+ 	pid = fork();
+	fflush (stdout);
+
+ 	else if (pid == 0)
+ 	  {
+ 	    dup2 (tmpfd, 0);
+	    execl (""/bin/sh"", ""sh"", ""-c"", buf, (char *) 0);
+ 	    _exit (2);
+ 	  }
+ 	else
+	  }
+	else
+	  {
+	    int wstatus;
+	    if (waitpid (pid, &wstatus, 0) == -1
+	        || ! WIFEXITED (wstatus)
+		|| WEXITSTATUS (wstatus) != 0)
+	      fatal (""%s FAILED"", editor_program);
+	  }
+    }
+",C,"	    assert (outname[0] != '!' && outname[0] != '-');
+	    execlp (editor_program, editor_program, ""-"", outname, (char  *) NULL);
+","	sprintf (buf, ""%s %s%s"", editor_program,
+		 verbosity == VERBOSE ? """" : ""- "",
+		 outname);
+	    execl (""/bin/sh"", ""sh"", ""-c"", buf, (char *) 0);
+",123eaff0d5d1aebe128295959435b9ca5909c26d,"@@ -2459,9 +2459,6 @@ do_ed_script (char const *inname, char const *outname,
+ 	    *outname_needs_removal = true;
+ 	    copy_file (inname, outname, 0, exclusive, instat.st_mode, true);
+ 	  }
+-	sprintf (buf, ""%s %s%s"", editor_program,
+-		 verbosity == VERBOSE ? """" : ""- "",
+-		 outname);
+ 	fflush (stdout);
+ 
+ 	pid = fork();
+@@ -2470,7 +2467,8 @@ do_ed_script (char const *inname, char const *outname,
+ 	else if (pid == 0)
+ 	  {
+ 	    dup2 (tmpfd, 0);
+-	    execl (""/bin/sh"", ""sh"", ""-c"", buf, (char *) 0);
++	    assert (outname[0] != '!' && outname[0] != '-');
++	    execlp (editor_program, editor_program, ""-"", outname, (char  *) NULL);
+ 	    _exit (2);
+ 	  }
+ 	else",savannah,https://git.savannah.gnu.org/cgit/patch.git/tree/src/pch.c?id=3fcd042d26d70856e826a42b5f93dc4854d80bf0,https://git.savannah.gnu.org/cgit/patch.git/tree/src/pch.c?id=123eaff0d5d1aebe128295959435b9ca5909c26d,1,"do_ed_script (char const *inname, char const *outname,
+	      bool *outname_needs_removal, FILE *ofp)
+{
+    static char const editor_program[] = EDITOR_PROGRAM;
+
+    file_offset beginning_of_this_line;
+    size_t chars_read;
+    FILE *tmpfp = 0;
+    char const *tmpname;
+    int tmpfd;
+    pid_t pid;
+
+    if (! dry_run && ! skip_rest_of_patch)
+      {
+	/* Write ed script to a temporary file.  This causes ed to abort on
+	   invalid commands such as when line numbers or ranges exceed the
+	   number of available lines.  When ed reads from a pipe, it rejects
+	   invalid commands and treats the next line as a new command, which
+	   can lead to arbitrary command execution.  */
+
+	tmpfd = make_tempfile (&tmpname, 'e', NULL, O_RDWR | O_BINARY, 0);
+	if (tmpfd == -1)
+	  pfatal (""Can't create temporary file %s"", quotearg (tmpname));
+	tmpfp = fdopen (tmpfd, ""w+b"");
+	if (! tmpfp)
+	  pfatal (""Can't open stream for file %s"", quotearg (tmpname));
+      }
+
+    for (;;) {
+	char ed_command_letter;
+	beginning_of_this_line = file_tell (pfp);
+	chars_read = get_line ();
+	if (! chars_read) {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+	ed_command_letter = get_ed_command_letter (buf);
+	if (ed_command_letter) {
+	    if (tmpfp)
+		if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+		    write_fatal ();
+	    if (ed_command_letter != 'd' && ed_command_letter != 's') {
+	        p_pass_comments_through = true;
+		while ((chars_read = get_line ()) != 0) {
+		    if (tmpfp)
+			if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+			    write_fatal ();
+		    if (chars_read == 2  &&  strEQ (buf, "".\n""))
+			break;
+		}
+		p_pass_comments_through = false;
+	    }
+	}
+	else {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+    }
+    if (!tmpfp)
+      return;
+    if (fwrite (""w\nq\n"", sizeof (char), (size_t) 4, tmpfp) == 0
+	|| fflush (tmpfp) != 0)
+      write_fatal ();
+
+    if (lseek (tmpfd, 0, SEEK_SET) == -1)
+      pfatal (""Can't rewind to the beginning of file %s"", quotearg (tmpname));
+
+    if (! dry_run && ! skip_rest_of_patch) {
+	int exclusive = *outname_needs_removal ? 0 : O_EXCL;
+	*outname_needs_removal = true;
+	if (inerrno != ENOENT)
+	  {
+ 	    *outname_needs_removal = true;
+ 	    copy_file (inname, outname, 0, exclusive, instat.st_mode, true);
+ 	  }
+//flaw_line_below:
+	sprintf (buf, ""%s %s%s"", editor_program,
+//flaw_line_below:
+		 verbosity == VERBOSE ? """" : ""- "",
+//flaw_line_below:
+		 outname);
+ 	fflush (stdout);
+ 
+ 	pid = fork();
+	fflush (stdout);
+
+ 	else if (pid == 0)
+ 	  {
+ 	    dup2 (tmpfd, 0);
+//flaw_line_below:
+	    execl (""/bin/sh"", ""sh"", ""-c"", buf, (char *) 0);
+//fix_flaw_line_below:
+//	    assert (outname[0] != '!' && outname[0] != '-');
+//fix_flaw_line_below:
+//	    execlp (editor_program, editor_program, ""-"", outname, (char  *) NULL);
+ 	    _exit (2);
+ 	  }
+ 	else
+	  }
+	else
+	  {
+	    int wstatus;
+	    if (waitpid (pid, &wstatus, 0) == -1
+	        || ! WIFEXITED (wstatus)
+		|| WEXITSTATUS (wstatus) != 0)
+	      fatal (""%s FAILED"", editor_program);
+	  }
+    }
+",177856,"do_ed_script (char const *inname, char const *outname,
+	      bool *outname_needs_removal, FILE *ofp)
+{
+    static char const editor_program[] = EDITOR_PROGRAM;
+
+    file_offset beginning_of_this_line;
+    size_t chars_read;
+    FILE *tmpfp = 0;
+    char const *tmpname;
+    int tmpfd;
+    pid_t pid;
+
+    if (! dry_run && ! skip_rest_of_patch)
+      {
+	/* Write ed script to a temporary file.  This causes ed to abort on
+	   invalid commands such as when line numbers or ranges exceed the
+	   number of available lines.  When ed reads from a pipe, it rejects
+	   invalid commands and treats the next line as a new command, which
+	   can lead to arbitrary command execution.  */
+
+	tmpfd = make_tempfile (&tmpname, 'e', NULL, O_RDWR | O_BINARY, 0);
+	if (tmpfd == -1)
+	  pfatal (""Can't create temporary file %s"", quotearg (tmpname));
+	tmpfp = fdopen (tmpfd, ""w+b"");
+	if (! tmpfp)
+	  pfatal (""Can't open stream for file %s"", quotearg (tmpname));
+      }
+
+    for (;;) {
+	char ed_command_letter;
+	beginning_of_this_line = file_tell (pfp);
+	chars_read = get_line ();
+	if (! chars_read) {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+	ed_command_letter = get_ed_command_letter (buf);
+	if (ed_command_letter) {
+	    if (tmpfp)
+		if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+		    write_fatal ();
+	    if (ed_command_letter != 'd' && ed_command_letter != 's') {
+	        p_pass_comments_through = true;
+		while ((chars_read = get_line ()) != 0) {
+		    if (tmpfp)
+			if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+			    write_fatal ();
+		    if (chars_read == 2  &&  strEQ (buf, "".\n""))
+			break;
+		}
+		p_pass_comments_through = false;
+	    }
+	}
+	else {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+    }
+    if (!tmpfp)
+      return;
+    if (fwrite (""w\nq\n"", sizeof (char), (size_t) 4, tmpfp) == 0
+	|| fflush (tmpfp) != 0)
+      write_fatal ();
+
+    if (lseek (tmpfd, 0, SEEK_SET) == -1)
+      pfatal (""Can't rewind to the beginning of file %s"", quotearg (tmpname));
+
+    if (! dry_run && ! skip_rest_of_patch) {
+	int exclusive = *outname_needs_removal ? 0 : O_EXCL;
+	*outname_needs_removal = true;
+	if (inerrno != ENOENT)
+	  {
+ 	    *outname_needs_removal = true;
+ 	    copy_file (inname, outname, 0, exclusive, instat.st_mode, true);
+ 	  }
+	sprintf (buf, ""%s %s%s"", editor_program,
+		 verbosity == VERBOSE ? """" : ""- "",
+		 outname);
+ 	fflush (stdout);
+ 
+ 	pid = fork();
+	fflush (stdout);
+
+ 	else if (pid == 0)
+ 	  {
+ 	    dup2 (tmpfd, 0);
+	    execl (""/bin/sh"", ""sh"", ""-c"", buf, (char *) 0);
+ 	    _exit (2);
+ 	  }
+ 	else
+	  }
+	else
+	  {
+	    int wstatus;
+	    if (waitpid (pid, &wstatus, 0) == -1
+	        || ! WIFEXITED (wstatus)
+		|| WEXITSTATUS (wstatus) != 0)
+	      fatal (""%s FAILED"", editor_program);
+	  }
+    }
+","do_ed_script (char const *inname, char const *outname,
+	      bool *outname_needs_removal, FILE *ofp)
+{
+    static char const editor_program[] = EDITOR_PROGRAM;
+
+    file_offset beginning_of_this_line;
+    size_t chars_read;
+    FILE *tmpfp = 0;
+    char const *tmpname;
+    int tmpfd;
+    pid_t pid;
+
+    if (! dry_run && ! skip_rest_of_patch)
+      {
+	/* Write ed script to a temporary file.  This causes ed to abort on
+	   invalid commands such as when line numbers or ranges exceed the
+	   number of available lines.  When ed reads from a pipe, it rejects
+	   invalid commands and treats the next line as a new command, which
+	   can lead to arbitrary command execution.  */
+
+	tmpfd = make_tempfile (&tmpname, 'e', NULL, O_RDWR | O_BINARY, 0);
+	if (tmpfd == -1)
+	  pfatal (""Can't create temporary file %s"", quotearg (tmpname));
+	tmpfp = fdopen (tmpfd, ""w+b"");
+	if (! tmpfp)
+	  pfatal (""Can't open stream for file %s"", quotearg (tmpname));
+      }
+
+    for (;;) {
+	char ed_command_letter;
+	beginning_of_this_line = file_tell (pfp);
+	chars_read = get_line ();
+	if (! chars_read) {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+	ed_command_letter = get_ed_command_letter (buf);
+	if (ed_command_letter) {
+	    if (tmpfp)
+		if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+		    write_fatal ();
+	    if (ed_command_letter != 'd' && ed_command_letter != 's') {
+	        p_pass_comments_through = true;
+		while ((chars_read = get_line ()) != 0) {
+		    if (tmpfp)
+			if (! fwrite (buf, sizeof *buf, chars_read, tmpfp))
+			    write_fatal ();
+		    if (chars_read == 2  &&  strEQ (buf, "".\n""))
+			break;
+		}
+		p_pass_comments_through = false;
+	    }
+	}
+	else {
+	    next_intuit_at(beginning_of_this_line,p_input_line);
+	    break;
+	}
+    }
+    if (!tmpfp)
+      return;
+    if (fwrite (""w\nq\n"", sizeof (char), (size_t) 4, tmpfp) == 0
+	|| fflush (tmpfp) != 0)
+      write_fatal ();
+
+    if (lseek (tmpfd, 0, SEEK_SET) == -1)
+      pfatal (""Can't rewind to the beginning of file %s"", quotearg (tmpname));
+
+    if (! dry_run && ! skip_rest_of_patch) {
+	int exclusive = *outname_needs_removal ? 0 : O_EXCL;
+	*outname_needs_removal = true;
+	if (inerrno != ENOENT)
+	  {
+ 	    *outname_needs_removal = true;
+ 	    copy_file (inname, outname, 0, exclusive, instat.st_mode, true);
+ 	  }
+ 	fflush (stdout);
+ 
+ 	pid = fork();
+	fflush (stdout);
+
+ 	else if (pid == 0)
+ 	  {
+ 	    dup2 (tmpfd, 0);
+	    assert (outname[0] != '!' && outname[0] != '-');
+	    execlp (editor_program, editor_program, ""-"", outname, (char  *) NULL);
+ 	    _exit (2);
+ 	  }
+ 	else
+	  }
+	else
+	  {
+	    int wstatus;
+	    if (waitpid (pid, &wstatus, 0) == -1
+	        || ! WIFEXITED (wstatus)
+		|| WEXITSTATUS (wstatus) != 0)
+	      fatal (""%s FAILED"", editor_program);
+	  }
+    }
+","The `do_ed_script` function generates and executes an `ed` script for editing files based on input commands. It begins by creating a temporary file to store the script, ensuring that invalid commands do not lead to arbitrary execution. The function reads lines from an input source, identifying `ed` commands and writing them to the temporary file. It handles comments and specific commands differently, ensuring proper formatting. After writing the script, it rewinds the temporary file and executes the `ed` editor in a new process, redirecting input from the temporary file. Finally, it checks for successful execution and handles errors appropriately.","The code defines a function that creates and executes a script for a text editor based on input commands. It begins by generating a temporary file to store the script, ensuring that invalid commands do not lead to security issues. The function reads lines from an input source, identifying and processing commands while handling comments appropriately. After writing the commands to the temporary file, it rewinds the file and launches the text editor in a new process, using the temporary file as input. Finally, it checks for successful execution and manages any errors that may arise.","The vulnerability in the original code, identified as CWE-78 (OS Command Injection), arose from the use of user-controlled input to construct a command for execution without proper validation. Specifically, the command was built using the `editor_program` and `outname`, which could allow an attacker to inject malicious commands if `outname` contained special characters or sequences. The fix involved adding an assertion to ensure that `outname` does not start with characters that could lead to command injection, such as '!' or '-', thereby mitigating the risk of executing unintended commands through the `execlp` function.","The vulnerability in the original code, classified as CWE-78 (OS Command Injection), stemmed from the execution of a command that incorporated user-controlled input without adequate validation. This allowed an attacker to manipulate the input to execute arbitrary commands, potentially leading to unauthorized actions on the system. The fix involved implementing a check to ensure that the user input did not contain characters that could facilitate command injection. By validating the input before executing the command, the revised code mitigated the risk of executing unintended or harmful commands, thereby enhancing the overall security of the application.","The vulnerability was fixed by adding an assertion to validate the `outname` variable before executing the command with `execlp`. Specifically, the code checks that `outname` does not start with characters such as '!' or '-', which could lead to command injection. This validation ensures that only safe and expected input is processed, preventing an attacker from injecting malicious commands. By enforcing this check, the revised code significantly reduces the risk of executing unintended commands, thereby enhancing the security of the application while maintaining its intended functionality.","The vulnerability was addressed by implementing a validation step to ensure that user input does not contain potentially harmful characters that could facilitate command injection. This involved checking the input for specific leading characters that could allow an attacker to manipulate the command execution. By enforcing this validation before executing the command, the revised code effectively prevents the execution of unintended or malicious commands. This fix enhances the overall security of the application while ensuring that it continues to function as intended, safeguarding against unauthorized actions on the system.","CWE-77, CWE-78, CWE-88, CWE-74, CWE-116, CWE-89, CWE-20, CWE-95, CWE-94, CWE-434",N,-1.0,"4,4","5,5","4,4","4, 4"
+1,1,177859,177859,,Remote,Not required,Complete,CVE-2018-16863,https://www.cvedetails.com/cve/CVE-2018-16863/,CWE-78,Medium,Complete,Complete,,2018-12-03,9.3,"It was found that RHSA-2018:2918 did not fully fix CVE-2018-16509. An attacker could possibly exploit another variant of the flaw and bypass the -dSAFER protection to, for example, execute arbitrary shell commands via a specially crafted PostScript document. This only affects ghostscript 9.07 as shipped with Red Hat Enterprise Linux 7.",2019-10-09,Exec Code Bypass,4,http://git.ghostscript.com/?p=ghostpdl.git;a=commit;h=79cccf641486,79cccf641486a6595c43f1de1cd7ade696020a31,,0,,," gs_nulldevice(gs_gstate * pgs)
+ {
+     int code = 0;
+    bool saveLockSafety = false;
+     if (pgs->device == 0 || !gx_device_is_null(pgs->device)) {
+         gx_device *ndev;
+         code = gs_copydevice(&ndev, (const gx_device *)&gs_null_device,
+                                 pgs->memory);
+ 
+         if (code < 0)
+             return code;
+        if (gs_currentdevice_inline(pgs) != NULL)
+            saveLockSafety = gs_currentdevice_inline(pgs)->LockSafetyParams;
+         /*
+          * Internal devices have a reference count of 0, not 1,
+          * aside from references from graphics states.
+           to sort out how the icc profile is best handled with this device.
+           It seems to inherit properties from the current device if there
+           is one */
+        rc_init(ndev, pgs->memory, 0);
+        if (pgs->device != NULL) {
+            if ((code = dev_proc(pgs->device, get_profile)(pgs->device,
+                                               &(ndev->icc_struct))) < 0)
+                return code;
+            rc_increment(ndev->icc_struct);
+            set_dev_proc(ndev, get_profile, gx_default_get_profile);
+        }
+
+        if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+ 
+         if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+             gs_free_object(pgs->memory, ndev, ""gs_copydevice(device)"");
+        gs_currentdevice_inline(pgs)->LockSafetyParams = saveLockSafety;
+     }
+     return code;
+ }
+"," gs_nulldevice(gs_gstate * pgs)
+ {
+     int code = 0;
+     if (pgs->device == 0 || !gx_device_is_null(pgs->device)) {
+         gx_device *ndev;
+         code = gs_copydevice(&ndev, (const gx_device *)&gs_null_device,
+                                 pgs->memory);
+ 
+         if (code < 0)
+             return code;
+         /*
+          * Internal devices have a reference count of 0, not 1,
+          * aside from references from graphics states.
+           to sort out how the icc profile is best handled with this device.
+           It seems to inherit properties from the current device if there
+           is one */
+        rc_init(ndev, pgs->memory, 0);
+        if (pgs->device != NULL) {
+            if ((code = dev_proc(pgs->device, get_profile)(pgs->device,
+                                               &(ndev->icc_struct))) < 0)
+                return code;
+            rc_increment(ndev->icc_struct);
+            set_dev_proc(ndev, get_profile, gx_default_get_profile);
+        }
+
+        if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+ 
+         if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+             gs_free_object(pgs->memory, ndev, ""gs_copydevice(device)"");
+     }
+     return code;
+ }
+",C,"    bool saveLockSafety = false;
+        if (gs_currentdevice_inline(pgs) != NULL)
+            saveLockSafety = gs_currentdevice_inline(pgs)->LockSafetyParams;
+        gs_currentdevice_inline(pgs)->LockSafetyParams = saveLockSafety;
+",,e5b46839994ec093251bb641fb7cbffe81712e40,"@@ -691,7 +691,7 @@ int
+ gs_nulldevice(gs_gstate * pgs)
+ {
+     int code = 0;
+-
++    bool saveLockSafety = false;
+     if (pgs->device == 0 || !gx_device_is_null(pgs->device)) {
+         gx_device *ndev;
+         code = gs_copydevice(&ndev, (const gx_device *)&gs_null_device,
+@@ -699,6 +699,8 @@ gs_nulldevice(gs_gstate * pgs)
+ 
+         if (code < 0)
+             return code;
++        if (gs_currentdevice_inline(pgs) != NULL)
++            saveLockSafety = gs_currentdevice_inline(pgs)->LockSafetyParams;
+         /*
+          * Internal devices have a reference count of 0, not 1,
+          * aside from references from graphics states.
+@@ -718,6 +720,7 @@ gs_nulldevice(gs_gstate * pgs)
+ 
+         if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+             gs_free_object(pgs->memory, ndev, ""gs_copydevice(device)"");
++        gs_currentdevice_inline(pgs)->LockSafetyParams = saveLockSafety;
+     }
+     return code;
+ }",ghostscript,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=base/gsdevice.c;h=e38086dfd894ed7276552dd4584842e861909be4;hb=e38086dfd894ed7276552dd4584842e861909be4,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=base/gsdevice.c;h=06592208eb1bfdeaf6dd662c9ff93c9feb33de55;hb=06592208eb1bfdeaf6dd662c9ff93c9feb33de55,1," gs_nulldevice(gs_gstate * pgs)
+ {
+     int code = 0;
+//flaw_line_below:
+
+//fix_flaw_line_below:
+//    bool saveLockSafety = false;
+     if (pgs->device == 0 || !gx_device_is_null(pgs->device)) {
+         gx_device *ndev;
+         code = gs_copydevice(&ndev, (const gx_device *)&gs_null_device,
+                                 pgs->memory);
+ 
+         if (code < 0)
+             return code;
+//fix_flaw_line_below:
+//        if (gs_currentdevice_inline(pgs) != NULL)
+//fix_flaw_line_below:
+//            saveLockSafety = gs_currentdevice_inline(pgs)->LockSafetyParams;
+         /*
+          * Internal devices have a reference count of 0, not 1,
+          * aside from references from graphics states.
+           to sort out how the icc profile is best handled with this device.
+           It seems to inherit properties from the current device if there
+           is one */
+        rc_init(ndev, pgs->memory, 0);
+        if (pgs->device != NULL) {
+            if ((code = dev_proc(pgs->device, get_profile)(pgs->device,
+                                               &(ndev->icc_struct))) < 0)
+                return code;
+            rc_increment(ndev->icc_struct);
+            set_dev_proc(ndev, get_profile, gx_default_get_profile);
+        }
+
+        if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+ 
+         if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+             gs_free_object(pgs->memory, ndev, ""gs_copydevice(device)"");
+//fix_flaw_line_below:
+//        gs_currentdevice_inline(pgs)->LockSafetyParams = saveLockSafety;
+     }
+     return code;
+ }
+",177859," gs_nulldevice(gs_gstate * pgs)
+ {
+     int code = 0;
+     if (pgs->device == 0 || !gx_device_is_null(pgs->device)) {
+         gx_device *ndev;
+         code = gs_copydevice(&ndev, (const gx_device *)&gs_null_device,
+                                 pgs->memory);
+ 
+         if (code < 0)
+             return code;
+         /*
+          * Internal devices have a reference count of 0, not 1,
+          * aside from references from graphics states.
+           to sort out how the icc profile is best handled with this device.
+           It seems to inherit properties from the current device if there
+           is one */
+        rc_init(ndev, pgs->memory, 0);
+        if (pgs->device != NULL) {
+            if ((code = dev_proc(pgs->device, get_profile)(pgs->device,
+                                               &(ndev->icc_struct))) < 0)
+                return code;
+            rc_increment(ndev->icc_struct);
+            set_dev_proc(ndev, get_profile, gx_default_get_profile);
+        }
+
+        if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+ 
+         if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+             gs_free_object(pgs->memory, ndev, ""gs_copydevice(device)"");
+     }
+     return code;
+ }
+"," gs_nulldevice(gs_gstate * pgs)
+ {
+     int code = 0;
+    bool saveLockSafety = false;
+     if (pgs->device == 0 || !gx_device_is_null(pgs->device)) {
+         gx_device *ndev;
+         code = gs_copydevice(&ndev, (const gx_device *)&gs_null_device,
+                                 pgs->memory);
+ 
+         if (code < 0)
+             return code;
+        if (gs_currentdevice_inline(pgs) != NULL)
+            saveLockSafety = gs_currentdevice_inline(pgs)->LockSafetyParams;
+         /*
+          * Internal devices have a reference count of 0, not 1,
+          * aside from references from graphics states.
+           to sort out how the icc profile is best handled with this device.
+           It seems to inherit properties from the current device if there
+           is one */
+        rc_init(ndev, pgs->memory, 0);
+        if (pgs->device != NULL) {
+            if ((code = dev_proc(pgs->device, get_profile)(pgs->device,
+                                               &(ndev->icc_struct))) < 0)
+                return code;
+            rc_increment(ndev->icc_struct);
+            set_dev_proc(ndev, get_profile, gx_default_get_profile);
+        }
+
+        if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+ 
+         if ((code = gs_setdevice_no_erase(pgs, ndev)) < 0)
+             gs_free_object(pgs->memory, ndev, ""gs_copydevice(device)"");
+        gs_currentdevice_inline(pgs)->LockSafetyParams = saveLockSafety;
+     }
+     return code;
+ }
+","The `gs_nulldevice` function is designed to manage the graphics state by setting a null device in the context of a given graphics state structure (`pgs`). It first checks if the current device is either null or not a null device, then attempts to create a new null device by copying properties from a predefined null device structure. If successful, it initializes the new device's reference count and, if a current device exists, retrieves and increments its ICC profile. Finally, it sets the new null device as the active device in the graphics state, ensuring proper memory management throughout the process.","The function is responsible for configuring a graphics state to use a null device when certain conditions are met. It first checks if the current device is either absent or not a null device, then attempts to create a new null device by copying properties from a predefined structure. If the creation is successful, it initializes the new device's reference count and, if a current device exists, retrieves and increments its associated ICC profile. Finally, it sets the newly created null device as the active device in the graphics state, ensuring proper memory management throughout the process.","The vulnerability in the original code, identified as CWE-78 (OS Command Injection), arises from the potential misuse of device properties without proper validation or sanitization, which could allow an attacker to manipulate device settings or execute unintended commands. In the fixed code, the introduction of the `saveLockSafety` variable ensures that the original lock safety parameters are preserved and restored after the device is set, mitigating the risk of unintended side effects or state changes. This change enhances the integrity of the graphics state by ensuring that critical parameters are not inadvertently altered during the device configuration process.","The vulnerability identified as CWE-78 (OS Command Injection) in the original code stems from the lack of proper handling and validation of device properties, which could allow an attacker to manipulate the system's behavior or execute arbitrary commands. The fixed code addresses this issue by introducing a mechanism to preserve and restore critical parameters related to device safety. This ensures that the original state is maintained throughout the device configuration process, thereby preventing unintended alterations that could lead to security risks or instability in the graphics state management.","The vulnerability was fixed by introducing a mechanism to save and restore the lock safety parameters during the device configuration process. Specifically, the code now uses the `saveLockSafety` variable to store the original lock safety parameters from the current device before any changes are made. After setting the new null device, the original parameters are restored to ensure that the integrity of the graphics state is maintained. This change prevents unintended side effects that could arise from altering critical device properties, thereby enhancing the overall security and stability of the system.","The vulnerability was addressed by implementing a mechanism to preserve critical safety parameters during the device configuration process. This involved saving the original state before any modifications were made and ensuring that it was restored after the new device was set. By doing so, the code prevents unintended alterations to important settings that could compromise the system's integrity or lead to security risks. This approach enhances the overall stability and security of the graphics state management by ensuring that essential parameters remain consistent throughout the operation.","CWE-913, CWE-665, CWE-459, CWE-667, CWE-908, CWE-457, CWE-755, CWE-554, CWE-915, CWE-732",N,-1.0,"4,4","2,2","4,4","3, 4"
+2,2,177860,177860,,Remote,Not required,Complete,CVE-2018-16863,https://www.cvedetails.com/cve/CVE-2018-16863/,CWE-78,Medium,Complete,Complete,,2018-12-03,9.3,"It was found that RHSA-2018:2918 did not fully fix CVE-2018-16509. An attacker could possibly exploit another variant of the flaw and bypass the -dSAFER protection to, for example, execute arbitrary shell commands via a specially crafted PostScript document. This only affects ghostscript 9.07 as shipped with Red Hat Enterprise Linux 7.",2019-10-09,Exec Code Bypass,29,http://git.ghostscript.com/?p=ghostpdl.git;a=commit;h=5516c614dc33,5516c614dc33662a2afdc377159f70218e67bde5,,8,,,"zrestore(i_ctx_t *i_ctx_p)
+restore_check_save(i_ctx_t *i_ctx_p, alloc_save_t **asave)
+ {
+     os_ptr op = osp;
+    int code = restore_check_operand(op, asave, idmemory);
+ 
+     if (code < 0)
+         return code;
+     if_debug2m('u', imemory, ""[u]vmrestore 0x%lx, id = %lu\n"",
+               (ulong) alloc_save_client_data(*asave),
+                (ulong) op->value.saveid);
+     if (I_VALIDATE_BEFORE_RESTORE)
+         ivalidate_clean_spaces(i_ctx_p);
+        ivalidate_clean_spaces(i_ctx_p);
+    /* Check the contents of the stacks. */
+     {
+         int code;
+ 
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, *asave, false)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &e_stack, *asave, true)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &d_stack, *asave, false)) < 0
+             ) {
+             osp++;
+             return code;
+         }
+     }
+    osp++;
+    return 0;
+}
+
+/* the semantics of restore differ slightly between Level 1 and
+   Level 2 and later - the latter includes restoring the device
+   state (whilst Level 1 didn't have ""page devices"" as such).
+   Hence we have two restore operators - one here (Level 1)
+   and one in zdevice2.c (Level 2+). For that reason, the
+   operand checking and guts of the restore operation are
+   separated so both implementations can use them to best
+   effect.
+ */
+int
+dorestore(i_ctx_t *i_ctx_p, alloc_save_t *asave)
+{
+    os_ptr op = osp;
+    bool last;
+    vm_save_t *vmsave;
+    int code;
+
+    osp--;
+
+     /* Reset l_new in all stack entries if the new save level is zero. */
+     /* Also do some special fixing on the e-stack. */
+     restore_fix_stack(i_ctx_p, &o_stack, asave, false);
+    }
+","zrestore(i_ctx_t *i_ctx_p)
+ {
+     os_ptr op = osp;
+    alloc_save_t *asave;
+    bool last;
+    vm_save_t *vmsave;
+    int code = restore_check_operand(op, &asave, idmemory);
+ 
+     if (code < 0)
+         return code;
+     if_debug2m('u', imemory, ""[u]vmrestore 0x%lx, id = %lu\n"",
+               (ulong) alloc_save_client_data(asave),
+                (ulong) op->value.saveid);
+     if (I_VALIDATE_BEFORE_RESTORE)
+         ivalidate_clean_spaces(i_ctx_p);
+        ivalidate_clean_spaces(i_ctx_p);
+    /* Check the contents of the stacks. */
+     {
+         int code;
+ 
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, asave, false)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &e_stack, asave, true)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &d_stack, asave, false)) < 0
+             ) {
+             osp++;
+             return code;
+         }
+     }
+     /* Reset l_new in all stack entries if the new save level is zero. */
+     /* Also do some special fixing on the e-stack. */
+     restore_fix_stack(i_ctx_p, &o_stack, asave, false);
+    }
+",C,"restore_check_save(i_ctx_t *i_ctx_p, alloc_save_t **asave)
+    int code = restore_check_operand(op, asave, idmemory);
+               (ulong) alloc_save_client_data(*asave),
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, *asave, false)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &e_stack, *asave, true)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &d_stack, *asave, false)) < 0
+    osp++;
+    return 0;
+}
+
+/* the semantics of restore differ slightly between Level 1 and
+   Level 2 and later - the latter includes restoring the device
+   state (whilst Level 1 didn't have ""page devices"" as such).
+   Hence we have two restore operators - one here (Level 1)
+   and one in zdevice2.c (Level 2+). For that reason, the
+   operand checking and guts of the restore operation are
+   separated so both implementations can use them to best
+   effect.
+ */
+int
+dorestore(i_ctx_t *i_ctx_p, alloc_save_t *asave)
+{
+    os_ptr op = osp;
+    bool last;
+    vm_save_t *vmsave;
+    int code;
+
+    osp--;
+
+","    alloc_save_t *asave;
+    bool last;
+    vm_save_t *vmsave;
+    int code = restore_check_operand(op, &asave, idmemory);
+               (ulong) alloc_save_client_data(asave),
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, asave, false)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &e_stack, asave, true)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &d_stack, asave, false)) < 0
+",b0a3854751363657998d4c9bd33c290bf9d07c67,"@@ -99,19 +99,18 @@ zsave(i_ctx_t *i_ctx_p)
+ static int restore_check_operand(os_ptr, alloc_save_t **, gs_dual_memory_t *);
+ static int restore_check_stack(const i_ctx_t *i_ctx_p, const ref_stack_t *, const alloc_save_t *, bool);
+ static void restore_fix_stack(i_ctx_t *i_ctx_p, ref_stack_t *, const alloc_save_t *, bool);
++
++/* Do as many up front checks of the save object as we reasonably can */
+ int
+-zrestore(i_ctx_t *i_ctx_p)
++restore_check_save(i_ctx_t *i_ctx_p, alloc_save_t **asave)
+ {
+     os_ptr op = osp;
+-    alloc_save_t *asave;
+-    bool last;
+-    vm_save_t *vmsave;
+-    int code = restore_check_operand(op, &asave, idmemory);
++    int code = restore_check_operand(op, asave, idmemory);
+ 
+     if (code < 0)
+         return code;
+     if_debug2m('u', imemory, ""[u]vmrestore 0x%lx, id = %lu\n"",
+-               (ulong) alloc_save_client_data(asave),
++               (ulong) alloc_save_client_data(*asave),
+                (ulong) op->value.saveid);
+     if (I_VALIDATE_BEFORE_RESTORE)
+         ivalidate_clean_spaces(i_ctx_p);
+@@ -120,14 +119,37 @@ zrestore(i_ctx_t *i_ctx_p)
+     {
+         int code;
+ 
+-        if ((code = restore_check_stack(i_ctx_p, &o_stack, asave, false)) < 0 ||
+-            (code = restore_check_stack(i_ctx_p, &e_stack, asave, true)) < 0 ||
+-            (code = restore_check_stack(i_ctx_p, &d_stack, asave, false)) < 0
++        if ((code = restore_check_stack(i_ctx_p, &o_stack, *asave, false)) < 0 ||
++            (code = restore_check_stack(i_ctx_p, &e_stack, *asave, true)) < 0 ||
++            (code = restore_check_stack(i_ctx_p, &d_stack, *asave, false)) < 0
+             ) {
+             osp++;
+             return code;
+         }
+     }
++    osp++;
++    return 0;
++}
++
++/* the semantics of restore differ slightly between Level 1 and
++   Level 2 and later - the latter includes restoring the device
++   state (whilst Level 1 didn't have ""page devices"" as such).
++   Hence we have two restore operators - one here (Level 1)
++   and one in zdevice2.c (Level 2+). For that reason, the
++   operand checking and guts of the restore operation are
++   separated so both implementations can use them to best
++   effect.
++ */
++int
++dorestore(i_ctx_t *i_ctx_p, alloc_save_t *asave)
++{
++    os_ptr op = osp;
++    bool last;
++    vm_save_t *vmsave;
++    int code;
++
++    osp--;
++
+     /* Reset l_new in all stack entries if the new save level is zero. */
+     /* Also do some special fixing on the e-stack. */
+     restore_fix_stack(i_ctx_p, &o_stack, asave, false);
+@@ -170,9 +192,24 @@ zrestore(i_ctx_t *i_ctx_p)
+     /* cause an 'invalidaccess' in setuserparams. Temporarily set     */
+     /* LockFilePermissions false until the gs_lev2.ps can do a        */
+     /* setuserparams from the restored userparam dictionary.          */
++    /* NOTE: This is safe to do here, since the restore has           */
++    /* successfully completed - this should never come before any     */
++    /* operation that can trigger an error                            */
+     i_ctx_p->LockFilePermissions = false;
+     return 0;
+ }
++
++int
++zrestore(i_ctx_t *i_ctx_p)
++{
++    alloc_save_t *asave;
++    int code = restore_check_save(i_ctx_p, &asave);
++    if (code < 0)
++        return code;
++
++    return dorestore(i_ctx_p, asave);
++}
++
+ /* Check the operand of a restore. */
+ static int
+ restore_check_operand(os_ptr op, alloc_save_t ** pasave,
+@@ -193,6 +230,7 @@ restore_check_operand(os_ptr op, alloc_save_t ** pasave,
+     *pasave = asave;
+     return 0;
+ }
++
+ /* Check a stack to make sure all its elements are older than a save. */
+ static int
+ restore_check_stack(const i_ctx_t *i_ctx_p, const ref_stack_t * pstack,",ghostscript,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=psi/zvmem.c;h=87a0a4ff1d68904995fd8e86ffb0e030c993f3f9;hb=5516c614dc33,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=psi/zvmem.c;h=44cd7a8e0f5957d78e931fc0794718c4c1419400,1,"zrestore(i_ctx_t *i_ctx_p)
+//fix_flaw_line_below:
+//restore_check_save(i_ctx_t *i_ctx_p, alloc_save_t **asave)
+ {
+     os_ptr op = osp;
+//flaw_line_below:
+    alloc_save_t *asave;
+//flaw_line_below:
+    bool last;
+//flaw_line_below:
+    vm_save_t *vmsave;
+//flaw_line_below:
+    int code = restore_check_operand(op, &asave, idmemory);
+//fix_flaw_line_below:
+//    int code = restore_check_operand(op, asave, idmemory);
+ 
+     if (code < 0)
+         return code;
+     if_debug2m('u', imemory, ""[u]vmrestore 0x%lx, id = %lu\n"",
+//flaw_line_below:
+               (ulong) alloc_save_client_data(asave),
+//fix_flaw_line_below:
+//               (ulong) alloc_save_client_data(*asave),
+                (ulong) op->value.saveid);
+     if (I_VALIDATE_BEFORE_RESTORE)
+         ivalidate_clean_spaces(i_ctx_p);
+        ivalidate_clean_spaces(i_ctx_p);
+    /* Check the contents of the stacks. */
+     {
+         int code;
+ 
+//flaw_line_below:
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, asave, false)) < 0 ||
+//flaw_line_below:
+            (code = restore_check_stack(i_ctx_p, &e_stack, asave, true)) < 0 ||
+//flaw_line_below:
+            (code = restore_check_stack(i_ctx_p, &d_stack, asave, false)) < 0
+//fix_flaw_line_below:
+//        if ((code = restore_check_stack(i_ctx_p, &o_stack, *asave, false)) < 0 ||
+//fix_flaw_line_below:
+//            (code = restore_check_stack(i_ctx_p, &e_stack, *asave, true)) < 0 ||
+//fix_flaw_line_below:
+//            (code = restore_check_stack(i_ctx_p, &d_stack, *asave, false)) < 0
+             ) {
+             osp++;
+             return code;
+         }
+     }
+//fix_flaw_line_below:
+//    osp++;
+//fix_flaw_line_below:
+//    return 0;
+//fix_flaw_line_below:
+//}
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+///* the semantics of restore differ slightly between Level 1 and
+//fix_flaw_line_below:
+//   Level 2 and later - the latter includes restoring the device
+//fix_flaw_line_below:
+//   state (whilst Level 1 didn't have ""page devices"" as such).
+//fix_flaw_line_below:
+//   Hence we have two restore operators - one here (Level 1)
+//fix_flaw_line_below:
+//   and one in zdevice2.c (Level 2+). For that reason, the
+//fix_flaw_line_below:
+//   operand checking and guts of the restore operation are
+//fix_flaw_line_below:
+//   separated so both implementations can use them to best
+//fix_flaw_line_below:
+//   effect.
+//fix_flaw_line_below:
+// */
+//fix_flaw_line_below:
+//int
+//fix_flaw_line_below:
+//dorestore(i_ctx_t *i_ctx_p, alloc_save_t *asave)
+//fix_flaw_line_below:
+//{
+//fix_flaw_line_below:
+//    os_ptr op = osp;
+//fix_flaw_line_below:
+//    bool last;
+//fix_flaw_line_below:
+//    vm_save_t *vmsave;
+//fix_flaw_line_below:
+//    int code;
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//    osp--;
+//fix_flaw_line_below:
+//
+     /* Reset l_new in all stack entries if the new save level is zero. */
+     /* Also do some special fixing on the e-stack. */
+     restore_fix_stack(i_ctx_p, &o_stack, asave, false);
+    }
+",177860,"zrestore(i_ctx_t *i_ctx_p)
+ {
+     os_ptr op = osp;
+    alloc_save_t *asave;
+    bool last;
+    vm_save_t *vmsave;
+    int code = restore_check_operand(op, &asave, idmemory);
+ 
+     if (code < 0)
+         return code;
+     if_debug2m('u', imemory, ""[u]vmrestore 0x%lx, id = %lu\n"",
+               (ulong) alloc_save_client_data(asave),
+                (ulong) op->value.saveid);
+     if (I_VALIDATE_BEFORE_RESTORE)
+         ivalidate_clean_spaces(i_ctx_p);
+        ivalidate_clean_spaces(i_ctx_p);
+    /* Check the contents of the stacks. */
+     {
+         int code;
+ 
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, asave, false)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &e_stack, asave, true)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &d_stack, asave, false)) < 0
+             ) {
+             osp++;
+             return code;
+         }
+     }
+     /* Reset l_new in all stack entries if the new save level is zero. */
+     /* Also do some special fixing on the e-stack. */
+     restore_fix_stack(i_ctx_p, &o_stack, asave, false);
+    }
+","zrestore(i_ctx_t *i_ctx_p)
+restore_check_save(i_ctx_t *i_ctx_p, alloc_save_t **asave)
+ {
+     os_ptr op = osp;
+    int code = restore_check_operand(op, asave, idmemory);
+ 
+     if (code < 0)
+         return code;
+     if_debug2m('u', imemory, ""[u]vmrestore 0x%lx, id = %lu\n"",
+               (ulong) alloc_save_client_data(*asave),
+                (ulong) op->value.saveid);
+     if (I_VALIDATE_BEFORE_RESTORE)
+         ivalidate_clean_spaces(i_ctx_p);
+        ivalidate_clean_spaces(i_ctx_p);
+    /* Check the contents of the stacks. */
+     {
+         int code;
+ 
+        if ((code = restore_check_stack(i_ctx_p, &o_stack, *asave, false)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &e_stack, *asave, true)) < 0 ||
+            (code = restore_check_stack(i_ctx_p, &d_stack, *asave, false)) < 0
+             ) {
+             osp++;
+             return code;
+         }
+     }
+    osp++;
+    return 0;
+}
+
+/* the semantics of restore differ slightly between Level 1 and
+   Level 2 and later - the latter includes restoring the device
+   state (whilst Level 1 didn't have ""page devices"" as such).
+   Hence we have two restore operators - one here (Level 1)
+   and one in zdevice2.c (Level 2+). For that reason, the
+   operand checking and guts of the restore operation are
+   separated so both implementations can use them to best
+   effect.
+ */
+int
+dorestore(i_ctx_t *i_ctx_p, alloc_save_t *asave)
+{
+    os_ptr op = osp;
+    bool last;
+    vm_save_t *vmsave;
+    int code;
+
+    osp--;
+
+     /* Reset l_new in all stack entries if the new save level is zero. */
+     /* Also do some special fixing on the e-stack. */
+     restore_fix_stack(i_ctx_p, &o_stack, asave, false);
+    }
+","The `zrestore` function is designed to restore the state of a virtual machine by validating and restoring various stack contents and memory allocations. It begins by checking the operand for validity and retrieving associated allocation data. If the checks pass, it cleans the memory spaces and verifies the integrity of the operand stacks (operational, error, and data stacks) against the saved state. If any stack validation fails, it increments the operand pointer and returns an error code. Finally, it resets specific stack entries and performs necessary adjustments on the error stack, ensuring a consistent restoration of the virtual machine's state.","The function is responsible for restoring the state of a virtual machine by validating and managing memory and stack contents. It begins by checking the validity of an operand and retrieving associated allocation data. Upon successful validation, it cleans the memory spaces and verifies the integrity of various stacks against a saved state. If any validation fails, it returns an error. Finally, the function resets specific entries in the stacks and makes necessary adjustments to ensure that the virtual machine's state is accurately restored, maintaining consistency and integrity throughout the process.","The vulnerability identified as CWE-78, which pertains to OS command injection, arises from improper handling of user input that could allow an attacker to execute arbitrary commands. In the vulnerable code, the function retrieves and processes an operand without sufficient validation, potentially allowing malicious input to manipulate the system. The fix addresses this by introducing a dedicated function to check the operand and ensure that it is valid before proceeding with any operations. This change enhances security by validating the input more rigorously, thereby preventing unauthorized command execution and ensuring that only safe, expected values are processed.","The vulnerability identified as CWE-78, related to OS command injection, stems from inadequate validation of user input, which could allow an attacker to execute arbitrary commands on the system. In the original code, the processing of an operand lacked sufficient checks, making it susceptible to manipulation through malicious input. The fix involved implementing a dedicated validation function that rigorously checks the operand before any further operations are performed. This enhancement ensures that only safe and expected values are processed, effectively mitigating the risk of unauthorized command execution and improving the overall security of the system.","The vulnerability was fixed by introducing a dedicated function, `restore_check_operand`, which rigorously validates the operand before any further processing occurs. In the updated code, this function checks the operand's integrity and retrieves the associated allocation data, ensuring that only valid inputs are accepted. Additionally, the code now uses the validated allocation data in subsequent operations, such as stack checks and memory management. This structured approach prevents the execution of arbitrary commands by ensuring that any operand processed is safe and conforms to expected parameters, thereby significantly enhancing the security of the system.","The vulnerability was addressed by implementing a dedicated validation mechanism that rigorously checks the integrity of user input before any processing occurs. This new approach ensures that only valid and expected inputs are accepted, significantly reducing the risk of arbitrary command execution. By separating the validation logic from the main processing flow, the code now enforces stricter checks on the input, allowing for safer handling of data. This enhancement not only mitigates the risk associated with the original vulnerability but also improves the overall security posture of the system by ensuring that all inputs are properly vetted.","CWE-20, CWE-78, CWE-77, CWE-74, CWE-89, CWE-94, CWE-95, CWE-116, CWE-471, CWE-707",N,-1.0,"5,5","4, 2","4,4","4,5"
+3,3,178164,178164,,Remote,Not required,Partial,CVE-2017-5330,https://www.cvedetails.com/cve/CVE-2017-5330/,CWE-78,Medium,Partial,Partial,,2017-03-27,6.8,"ark before 16.12.1 might allow remote attackers to execute arbitrary code via an executable in an archive, related to associated applications.",2017-03-31,Exec Code,1,https://cgit.kde.org/ark.git/commit/?id=82fdfd24d46966a117fa625b68784735a40f9065,82fdfd24d46966a117fa625b68784735a40f9065,,1,,,"void Part::slotOpenExtractedEntry(KJob *job)
+{
+    if (!job->error()) {
+
+        OpenJob *openJob = qobject_cast<OpenJob*>(job);
+        Q_ASSERT(openJob);
+
+        m_tmpExtractDirList << openJob->tempDir();
+
+        const QString fullName = openJob->validatedFilePath();
+
+        bool isWritable = m_model->archive() && !m_model->archive()->isReadOnly();
+
+        if (!isWritable) {
+            QFile::setPermissions(fullName, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        }
+
+        if (isWritable) {
+            m_fileWatcher = new QFileSystemWatcher;
+            connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, &Part::slotWatchedFileModified);
+            m_fileWatcher->addPath(fullName);
+        }
+
+        if (qobject_cast<OpenWithJob*>(job)) {
+            const QList<QUrl> urls = {QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile)};
+            KRun::displayOpenWithDialog(urls, widget());
+         } else {
+             KRun::runUrl(QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile),
+                          QMimeDatabase().mimeTypeForFile(fullName).name(),
+                         widget(), false, false);
+         }
+     } else if (job->error() != KJob::KilledJobError) {
+         KMessageBox::error(widget(), job->errorString());
+    }
+    setReadyGui();
+}
+","void Part::slotOpenExtractedEntry(KJob *job)
+{
+    if (!job->error()) {
+
+        OpenJob *openJob = qobject_cast<OpenJob*>(job);
+        Q_ASSERT(openJob);
+
+        m_tmpExtractDirList << openJob->tempDir();
+
+        const QString fullName = openJob->validatedFilePath();
+
+        bool isWritable = m_model->archive() && !m_model->archive()->isReadOnly();
+
+        if (!isWritable) {
+            QFile::setPermissions(fullName, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        }
+
+        if (isWritable) {
+            m_fileWatcher = new QFileSystemWatcher;
+            connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, &Part::slotWatchedFileModified);
+            m_fileWatcher->addPath(fullName);
+        }
+
+        if (qobject_cast<OpenWithJob*>(job)) {
+            const QList<QUrl> urls = {QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile)};
+            KRun::displayOpenWithDialog(urls, widget());
+         } else {
+             KRun::runUrl(QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile),
+                          QMimeDatabase().mimeTypeForFile(fullName).name(),
+                         widget());
+         }
+     } else if (job->error() != KJob::KilledJobError) {
+         KMessageBox::error(widget(), job->errorString());
+    }
+    setReadyGui();
+}
+",CPP,"                         widget(), false, false);
+","                         widget());
+",ec9f3f34e63a2f49dbf2f524ce2f11f699afc21a,"@@ -988,7 +988,7 @@ void Part::slotOpenExtractedEntry(KJob *job)
+         } else {
+             KRun::runUrl(QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile),
+                          QMimeDatabase().mimeTypeForFile(fullName).name(),
+-                         widget());
++                         widget(), false, false);
+         }
+     } else if (job->error() != KJob::KilledJobError) {
+         KMessageBox::error(widget(), job->errorString());",kde,https://cgit.kde.org/ark.git/tree/part/part.cpp?id=82fdfd24d46966a117fa625b68784735a40f9065,https://cgit.kde.org/ark.git/tree/part/part.cpp?id=ec9f3f34e63a2f49dbf2f524ce2f11f699afc21a,1,"void Part::slotOpenExtractedEntry(KJob *job)
+{
+    if (!job->error()) {
+
+        OpenJob *openJob = qobject_cast<OpenJob*>(job);
+        Q_ASSERT(openJob);
+
+        // Since the user could modify the file (unlike the Preview case),
+        // we'll need to manually delete the temp dir in the Part destructor.
+        m_tmpExtractDirList << openJob->tempDir();
+
+        const QString fullName = openJob->validatedFilePath();
+
+        bool isWritable = m_model->archive() && !m_model->archive()->isReadOnly();
+
+        // If archive is readonly set temporarily extracted file to readonly as
+        // well so user will be notified if trying to modify and save the file.
+        if (!isWritable) {
+            QFile::setPermissions(fullName, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        }
+
+        if (isWritable) {
+            m_fileWatcher = new QFileSystemWatcher;
+            connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, &Part::slotWatchedFileModified);
+            m_fileWatcher->addPath(fullName);
+        }
+
+        if (qobject_cast<OpenWithJob*>(job)) {
+            const QList<QUrl> urls = {QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile)};
+            KRun::displayOpenWithDialog(urls, widget());
+         } else {
+             KRun::runUrl(QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile),
+                          QMimeDatabase().mimeTypeForFile(fullName).name(),
+//flaw_line_below:
+                         widget());
+//fix_flaw_line_below:
+//                         widget(), false, false);
+         }
+     } else if (job->error() != KJob::KilledJobError) {
+         KMessageBox::error(widget(), job->errorString());
+    }
+    setReadyGui();
+}
+",178164,"void Part::slotOpenExtractedEntry(KJob *job)
+{
+    if (!job->error()) {
+
+        OpenJob *openJob = qobject_cast<OpenJob*>(job);
+        Q_ASSERT(openJob);
+
+        m_tmpExtractDirList << openJob->tempDir();
+
+        const QString fullName = openJob->validatedFilePath();
+
+        bool isWritable = m_model->archive() && !m_model->archive()->isReadOnly();
+
+        if (!isWritable) {
+            QFile::setPermissions(fullName, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        }
+
+        if (isWritable) {
+            m_fileWatcher = new QFileSystemWatcher;
+            connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, &Part::slotWatchedFileModified);
+            m_fileWatcher->addPath(fullName);
+        }
+
+        if (qobject_cast<OpenWithJob*>(job)) {
+            const QList<QUrl> urls = {QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile)};
+            KRun::displayOpenWithDialog(urls, widget());
+         } else {
+             KRun::runUrl(QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile),
+                          QMimeDatabase().mimeTypeForFile(fullName).name(),
+                         widget());
+         }
+     } else if (job->error() != KJob::KilledJobError) {
+         KMessageBox::error(widget(), job->errorString());
+    }
+    setReadyGui();
+}
+","void Part::slotOpenExtractedEntry(KJob *job)
+{
+    if (!job->error()) {
+
+        OpenJob *openJob = qobject_cast<OpenJob*>(job);
+        Q_ASSERT(openJob);
+
+        m_tmpExtractDirList << openJob->tempDir();
+
+        const QString fullName = openJob->validatedFilePath();
+
+        bool isWritable = m_model->archive() && !m_model->archive()->isReadOnly();
+
+        if (!isWritable) {
+            QFile::setPermissions(fullName, QFileDevice::ReadOwner | QFileDevice::ReadGroup | QFileDevice::ReadOther);
+        }
+
+        if (isWritable) {
+            m_fileWatcher = new QFileSystemWatcher;
+            connect(m_fileWatcher, &QFileSystemWatcher::fileChanged, this, &Part::slotWatchedFileModified);
+            m_fileWatcher->addPath(fullName);
+        }
+
+        if (qobject_cast<OpenWithJob*>(job)) {
+            const QList<QUrl> urls = {QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile)};
+            KRun::displayOpenWithDialog(urls, widget());
+         } else {
+             KRun::runUrl(QUrl::fromUserInput(fullName, QString(), QUrl::AssumeLocalFile),
+                          QMimeDatabase().mimeTypeForFile(fullName).name(),
+                         widget(), false, false);
+         }
+     } else if (job->error() != KJob::KilledJobError) {
+         KMessageBox::error(widget(), job->errorString());
+    }
+    setReadyGui();
+}
+","The `slotOpenExtractedEntry` function handles the completion of a job related to opening an extracted file entry. It first checks for errors in the job; if none exist, it retrieves the temporary directory and validated file path from the job. The function then determines if the file is writable based on the model's archive status. If not writable, it sets the file permissions to read-only. If writable, it sets up a file watcher to monitor changes. Depending on the job type, it either displays an ""Open With"" dialog or runs the file using its MIME type. If an error occurs, it displays an error message.","The function processes the completion of a job that involves opening a file extracted from an archive. It first checks for any errors; if none are found, it retrieves the temporary directory and validated file path. The function assesses whether the file can be modified based on the archive's status. If the file is not writable, it adjusts the permissions to read-only. If it is writable, a file watcher is established to monitor changes. Depending on the job type, it either presents an option to open the file with a specific application or directly executes the file. In case of an error, an error message is displayed.","The vulnerability identified as CWE-78, or OS Command Injection, arises when user-controlled input is improperly handled, allowing an attacker to execute arbitrary commands on the host system. In the vulnerable code, the function directly uses the `fullName` variable, which is derived from user input, without sufficient validation or sanitization before passing it to functions like `KRun::runUrl`. The fixed code mitigates this risk by ensuring that the file path is validated through `openJob->validatedFilePath()`, which likely includes checks to prevent malicious input from being executed, thereby enhancing the security of the application against command injection attacks.","The vulnerability classified as CWE-78, or OS Command Injection, occurs when user input is not properly validated, allowing an attacker to execute arbitrary commands on the system. In the original code, user-controlled input was directly utilized without adequate checks, making it susceptible to exploitation. The fixed code addresses this issue by implementing a validation mechanism that ensures the input is safe before it is processed. This change significantly reduces the risk of malicious input being executed, thereby enhancing the overall security of the application and preventing unauthorized command execution.","The vulnerability was fixed by incorporating a validation step for user input through the `validatedFilePath()` function, which ensures that the file path is safe before it is used. This change prevents potentially malicious input from being passed directly to functions like `KRun::runUrl`. Additionally, the code now checks the file's writability status using the `isWritable` variable, and it sets appropriate permissions with `QFile::setPermissions` if the file is not writable. These modifications collectively enhance input validation and security, mitigating the risk of OS command injection vulnerabilities.","The vulnerability was addressed by implementing a validation mechanism that ensures user input is safe before it is processed. This involved checking the integrity of the file path to prevent potentially harmful input from being executed. Additionally, the code now includes checks for the file's writability status and adjusts permissions accordingly, ensuring that only safe operations are performed on the file. These enhancements collectively improve input validation and security, significantly reducing the risk of command injection and protecting the application from unauthorized execution of commands.","CWE-78, CWE-22, CWE-73, CWE-434, CWE-732, CWE-20, CWE-269, CWE-284, CWE-287, CWE-552",Y,1.0,"5,4","5, 5","4,4","5,5"
+4,4,178196,178196,,Local,Not required,Complete,CVE-2018-6791,https://www.cvedetails.com/cve/CVE-2018-6791/,CWE-78,Low,Complete,Complete,,2018-02-06,7.2,"An issue was discovered in soliduiserver/deviceserviceaction.cpp in KDE Plasma Workspace before 5.12.0. When a vfat thumbdrive that contains `` or $() in its volume label is plugged in and mounted through the device notifier, it's interpreted as a shell command, leading to a possibility of arbitrary command execution. An example of an offending volume label is ""$(touch b)"" -- this will create a file called b in the home folder.",2019-10-02,Exec Code,1,https://cgit.kde.org/plasma-workspace.git/commit/?id=9db872df82c258315c6ebad800af59e81ffb9212,9db872df82c258315c6ebad800af59e81ffb9212,,1,,,"void DelayedExecutor::delayedExecute(const QString &udi)
+{
+    Solid::Device device(udi);
+ 
+     QString exec = m_service.exec();
+     MacroExpander mx(device);
+    mx.expandMacrosShellQuote(exec);
+ 
+     KRun::runCommand(exec, QString(), m_service.icon(), 0);
+     deleteLater();
+}
+","void DelayedExecutor::delayedExecute(const QString &udi)
+{
+    Solid::Device device(udi);
+ 
+     QString exec = m_service.exec();
+     MacroExpander mx(device);
+    mx.expandMacros(exec);
+ 
+     KRun::runCommand(exec, QString(), m_service.icon(), 0);
+     deleteLater();
+}
+",CPP,"    mx.expandMacrosShellQuote(exec);
+","    mx.expandMacros(exec);
+",fc9b8df0342aa87170cee67369fb1b80d78958c1,"@@ -158,7 +158,7 @@ void DelayedExecutor::delayedExecute(const QString &udi)
+ 
+     QString exec = m_service.exec();
+     MacroExpander mx(device);
+-    mx.expandMacros(exec);
++    mx.expandMacrosShellQuote(exec);
+ 
+     KRun::runCommand(exec, QString(), m_service.icon(), 0);
+     deleteLater();",kde,https://cgit.kde.org/plasma-workspace.git/tree/soliduiserver/deviceserviceaction.cpp?id=9db872df82c258315c6ebad800af59e81ffb9212,https://cgit.kde.org/plasma-workspace.git/tree/soliduiserver/deviceserviceaction.cpp?id=fc9b8df0342aa87170cee67369fb1b80d78958c1,1,"void DelayedExecutor::delayedExecute(const QString &udi)
+{
+    Solid::Device device(udi);
+ 
+     QString exec = m_service.exec();
+     MacroExpander mx(device);
+//flaw_line_below:
+    mx.expandMacros(exec);
+//fix_flaw_line_below:
+//    mx.expandMacrosShellQuote(exec);
+ 
+     KRun::runCommand(exec, QString(), m_service.icon(), 0);
+     deleteLater();
+}
+",178196,"void DelayedExecutor::delayedExecute(const QString &udi)
+{
+    Solid::Device device(udi);
+ 
+     QString exec = m_service.exec();
+     MacroExpander mx(device);
+    mx.expandMacros(exec);
+ 
+     KRun::runCommand(exec, QString(), m_service.icon(), 0);
+     deleteLater();
+}
+","void DelayedExecutor::delayedExecute(const QString &udi)
+{
+    Solid::Device device(udi);
+ 
+     QString exec = m_service.exec();
+     MacroExpander mx(device);
+    mx.expandMacrosShellQuote(exec);
+ 
+     KRun::runCommand(exec, QString(), m_service.icon(), 0);
+     deleteLater();
+}
+","The `delayedExecute` function in the `DelayedExecutor` class is designed to execute a command associated with a specific device identified by its unique device identifier (UDI). It first creates a `Solid::Device` object using the provided UDI, then retrieves a command string from the `m_service` object. A `MacroExpander` instance is initialized with the device, which processes the command string to replace any macros with their corresponding values. Finally, the processed command is executed using `KRun::runCommand`, and the object is scheduled for deletion with `deleteLater()`, ensuring proper resource management.","The provided code defines a method that executes a command associated with a specific device identified by a unique identifier. It begins by creating an object representing the device and retrieves a command string linked to a service. The command string is then processed to replace any placeholders with actual values relevant to the device. After processing, the command is executed, and the method ensures that the object is marked for deletion afterward to manage resources effectively. This approach allows for dynamic command execution based on device-specific information while maintaining clean resource management.","The vulnerability in the original code, identified as CWE-78 (Improper Neutralization of Special Elements used in an OS Command), arises from the use of the `expandMacros` function, which could allow untrusted input to be executed as a command, leading to command injection attacks. The fix was implemented by replacing `expandMacros` with `expandMacrosShellQuote`, which properly sanitizes the command string by escaping special characters and ensuring that any user input is treated as data rather than executable code. This change significantly mitigates the risk of executing arbitrary commands through the `KRun::runCommand` function.","The vulnerability identified as CWE-78 (Improper Neutralization of Special Elements used in an OS Command) in the original code stems from the potential for untrusted input to be executed as part of a command, which could lead to command injection attacks. This risk arises when user input is not adequately sanitized before being processed and executed. The vulnerability was addressed by implementing a method that properly escapes special characters in the command string, ensuring that any input is treated as data rather than executable code. This fix significantly reduces the risk of executing arbitrary commands, enhancing the overall security of the application.","The vulnerability was fixed by replacing the `expandMacros` function with `expandMacrosShellQuote` in the code. This change ensures that the command string is properly sanitized by escaping special characters, which prevents untrusted input from being executed as part of a command. By using `expandMacrosShellQuote`, the code now treats any user input as data rather than executable code, significantly mitigating the risk of command injection. This enhancement allows the command retrieved from the service to be safely processed before being passed to the `KRun::runCommand` function, thereby improving the application's security.","The vulnerability was fixed by implementing a method that properly sanitizes the command string before execution. This was achieved by replacing the previous macro expansion technique with a more secure approach that escapes special characters, ensuring that any user input is treated as data rather than executable code. By doing so, the risk of command injection attacks was significantly reduced, as the input cannot be manipulated to execute arbitrary commands. This enhancement ensures that the command is safely processed, thereby improving the overall security of the application and protecting it from potential exploitation.","CWE-78, CWE-77, CWE-88, CWE-116, CWE-74, CWE-917, CWE-434, CWE-89, CWE-94, CWE-79",Y,1.0,"4,4","5,5","4, 4","4, 4"
+5,5,178474,178474,,Remote,Not required,Complete,CVE-2015-4642,https://www.cvedetails.com/cve/CVE-2015-4642/,CWE-78,Low,Complete,Complete,,2016-05-16,10.0,"The escapeshellarg function in ext/standard/exec.c in PHP before 5.4.42, 5.5.x before 5.5.26, and 5.6.x before 5.6.10 on Windows allows remote attackers to execute arbitrary OS commands via a crafted string to an application that accepts command-line arguments for a call to the PHP system function.",2017-09-21,Exec Code,8,https://git.php.net/?p=php-src.git;a=commit;h=d2ac264ffea5ca2e85640b6736e0c7cd4ee9a4a9,d2ac264ffea5ca2e85640b6736e0c7cd4ee9a4a9,,0,,,"PHPAPI char *php_escape_shell_arg(char *str)
+{
+	int x, y = 0, l = strlen(str);
+	char *cmd;
+	size_t estimate = (4 * l) + 3;
+
+	TSRMLS_FETCH();
+
+	cmd = safe_emalloc(4, l, 3); /* worst case */
+
+#ifdef PHP_WIN32
+	cmd[y++] = '""';
+#else
+	cmd[y++] = '\'';
+#endif
+
+	for (x = 0; x < l; x++) {
+		int mb_len = php_mblen(str + x, (l - x));
+
+		/* skip non-valid multibyte characters */
+		if (mb_len < 0) {
+			continue;
+		} else if (mb_len > 1) {
+			memcpy(cmd + y, str + x, mb_len);
+			y += mb_len;
+			x += mb_len - 1;
+			continue;
+		}
+
+		switch (str[x]) {
+#ifdef PHP_WIN32
+		case '""':
+		case '%':
+			cmd[y++] = ' ';
+			break;
+#else
+		case '\'':
+			cmd[y++] = '\'';
+			cmd[y++] = '\\';
+			cmd[y++] = '\'';
+#endif
+			/* fall-through */
+		default:
+			cmd[y++] = str[x];
+                }
+        }
+ #ifdef PHP_WIN32
+       if (y > 0 && '\\' == cmd[y - 1]) {
+               int k = 0, n = y - 1;
+               for (; n >= 0 && '\\' == cmd[n]; n--, k++);
+               if (k % 2) {
+                       cmd[y++] = '\\';
+               }
+       }
+
+        cmd[y++] = '""';
+ #else
+        cmd[y++] = '\'';
+	return cmd;
+}
+","PHPAPI char *php_escape_shell_arg(char *str)
+{
+	int x, y = 0, l = strlen(str);
+	char *cmd;
+	size_t estimate = (4 * l) + 3;
+
+	TSRMLS_FETCH();
+
+	cmd = safe_emalloc(4, l, 3); /* worst case */
+
+#ifdef PHP_WIN32
+	cmd[y++] = '""';
+#else
+	cmd[y++] = '\'';
+#endif
+
+	for (x = 0; x < l; x++) {
+		int mb_len = php_mblen(str + x, (l - x));
+
+		/* skip non-valid multibyte characters */
+		if (mb_len < 0) {
+			continue;
+		} else if (mb_len > 1) {
+			memcpy(cmd + y, str + x, mb_len);
+			y += mb_len;
+			x += mb_len - 1;
+			continue;
+		}
+
+		switch (str[x]) {
+#ifdef PHP_WIN32
+		case '""':
+		case '%':
+			cmd[y++] = ' ';
+			break;
+#else
+		case '\'':
+			cmd[y++] = '\'';
+			cmd[y++] = '\\';
+			cmd[y++] = '\'';
+#endif
+			/* fall-through */
+		default:
+			cmd[y++] = str[x];
+                }
+        }
+ #ifdef PHP_WIN32
+        cmd[y++] = '""';
+ #else
+        cmd[y++] = '\'';
+	return cmd;
+}
+",C,"       if (y > 0 && '\\' == cmd[y - 1]) {
+               int k = 0, n = y - 1;
+               for (; n >= 0 && '\\' == cmd[n]; n--, k++);
+               if (k % 2) {
+                       cmd[y++] = '\\';
+               }
+       }
+
+",,8fc52d77d6f66c438c98d536e2309b5fd13f90de,"@@ -380,6 +380,14 @@ PHPAPI char *php_escape_shell_arg(char *str)
+                }
+        }
+ #ifdef PHP_WIN32
++       if (y > 0 && '\\' == cmd[y - 1]) {
++               int k = 0, n = y - 1;
++               for (; n >= 0 && '\\' == cmd[n]; n--, k++);
++               if (k % 2) {
++                       cmd[y++] = '\\';
++               }
++       }
++
+        cmd[y++] = '""';
+ #else
+        cmd[y++] = '\'';",php,https://git.php.net/?p=php-src.git;a=blob;f=ext/standard/exec.c;h=06c068399d0255aac31e684b45c107a80bcd466b;hb=06c068399d0255aac31e684b45c107a80bcd466b,https://git.php.net/?p=php-src.git;a=blob;f=ext/standard/exec.c;h=683878877b3afb206c3644329e1c13e3fc0c3d98;hb=683878877b3afb206c3644329e1c13e3fc0c3d98,1,"PHPAPI char *php_escape_shell_arg(char *str)
+{
+	int x, y = 0, l = strlen(str);
+	char *cmd;
+	size_t estimate = (4 * l) + 3;
+
+	TSRMLS_FETCH();
+
+	cmd = safe_emalloc(4, l, 3); /* worst case */
+
+#ifdef PHP_WIN32
+	cmd[y++] = '""';
+#else
+	cmd[y++] = '\'';
+#endif
+
+	for (x = 0; x < l; x++) {
+		int mb_len = php_mblen(str + x, (l - x));
+
+		/* skip non-valid multibyte characters */
+		if (mb_len < 0) {
+			continue;
+		} else if (mb_len > 1) {
+			memcpy(cmd + y, str + x, mb_len);
+			y += mb_len;
+			x += mb_len - 1;
+			continue;
+		}
+
+		switch (str[x]) {
+#ifdef PHP_WIN32
+		case '""':
+		case '%':
+			cmd[y++] = ' ';
+			break;
+#else
+		case '\'':
+			cmd[y++] = '\'';
+			cmd[y++] = '\\';
+			cmd[y++] = '\'';
+#endif
+			/* fall-through */
+		default:
+			cmd[y++] = str[x];
+                }
+        }
+ #ifdef PHP_WIN32
+//fix_flaw_line_below:
+//       if (y > 0 && '\\' == cmd[y - 1]) {
+//fix_flaw_line_below:
+//               int k = 0, n = y - 1;
+//fix_flaw_line_below:
+//               for (; n >= 0 && '\\' == cmd[n]; n--, k++);
+//fix_flaw_line_below:
+//               if (k % 2) {
+//fix_flaw_line_below:
+//                       cmd[y++] = '\\';
+//fix_flaw_line_below:
+//               }
+//fix_flaw_line_below:
+//       }
+//fix_flaw_line_below:
+//
+        cmd[y++] = '""';
+ #else
+        cmd[y++] = '\'';
+	return cmd;
+}
+",178474,"PHPAPI char *php_escape_shell_arg(char *str)
+{
+	int x, y = 0, l = strlen(str);
+	char *cmd;
+	size_t estimate = (4 * l) + 3;
+
+	TSRMLS_FETCH();
+
+	cmd = safe_emalloc(4, l, 3); /* worst case */
+
+#ifdef PHP_WIN32
+	cmd[y++] = '""';
+#else
+	cmd[y++] = '\'';
+#endif
+
+	for (x = 0; x < l; x++) {
+		int mb_len = php_mblen(str + x, (l - x));
+
+		/* skip non-valid multibyte characters */
+		if (mb_len < 0) {
+			continue;
+		} else if (mb_len > 1) {
+			memcpy(cmd + y, str + x, mb_len);
+			y += mb_len;
+			x += mb_len - 1;
+			continue;
+		}
+
+		switch (str[x]) {
+#ifdef PHP_WIN32
+		case '""':
+		case '%':
+			cmd[y++] = ' ';
+			break;
+#else
+		case '\'':
+			cmd[y++] = '\'';
+			cmd[y++] = '\\';
+			cmd[y++] = '\'';
+#endif
+			/* fall-through */
+		default:
+			cmd[y++] = str[x];
+                }
+        }
+ #ifdef PHP_WIN32
+        cmd[y++] = '""';
+ #else
+        cmd[y++] = '\'';
+	return cmd;
+}
+","PHPAPI char *php_escape_shell_arg(char *str)
+{
+	int x, y = 0, l = strlen(str);
+	char *cmd;
+	size_t estimate = (4 * l) + 3;
+
+	TSRMLS_FETCH();
+
+	cmd = safe_emalloc(4, l, 3); /* worst case */
+
+#ifdef PHP_WIN32
+	cmd[y++] = '""';
+#else
+	cmd[y++] = '\'';
+#endif
+
+	for (x = 0; x < l; x++) {
+		int mb_len = php_mblen(str + x, (l - x));
+
+		/* skip non-valid multibyte characters */
+		if (mb_len < 0) {
+			continue;
+		} else if (mb_len > 1) {
+			memcpy(cmd + y, str + x, mb_len);
+			y += mb_len;
+			x += mb_len - 1;
+			continue;
+		}
+
+		switch (str[x]) {
+#ifdef PHP_WIN32
+		case '""':
+		case '%':
+			cmd[y++] = ' ';
+			break;
+#else
+		case '\'':
+			cmd[y++] = '\'';
+			cmd[y++] = '\\';
+			cmd[y++] = '\'';
+#endif
+			/* fall-through */
+		default:
+			cmd[y++] = str[x];
+                }
+        }
+ #ifdef PHP_WIN32
+       if (y > 0 && '\\' == cmd[y - 1]) {
+               int k = 0, n = y - 1;
+               for (; n >= 0 && '\\' == cmd[n]; n--, k++);
+               if (k % 2) {
+                       cmd[y++] = '\\';
+               }
+       }
+
+        cmd[y++] = '""';
+ #else
+        cmd[y++] = '\'';
+	return cmd;
+}
+","The provided PHP code defines a function `php_escape_shell_arg` that safely escapes a string for use in shell commands, ensuring that special characters do not interfere with command execution. It begins by allocating memory for the escaped string, then wraps the input string in quotes (single or double, depending on the operating system). The function iterates through each character of the input string, handling multibyte characters and replacing specific special characters with safe alternatives. For Windows, it replaces double quotes and percent signs with spaces, while for Unix-like systems, it escapes single quotes. Finally, it returns the constructed escaped string.","The code defines a function that safely prepares a string for inclusion in shell commands by escaping special characters to prevent command injection vulnerabilities. It begins by allocating sufficient memory for the output string, which is enclosed in quotes based on the operating system. The function processes each character of the input, handling multibyte characters appropriately and replacing specific special characters with safe alternatives. For one operating system, certain characters are replaced with spaces, while for another, specific characters are escaped. Ultimately, the function returns the modified string, ensuring it can be safely used in shell contexts.","The vulnerability in the original code, identified as CWE-78 (OS Command Injection), arises from inadequate handling of special characters, which could allow an attacker to manipulate command execution by injecting malicious input. Specifically, the original code did not properly escape single quotes, potentially allowing an attacker to break out of the intended command context. The fixed code addresses this by adding logic to check for trailing backslashes in the output string, ensuring that any unescaped single quotes are properly handled. This additional validation prevents the injection of arbitrary commands, thereby enhancing the security of the function.","The vulnerability identified as CWE-78 (OS Command Injection) in the original code stems from insufficient escaping of special characters, particularly single quotes, which could allow an attacker to manipulate command execution by injecting malicious input. This oversight could lead to unintended command execution if an attacker crafted input that broke out of the intended command context. The fixed code addresses this issue by implementing additional checks for trailing backslashes, ensuring that any unescaped characters are properly handled. This enhancement effectively mitigates the risk of command injection, thereby improving the overall security of the function.","The vulnerability was fixed by adding logic to check for trailing backslashes in the output string before closing the quote. Specifically, the code now includes a condition that counts the number of consecutive backslashes at the end of the constructed string. If an odd number of backslashes is detected, an additional backslash is appended to ensure proper escaping. This adjustment is implemented right before the closing quote is added, enhancing the handling of special characters and preventing potential command injection. As a result, the function now more securely prepares the string for shell execution.","The vulnerability was fixed by introducing a mechanism to check for trailing backslashes in the constructed output string before finalizing it with a closing quote. This new logic counts the number of consecutive backslashes at the end of the string, and if an odd count is found, an additional backslash is appended to ensure proper escaping. This enhancement effectively addresses the issue of unescaped characters, particularly single quotes, thereby preventing potential command injection attacks. The overall result is a more secure string preparation process for shell command execution.","CWE-78, CWE-116, CWE-176, CWE-146, CWE-150, CWE-167, CWE-140, CWE-157, CWE-143, CWE-74",Y,1.0,"5,4","5,5","4, 4","4,4"
+6,6,180885,180885,,Local,Not required,Complete,CVE-2017-15924,https://www.cvedetails.com/cve/CVE-2017-15924/,CWE-78,Low,Complete,Complete,,2017-10-27,7.2,"In manager.c in ss-manager in shadowsocks-libev 3.1.0, improper parsing allows command injection via shell metacharacters in a JSON configuration request received via 127.0.0.1 UDP traffic, related to the add_server, build_config, and construct_command_line functions.",2019-10-02,,13,https://github.com/shadowsocks/shadowsocks-libev/commit/c67d275803dc6ea22c558d06b1f7ba9f94cd8de3,c67d275803dc6ea22c558d06b1f7ba9f94cd8de3,Fix #1734,5,src/manager.c,"{""sha"": ""5f9c9f06b0559e3a50313bf9174f39737cb30a4d"", ""filename"": ""src/manager.c"", ""status"": ""modified"", ""additions"": 19, ""deletions"": 12, ""changes"": 31, ""blob_url"": ""https://github.com/shadowsocks/shadowsocks-libev/blob/c67d275803dc6ea22c558d06b1f7ba9f94cd8de3/src/manager.c"", ""raw_url"": ""https://github.com/shadowsocks/shadowsocks-libev/raw/c67d275803dc6ea22c558d06b1f7ba9f94cd8de3/src/manager.c"", ""contents_url"": ""https://api.github.com/repos/shadowsocks/shadowsocks-libev/contents/src/manager.c?ref=c67d275803dc6ea22c558d06b1f7ba9f94cd8de3"", ""patch"": ""@@ -92,7 +92,7 @@ destroy_server(struct server *server) {\n }\n \n static void\n-build_config(char *prefix, struct server *server)\n+build_config(char *prefix, struct manager_ctx *manager, struct server *server)\n {\n     char *path    = NULL;\n     int path_size = strlen(prefix) + strlen(server->port) + 20;\n@@ -110,11 +110,18 @@ build_config(char *prefix, struct server *server)\n     fprintf(f, \""{\\n\"");\n     fprintf(f, \""\\\""server_port\\\"":%d,\\n\"", atoi(server->port));\n     fprintf(f, \""\\\""password\\\"":\\\""%s\\\""\"", server->password);\n-    if (server->fast_open[0]) fprintf(f, \"",\\n\\\""fast_open\\\"": %s\"", server->fast_open);\n-    if (server->mode)   fprintf(f, \"",\\n\\\""mode\\\"":\\\""%s\\\""\"", server->mode);\n-    if (server->method) fprintf(f, \"",\\n\\\""method\\\"":\\\""%s\\\""\"", server->method);\n-    if (server->plugin) fprintf(f, \"",\\n\\\""plugin\\\"":\\\""%s\\\""\"", server->plugin);\n-    if (server->plugin_opts) fprintf(f, \"",\\n\\\""plugin_opts\\\"":\\\""%s\\\""\"", server->plugin_opts);\n+    if (server->method)\n+        fprintf(f, \"",\\n\\\""method\\\"":\\\""%s\\\""\"", server->method);\n+    else if (manager->method)\n+        fprintf(f, \"",\\n\\\""method\\\"":\\\""%s\\\""\"", manager->method);\n+    if (server->fast_open[0])\n+        fprintf(f, \"",\\n\\\""fast_open\\\"": %s\"", server->fast_open);\n+    if (server->mode)\n+        fprintf(f, \"",\\n\\\""mode\\\"":\\\""%s\\\""\"", server->mode);\n+    if (server->plugin)\n+        fprintf(f, \"",\\n\\\""plugin\\\"":\\\""%s\\\""\"", server->plugin);\n+    if (server->plugin_opts)\n+        fprintf(f, \"",\\n\\\""plugin_opts\\\"":\\\""%s\\\""\"", server->plugin_opts);\n     fprintf(f, \""\\n}\\n\"");\n     fclose(f);\n     ss_free(path);\n@@ -124,17 +131,17 @@ static char *\n construct_command_line(struct manager_ctx *manager, struct server *server)\n {\n     static char cmd[BUF_SIZE];\n-    char *method = manager->method;\n     int i;\n+    int port;\n \n-    build_config(working_dir, server);\n+    port = atoi(server->port);\n+\n+    build_config(working_dir, manager, server);\n \n-    if (server->method) method = server->method;\n     memset(cmd, 0, BUF_SIZE);\n     snprintf(cmd, BUF_SIZE,\n-             \""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf\"",\n-             executable, method, manager->manager_address,\n-             working_dir, server->port, working_dir, server->port);\n+             \""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf\"",\n+             executable, manager->manager_address, working_dir, port, working_dir, port);\n \n     if (manager->acl != NULL) {\n         int len = strlen(cmd);""}","build_config(char *prefix, struct server *server)
+build_config(char *prefix, struct manager_ctx *manager, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+
+    path = ss_malloc(path_size);
+    snprintf(path, path_size, ""%s/.shadowsocks_%s.conf"", prefix, server->port);
+    FILE *f = fopen(path, ""w+"");
+    if (f == NULL) {
+        if (verbose) {
+            LOGE(""unable to open config file"");
+        }
+        ss_free(path);
+        return;
+    }
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+    if (server->method)
+        fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+    else if (manager->method)
+        fprintf(f, "",\n\""method\"":\""%s\"""", manager->method);
+    if (server->fast_open[0])
+        fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+    if (server->mode)
+        fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+    if (server->plugin)
+        fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+    if (server->plugin_opts)
+        fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+}
+","build_config(char *prefix, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+
+    path = ss_malloc(path_size);
+    snprintf(path, path_size, ""%s/.shadowsocks_%s.conf"", prefix, server->port);
+    FILE *f = fopen(path, ""w+"");
+    if (f == NULL) {
+        if (verbose) {
+            LOGE(""unable to open config file"");
+        }
+        ss_free(path);
+        return;
+    }
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+    if (server->fast_open[0]) fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+    if (server->mode)   fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+    if (server->method) fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+    if (server->plugin) fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+    if (server->plugin_opts) fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+}
+",C,"build_config(char *prefix, struct manager_ctx *manager, struct server *server)
+    if (server->method)
+        fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+    else if (manager->method)
+        fprintf(f, "",\n\""method\"":\""%s\"""", manager->method);
+    if (server->fast_open[0])
+        fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+    if (server->mode)
+        fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+    if (server->plugin)
+        fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+    if (server->plugin_opts)
+        fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+","    if (server->fast_open[0]) fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+    if (server->mode)   fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+    if (server->method) fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+    if (server->plugin) fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+    if (server->plugin_opts) fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+",,"@@ -92,7 +92,7 @@ destroy_server(struct server *server) {
+ }
+ 
+ static void
+-build_config(char *prefix, struct server *server)
++build_config(char *prefix, struct manager_ctx *manager, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+@@ -110,11 +110,18 @@ build_config(char *prefix, struct server *server)
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+-    if (server->fast_open[0]) fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+-    if (server->mode)   fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+-    if (server->method) fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+-    if (server->plugin) fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+-    if (server->plugin_opts) fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
++    if (server->method)
++        fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
++    else if (manager->method)
++        fprintf(f, "",\n\""method\"":\""%s\"""", manager->method);
++    if (server->fast_open[0])
++        fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
++    if (server->mode)
++        fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
++    if (server->plugin)
++        fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
++    if (server->plugin_opts)
++        fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+@@ -124,17 +131,17 @@ static char *
+ construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+-    char *method = manager->method;
+     int i;
++    int port;
+ 
+-    build_config(working_dir, server);
++    port = atoi(server->port);
++
++    build_config(working_dir, manager, server);
+ 
+-    if (server->method) method = server->method;
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+-             ""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf"",
+-             executable, method, manager->manager_address,
+-             working_dir, server->port, working_dir, server->port);
++             ""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf"",
++             executable, manager->manager_address, working_dir, port, working_dir, port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);",shadowsocks-libev,c67d275803dc6ea22c558d06b1f7ba9f94cd8de3,10a2d3e3cd76b148d5f5996f06267cc40e62cac5,1,"build_config(char *prefix, struct server *server)
+//fix_flaw_line_below:
+//build_config(char *prefix, struct manager_ctx *manager, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+
+    path = ss_malloc(path_size);
+    snprintf(path, path_size, ""%s/.shadowsocks_%s.conf"", prefix, server->port);
+    FILE *f = fopen(path, ""w+"");
+    if (f == NULL) {
+        if (verbose) {
+            LOGE(""unable to open config file"");
+        }
+        ss_free(path);
+        return;
+    }
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+//flaw_line_below:
+    if (server->fast_open[0]) fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+//flaw_line_below:
+    if (server->mode)   fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+//flaw_line_below:
+    if (server->method) fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+//flaw_line_below:
+    if (server->plugin) fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+//flaw_line_below:
+    if (server->plugin_opts) fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+//fix_flaw_line_below:
+//    if (server->method)
+//fix_flaw_line_below:
+//        fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+//fix_flaw_line_below:
+//    else if (manager->method)
+//fix_flaw_line_below:
+//        fprintf(f, "",\n\""method\"":\""%s\"""", manager->method);
+//fix_flaw_line_below:
+//    if (server->fast_open[0])
+//fix_flaw_line_below:
+//        fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+//fix_flaw_line_below:
+//    if (server->mode)
+//fix_flaw_line_below:
+//        fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+//fix_flaw_line_below:
+//    if (server->plugin)
+//fix_flaw_line_below:
+//        fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+//fix_flaw_line_below:
+//    if (server->plugin_opts)
+//fix_flaw_line_below:
+//        fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+}
+",180885,"build_config(char *prefix, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+
+    path = ss_malloc(path_size);
+    snprintf(path, path_size, ""%s/.shadowsocks_%s.conf"", prefix, server->port);
+    FILE *f = fopen(path, ""w+"");
+    if (f == NULL) {
+        if (verbose) {
+            LOGE(""unable to open config file"");
+        }
+        ss_free(path);
+        return;
+    }
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+    if (server->fast_open[0]) fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+    if (server->mode)   fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+    if (server->method) fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+    if (server->plugin) fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+    if (server->plugin_opts) fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+}
+","build_config(char *prefix, struct server *server)
+build_config(char *prefix, struct manager_ctx *manager, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+
+    path = ss_malloc(path_size);
+    snprintf(path, path_size, ""%s/.shadowsocks_%s.conf"", prefix, server->port);
+    FILE *f = fopen(path, ""w+"");
+    if (f == NULL) {
+        if (verbose) {
+            LOGE(""unable to open config file"");
+        }
+        ss_free(path);
+        return;
+    }
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+    if (server->method)
+        fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+    else if (manager->method)
+        fprintf(f, "",\n\""method\"":\""%s\"""", manager->method);
+    if (server->fast_open[0])
+        fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+    if (server->mode)
+        fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+    if (server->plugin)
+        fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+    if (server->plugin_opts)
+        fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+}
+","The `build_config` function generates a configuration file for a server based on the provided prefix and server structure. It calculates the required size for the file path, allocates memory for it, and constructs the path to the configuration file using the server's port. The function attempts to open this file for writing; if unsuccessful, it logs an error and exits. If successful, it writes various server parameters, such as port, password, and optional settings like fast_open, mode, method, plugin, and plugin options in JSON format. Finally, it closes the file and frees the allocated memory.","The code defines a function that creates a configuration file for a server using a specified directory prefix and server details. It calculates the necessary size for the file path and allocates memory accordingly. The function constructs the file path and attempts to open it for writing; if it fails, it logs an error and exits. Upon successful opening, it writes various server attributes, including the port and password, along with optional settings in a structured format. Finally, it ensures the file is closed and the allocated memory is released, completing the configuration process.","The vulnerability in the original code, identified as CWE-78 (OS Command Injection), arises from the use of unvalidated input when constructing the file path with the `snprintf` function. Specifically, the `server->port` variable is directly incorporated into the file name, allowing an attacker to manipulate the input to execute arbitrary commands if the input is not properly sanitized. The fixed code mitigates this risk by introducing a new parameter, `manager`, which allows for additional control over the method used for writing the configuration. This change enhances input validation and reduces the potential for command injection by providing a more structured approach to handling server attributes.","The vulnerability identified as CWE-78 (OS Command Injection) in the original code stems from the direct incorporation of user-controlled input into a file path, which could allow an attacker to manipulate the input and execute arbitrary commands. This risk arises when the input is not properly validated or sanitized, leading to potential exploitation. The fixed code addresses this issue by introducing an additional context that allows for more controlled handling of server attributes, thereby enhancing input validation. This change reduces the likelihood of command injection by ensuring that user input is managed more securely before being used in file operations.","The vulnerability was fixed by modifying the function to include an additional parameter, `struct manager_ctx *manager`, which allows for more controlled handling of server attributes. In the updated code, the method for writing the configuration is determined by checking both the `server->method` and `manager->method`, ensuring that only validated and expected values are used. This change enhances input validation by providing a structured way to select the method, reducing the risk of command injection. Additionally, the overall structure of the configuration writing process remains intact, while improving security through better management of user input.","The vulnerability was addressed by introducing an additional context that allows for more controlled handling of input parameters. This change enables the code to validate and select methods more securely, ensuring that only expected and safe values are utilized when constructing the configuration. By incorporating this structured approach, the risk of command injection is significantly reduced, as it limits the potential for unvalidated user input to influence critical operations. Overall, the fix enhances the security of the configuration process while maintaining the intended functionality of the original code.","CWE-78, CWE-77, CWE-74, CWE-89, CWE-94, CWE-434, CWE-73, CWE-20, CWE-116, CWE-95",Y,1.0,"4,4","5,4","4,3","4,3"
+7,7,180886,180886,,Local,Not required,Complete,CVE-2017-15924,https://www.cvedetails.com/cve/CVE-2017-15924/,CWE-78,Low,Complete,Complete,,2017-10-27,7.2,"In manager.c in ss-manager in shadowsocks-libev 3.1.0, improper parsing allows command injection via shell metacharacters in a JSON configuration request received via 127.0.0.1 UDP traffic, related to the add_server, build_config, and construct_command_line functions.",2019-10-02,,6,https://github.com/shadowsocks/shadowsocks-libev/commit/c67d275803dc6ea22c558d06b1f7ba9f94cd8de3,c67d275803dc6ea22c558d06b1f7ba9f94cd8de3,Fix #1734,6,src/manager.c,"{""sha"": ""5f9c9f06b0559e3a50313bf9174f39737cb30a4d"", ""filename"": ""src/manager.c"", ""status"": ""modified"", ""additions"": 19, ""deletions"": 12, ""changes"": 31, ""blob_url"": ""https://github.com/shadowsocks/shadowsocks-libev/blob/c67d275803dc6ea22c558d06b1f7ba9f94cd8de3/src/manager.c"", ""raw_url"": ""https://github.com/shadowsocks/shadowsocks-libev/raw/c67d275803dc6ea22c558d06b1f7ba9f94cd8de3/src/manager.c"", ""contents_url"": ""https://api.github.com/repos/shadowsocks/shadowsocks-libev/contents/src/manager.c?ref=c67d275803dc6ea22c558d06b1f7ba9f94cd8de3"", ""patch"": ""@@ -92,7 +92,7 @@ destroy_server(struct server *server) {\n }\n \n static void\n-build_config(char *prefix, struct server *server)\n+build_config(char *prefix, struct manager_ctx *manager, struct server *server)\n {\n     char *path    = NULL;\n     int path_size = strlen(prefix) + strlen(server->port) + 20;\n@@ -110,11 +110,18 @@ build_config(char *prefix, struct server *server)\n     fprintf(f, \""{\\n\"");\n     fprintf(f, \""\\\""server_port\\\"":%d,\\n\"", atoi(server->port));\n     fprintf(f, \""\\\""password\\\"":\\\""%s\\\""\"", server->password);\n-    if (server->fast_open[0]) fprintf(f, \"",\\n\\\""fast_open\\\"": %s\"", server->fast_open);\n-    if (server->mode)   fprintf(f, \"",\\n\\\""mode\\\"":\\\""%s\\\""\"", server->mode);\n-    if (server->method) fprintf(f, \"",\\n\\\""method\\\"":\\\""%s\\\""\"", server->method);\n-    if (server->plugin) fprintf(f, \"",\\n\\\""plugin\\\"":\\\""%s\\\""\"", server->plugin);\n-    if (server->plugin_opts) fprintf(f, \"",\\n\\\""plugin_opts\\\"":\\\""%s\\\""\"", server->plugin_opts);\n+    if (server->method)\n+        fprintf(f, \"",\\n\\\""method\\\"":\\\""%s\\\""\"", server->method);\n+    else if (manager->method)\n+        fprintf(f, \"",\\n\\\""method\\\"":\\\""%s\\\""\"", manager->method);\n+    if (server->fast_open[0])\n+        fprintf(f, \"",\\n\\\""fast_open\\\"": %s\"", server->fast_open);\n+    if (server->mode)\n+        fprintf(f, \"",\\n\\\""mode\\\"":\\\""%s\\\""\"", server->mode);\n+    if (server->plugin)\n+        fprintf(f, \"",\\n\\\""plugin\\\"":\\\""%s\\\""\"", server->plugin);\n+    if (server->plugin_opts)\n+        fprintf(f, \"",\\n\\\""plugin_opts\\\"":\\\""%s\\\""\"", server->plugin_opts);\n     fprintf(f, \""\\n}\\n\"");\n     fclose(f);\n     ss_free(path);\n@@ -124,17 +131,17 @@ static char *\n construct_command_line(struct manager_ctx *manager, struct server *server)\n {\n     static char cmd[BUF_SIZE];\n-    char *method = manager->method;\n     int i;\n+    int port;\n \n-    build_config(working_dir, server);\n+    port = atoi(server->port);\n+\n+    build_config(working_dir, manager, server);\n \n-    if (server->method) method = server->method;\n     memset(cmd, 0, BUF_SIZE);\n     snprintf(cmd, BUF_SIZE,\n-             \""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf\"",\n-             executable, method, manager->manager_address,\n-             working_dir, server->port, working_dir, server->port);\n+             \""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf\"",\n+             executable, manager->manager_address, working_dir, port, working_dir, port);\n \n     if (manager->acl != NULL) {\n         int len = strlen(cmd);""}"," construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+     int i;
+    int port;
+ 
+    port = atoi(server->port);
+
+    build_config(working_dir, manager, server);
+ 
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+             ""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf"",
+             executable, manager->manager_address, working_dir, port, working_dir, port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --acl %s"", manager->acl);
+    }
+    if (manager->timeout != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -t %s"", manager->timeout);
+    }
+#ifdef HAVE_SETRLIMIT
+    if (manager->nofile) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -n %d"", manager->nofile);
+    }
+#endif
+    if (manager->user != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -a %s"", manager->user);
+    }
+    if (manager->verbose) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -v"");
+    }
+    if (server->mode == NULL && manager->mode == UDP_ONLY) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -U"");
+    }
+    if (server->mode == NULL && manager->mode == TCP_AND_UDP) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -u"");
+    }
+    if (server->fast_open[0] == 0 && manager->fast_open) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --fast-open"");
+    }
+    if (manager->ipv6first) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -6"");
+    }
+    if (manager->mtu) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --mtu %d"", manager->mtu);
+    }
+    if (server->plugin == NULL && manager->plugin) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin \""%s\"""", manager->plugin);
+    }
+    if (server->plugin_opts == NULL && manager->plugin_opts) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin-opts \""%s\"""", manager->plugin_opts);
+    }
+    for (i = 0; i < manager->nameserver_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -d %s"", manager->nameservers[i]);
+    }
+    for (i = 0; i < manager->host_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -s %s"", manager->hosts[i]);
+    }
+    {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --reuse-port"");
+    }
+
+    if (verbose) {
+        LOGI(""cmd: %s"", cmd);
+    }
+
+    return cmd;
+}
+"," construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+    char *method = manager->method;
+     int i;
+ 
+    build_config(working_dir, server);
+ 
+    if (server->method) method = server->method;
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+             ""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf"",
+             executable, method, manager->manager_address,
+             working_dir, server->port, working_dir, server->port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --acl %s"", manager->acl);
+    }
+    if (manager->timeout != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -t %s"", manager->timeout);
+    }
+#ifdef HAVE_SETRLIMIT
+    if (manager->nofile) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -n %d"", manager->nofile);
+    }
+#endif
+    if (manager->user != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -a %s"", manager->user);
+    }
+    if (manager->verbose) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -v"");
+    }
+    if (server->mode == NULL && manager->mode == UDP_ONLY) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -U"");
+    }
+    if (server->mode == NULL && manager->mode == TCP_AND_UDP) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -u"");
+    }
+    if (server->fast_open[0] == 0 && manager->fast_open) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --fast-open"");
+    }
+    if (manager->ipv6first) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -6"");
+    }
+    if (manager->mtu) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --mtu %d"", manager->mtu);
+    }
+    if (server->plugin == NULL && manager->plugin) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin \""%s\"""", manager->plugin);
+    }
+    if (server->plugin_opts == NULL && manager->plugin_opts) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin-opts \""%s\"""", manager->plugin_opts);
+    }
+    for (i = 0; i < manager->nameserver_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -d %s"", manager->nameservers[i]);
+    }
+    for (i = 0; i < manager->host_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -s %s"", manager->hosts[i]);
+    }
+    {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --reuse-port"");
+    }
+
+    if (verbose) {
+        LOGI(""cmd: %s"", cmd);
+    }
+
+    return cmd;
+}
+",C,"    int port;
+    port = atoi(server->port);
+
+    build_config(working_dir, manager, server);
+             ""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf"",
+             executable, manager->manager_address, working_dir, port, working_dir, port);
+","    char *method = manager->method;
+    build_config(working_dir, server);
+    if (server->method) method = server->method;
+             ""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf"",
+             executable, method, manager->manager_address,
+             working_dir, server->port, working_dir, server->port);
+",,"@@ -92,7 +92,7 @@ destroy_server(struct server *server) {
+ }
+ 
+ static void
+-build_config(char *prefix, struct server *server)
++build_config(char *prefix, struct manager_ctx *manager, struct server *server)
+ {
+     char *path    = NULL;
+     int path_size = strlen(prefix) + strlen(server->port) + 20;
+@@ -110,11 +110,18 @@ build_config(char *prefix, struct server *server)
+     fprintf(f, ""{\n"");
+     fprintf(f, ""\""server_port\"":%d,\n"", atoi(server->port));
+     fprintf(f, ""\""password\"":\""%s\"""", server->password);
+-    if (server->fast_open[0]) fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
+-    if (server->mode)   fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
+-    if (server->method) fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
+-    if (server->plugin) fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
+-    if (server->plugin_opts) fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
++    if (server->method)
++        fprintf(f, "",\n\""method\"":\""%s\"""", server->method);
++    else if (manager->method)
++        fprintf(f, "",\n\""method\"":\""%s\"""", manager->method);
++    if (server->fast_open[0])
++        fprintf(f, "",\n\""fast_open\"": %s"", server->fast_open);
++    if (server->mode)
++        fprintf(f, "",\n\""mode\"":\""%s\"""", server->mode);
++    if (server->plugin)
++        fprintf(f, "",\n\""plugin\"":\""%s\"""", server->plugin);
++    if (server->plugin_opts)
++        fprintf(f, "",\n\""plugin_opts\"":\""%s\"""", server->plugin_opts);
+     fprintf(f, ""\n}\n"");
+     fclose(f);
+     ss_free(path);
+@@ -124,17 +131,17 @@ static char *
+ construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+-    char *method = manager->method;
+     int i;
++    int port;
+ 
+-    build_config(working_dir, server);
++    port = atoi(server->port);
++
++    build_config(working_dir, manager, server);
+ 
+-    if (server->method) method = server->method;
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+-             ""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf"",
+-             executable, method, manager->manager_address,
+-             working_dir, server->port, working_dir, server->port);
++             ""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf"",
++             executable, manager->manager_address, working_dir, port, working_dir, port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);",shadowsocks-libev,c67d275803dc6ea22c558d06b1f7ba9f94cd8de3,10a2d3e3cd76b148d5f5996f06267cc40e62cac5,1," construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+//flaw_line_below:
+    char *method = manager->method;
+     int i;
+//fix_flaw_line_below:
+//    int port;
+ 
+//flaw_line_below:
+    build_config(working_dir, server);
+//fix_flaw_line_below:
+//    port = atoi(server->port);
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//    build_config(working_dir, manager, server);
+ 
+//flaw_line_below:
+    if (server->method) method = server->method;
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+//flaw_line_below:
+             ""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf"",
+//flaw_line_below:
+             executable, method, manager->manager_address,
+//flaw_line_below:
+             working_dir, server->port, working_dir, server->port);
+//fix_flaw_line_below:
+//             ""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf"",
+//fix_flaw_line_below:
+//             executable, manager->manager_address, working_dir, port, working_dir, port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --acl %s"", manager->acl);
+    }
+    if (manager->timeout != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -t %s"", manager->timeout);
+    }
+#ifdef HAVE_SETRLIMIT
+    if (manager->nofile) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -n %d"", manager->nofile);
+    }
+#endif
+    if (manager->user != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -a %s"", manager->user);
+    }
+    if (manager->verbose) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -v"");
+    }
+    if (server->mode == NULL && manager->mode == UDP_ONLY) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -U"");
+    }
+    if (server->mode == NULL && manager->mode == TCP_AND_UDP) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -u"");
+    }
+    if (server->fast_open[0] == 0 && manager->fast_open) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --fast-open"");
+    }
+    if (manager->ipv6first) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -6"");
+    }
+    if (manager->mtu) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --mtu %d"", manager->mtu);
+    }
+    if (server->plugin == NULL && manager->plugin) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin \""%s\"""", manager->plugin);
+    }
+    if (server->plugin_opts == NULL && manager->plugin_opts) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin-opts \""%s\"""", manager->plugin_opts);
+    }
+    for (i = 0; i < manager->nameserver_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -d %s"", manager->nameservers[i]);
+    }
+    for (i = 0; i < manager->host_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -s %s"", manager->hosts[i]);
+    }
+    // Always enable reuse port
+    {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --reuse-port"");
+    }
+
+    if (verbose) {
+        LOGI(""cmd: %s"", cmd);
+    }
+
+    return cmd;
+}
+",180886," construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+    char *method = manager->method;
+     int i;
+ 
+    build_config(working_dir, server);
+ 
+    if (server->method) method = server->method;
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+             ""%s -m %s --manager-address %s -f %s/.shadowsocks_%s.pid -c %s/.shadowsocks_%s.conf"",
+             executable, method, manager->manager_address,
+             working_dir, server->port, working_dir, server->port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --acl %s"", manager->acl);
+    }
+    if (manager->timeout != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -t %s"", manager->timeout);
+    }
+#ifdef HAVE_SETRLIMIT
+    if (manager->nofile) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -n %d"", manager->nofile);
+    }
+#endif
+    if (manager->user != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -a %s"", manager->user);
+    }
+    if (manager->verbose) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -v"");
+    }
+    if (server->mode == NULL && manager->mode == UDP_ONLY) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -U"");
+    }
+    if (server->mode == NULL && manager->mode == TCP_AND_UDP) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -u"");
+    }
+    if (server->fast_open[0] == 0 && manager->fast_open) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --fast-open"");
+    }
+    if (manager->ipv6first) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -6"");
+    }
+    if (manager->mtu) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --mtu %d"", manager->mtu);
+    }
+    if (server->plugin == NULL && manager->plugin) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin \""%s\"""", manager->plugin);
+    }
+    if (server->plugin_opts == NULL && manager->plugin_opts) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin-opts \""%s\"""", manager->plugin_opts);
+    }
+    for (i = 0; i < manager->nameserver_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -d %s"", manager->nameservers[i]);
+    }
+    for (i = 0; i < manager->host_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -s %s"", manager->hosts[i]);
+    }
+    {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --reuse-port"");
+    }
+
+    if (verbose) {
+        LOGI(""cmd: %s"", cmd);
+    }
+
+    return cmd;
+}
+"," construct_command_line(struct manager_ctx *manager, struct server *server)
+ {
+     static char cmd[BUF_SIZE];
+     int i;
+    int port;
+ 
+    port = atoi(server->port);
+
+    build_config(working_dir, manager, server);
+ 
+     memset(cmd, 0, BUF_SIZE);
+     snprintf(cmd, BUF_SIZE,
+             ""%s --manager-address %s -f %s/.shadowsocks_%d.pid -c %s/.shadowsocks_%d.conf"",
+             executable, manager->manager_address, working_dir, port, working_dir, port);
+ 
+     if (manager->acl != NULL) {
+         int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --acl %s"", manager->acl);
+    }
+    if (manager->timeout != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -t %s"", manager->timeout);
+    }
+#ifdef HAVE_SETRLIMIT
+    if (manager->nofile) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -n %d"", manager->nofile);
+    }
+#endif
+    if (manager->user != NULL) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -a %s"", manager->user);
+    }
+    if (manager->verbose) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -v"");
+    }
+    if (server->mode == NULL && manager->mode == UDP_ONLY) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -U"");
+    }
+    if (server->mode == NULL && manager->mode == TCP_AND_UDP) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -u"");
+    }
+    if (server->fast_open[0] == 0 && manager->fast_open) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --fast-open"");
+    }
+    if (manager->ipv6first) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -6"");
+    }
+    if (manager->mtu) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --mtu %d"", manager->mtu);
+    }
+    if (server->plugin == NULL && manager->plugin) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin \""%s\"""", manager->plugin);
+    }
+    if (server->plugin_opts == NULL && manager->plugin_opts) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --plugin-opts \""%s\"""", manager->plugin_opts);
+    }
+    for (i = 0; i < manager->nameserver_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -d %s"", manager->nameservers[i]);
+    }
+    for (i = 0; i < manager->host_num; i++) {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" -s %s"", manager->hosts[i]);
+    }
+    {
+        int len = strlen(cmd);
+        snprintf(cmd + len, BUF_SIZE - len, "" --reuse-port"");
+    }
+
+    if (verbose) {
+        LOGI(""cmd: %s"", cmd);
+    }
+
+    return cmd;
+}
+","The `construct_command_line` function generates a command-line string for executing a server process based on various configuration parameters from a `manager_ctx` and a `server` structure. It initializes a command buffer, builds the base command using the executable and server details, and appends optional parameters such as access control lists, timeouts, user settings, and modes (UDP or TCP). Additionally, it includes options for fast open, MTU settings, plugins, and DNS servers. The function ensures that the command string is properly formatted and logged if verbosity is enabled, ultimately returning the constructed command.","The code constructs a command-line string for launching a server process based on configuration settings from a manager and server context. It initializes a buffer for the command and builds the base command using executable details and server parameters. The function appends various optional settings, such as access control, timeouts, user specifications, and operational modes. It also includes configurations for advanced features like fast opening, MTU, plugins, and DNS servers. Finally, the command is logged if verbosity is enabled, and the complete command string is returned for execution.","The vulnerability identified as CWE-78, or OS Command Injection, arises from the potential for unvalidated input to be included in the command string, allowing an attacker to execute arbitrary commands. In the vulnerable code, the server's port was directly used in the command construction without validation, which could lead to injection if the port value was manipulated. The fixed code mitigates this risk by converting the port to an integer using `atoi`, ensuring that only a numeric value is processed, thus reducing the likelihood of command injection through malicious input. This change enhances the overall security of the command construction process.","The vulnerability classified as CWE-78, or OS Command Injection, occurs when unvalidated input is incorporated into a command string, allowing an attacker to execute arbitrary commands. In the vulnerable code, a user-controlled input was directly included in the command construction, which could be exploited if the input was maliciously crafted. The fixed code addresses this issue by converting the input to a numeric format before its inclusion, ensuring that only valid, expected values are processed. This change significantly reduces the risk of command injection by preventing the execution of unintended commands through manipulated input.","The vulnerability was fixed by introducing a conversion of the server's port from a string to an integer using the `atoi` function before it is included in the command string. This change ensures that only numeric values are processed, mitigating the risk of command injection through malicious input. Additionally, the command construction was modified to use this integer value in the `snprintf` function, which formats the command string securely. By validating and sanitizing the input in this manner, the code reduces the potential for an attacker to manipulate the command execution through crafted input.","The vulnerability was addressed by implementing input validation to ensure that only numeric values are processed before being included in the command string. This was achieved by converting the user-controlled input into an integer format, which prevents the inclusion of potentially harmful characters or commands. By sanitizing the input in this way, the code effectively reduces the risk of command injection, as it eliminates the possibility of executing arbitrary commands through manipulated input. This fix enhances the overall security of the command construction process, ensuring that only valid and expected values are utilized.","CWE-78, CWE-77, CWE-89, CWE-20, CWE-74, CWE-116, CWE-94, CWE-95, CWE-99, CWE-184",Y,1.0,"5, 5","5,5","5,4","4, 5"
+8,8,183358,183358,,Remote,Not required,Partial,CVE-2019-16718,https://www.cvedetails.com/cve/CVE-2019-16718/,CWE-78,Medium,Partial,Partial,,2019-09-23,6.8,"In radare2 before 3.9.0, a command injection vulnerability exists in bin_symbols() in libr/core/cbin.c. By using a crafted executable file, it's possible to execute arbitrary shell commands with the permissions of the victim. This vulnerability is due to an insufficient fix for CVE-2019-14745 and improper handling of symbol names embedded in executables.",2019-09-23,Exec Code ,2,https://github.com/radareorg/radare2/commit/5411543a310a470b1257fb93273cdd6e8dfcb3af,5411543a310a470b1257fb93273cdd6e8dfcb3af,More fixes for the CVE-2019-14745,2,libr/core/cbin.c,"{""sha"": ""8373826a3d04c2e50b45aac8d5e285cf919182b9"", ""filename"": ""libr/core/cbin.c"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 4, ""changes"": 12, ""blob_url"": ""https://github.com/radareorg/radare2/blob/5411543a310a470b1257fb93273cdd6e8dfcb3af/libr/core/cbin.c"", ""raw_url"": ""https://github.com/radareorg/radare2/raw/5411543a310a470b1257fb93273cdd6e8dfcb3af/libr/core/cbin.c"", ""contents_url"": ""https://api.github.com/repos/radareorg/radare2/contents/libr/core/cbin.c?ref=5411543a310a470b1257fb93273cdd6e8dfcb3af"", ""patch"": ""@@ -67,6 +67,8 @@ static char *__filterQuotedShell(const char *arg) {\n \t\tswitch (*arg) {\n \t\tcase ' ':\n \t\tcase '=':\n+\t\tcase '\""':\n+\t\tcase '\\\\':\n \t\tcase '\\r':\n \t\tcase '\\n':\n \t\t\tbreak;\n@@ -88,15 +90,17 @@ static char *__filterShell(const char *arg) {\n \t}\n \tchar *b = a;\n \twhile (*arg) {\n-\t\tswitch (*arg) {\n+\t\tchar ch = *arg;\n+\t\tswitch (ch) {\n \t\tcase '@':\n \t\tcase '`':\n \t\tcase '|':\n \t\tcase ';':\n+\t\tcase '=':\n \t\tcase '\\n':\n \t\t\tbreak;\n \t\tdefault:\n-\t\t\t*b++ = *arg;\n+\t\t\t*b++ = ch;\n \t\t\tbreak;\n \t\t}\n \t\targ++;\n@@ -2225,10 +2229,10 @@ static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const ch\n \t\t\t\t\t\tchar *m = __filterShell (module);\n \t\t\t\t\t\t*p = 0;\n \t\t\t\t\t\tif (r->bin->prefix) {\n-\t\t\t\t\t\t\tr_cons_printf (\""k bin/pe/%s/%d=%s.%s\\n\"",\n+\t\t\t\t\t\t\tr_cons_printf (\""\\\""k bin/pe/%s/%d=%s.%s\\\""\\n\"",\n \t\t\t\t\t\t\t\tmodule, symbol->ordinal, r->bin->prefix, symname);\n \t\t\t\t\t\t} else {\n-\t\t\t\t\t\t\tr_cons_printf (\""k bin/pe/%s/%d=%s\\n\"",\n+\t\t\t\t\t\t\tr_cons_printf (\""\\\""k bin/pe/%s/%d=%s\\\""\\n\"",\n \t\t\t\t\t\t\t\tmodule, symbol->ordinal, symname);\n \t\t\t\t\t\t}\n \t\t\t\t\t\tfree (symname);""}","static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const char *name, bool exponly, const char *args) {
+	RBinInfo *info = r_bin_get_info (r->bin);
+	RList *entries = r_bin_get_entries (r->bin);
+	RBinSymbol *symbol;
+	RBinAddr *entry;
+	RListIter *iter;
+	bool firstexp = true;
+	bool printHere = false;
+	int i = 0, lastfs = 's';
+	bool bin_demangle = r_config_get_i (r->config, ""bin.demangle"");
+	if (!info) {
+		return 0;
+	}
+
+	if (args && *args == '.') {
+		printHere = true;
+	}
+
+	bool is_arm = info && info->arch && !strncmp (info->arch, ""arm"", 3);
+	const char *lang = bin_demangle ? r_config_get (r->config, ""bin.lang"") : NULL;
+
+	RList *symbols = r_bin_get_symbols (r->bin);
+	r_spaces_push (&r->anal->meta_spaces, ""bin"");
+
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""["");
+	} else if (IS_MODE_SET (mode)) {
+		r_flag_space_set (r->flags, R_FLAGS_FS_SYMBOLS);
+	} else if (!at && exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs exports\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Exports]\n"");
+		}
+	} else if (!at && !exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs symbols\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Symbols]\n"");
+		}
+	}
+	if (IS_MODE_NORMAL (mode)) {
+		r_cons_printf (""Num Paddr      Vaddr      Bind     Type Size Name\n"");
+	}
+
+
+	size_t count = 0;
+	r_list_foreach (symbols, iter, symbol) {
+		if (!symbol->name) {
+			continue;
+		}
+		char *r_symbol_name = r_str_escape_utf8 (symbol->name, false, true);
+		ut64 addr = compute_addr (r->bin, symbol->paddr, symbol->vaddr, va);
+		int len = symbol->size ? symbol->size : 32;
+		SymName sn = {0};
+
+		if (exponly && !isAnExport (symbol)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (name && strcmp (r_symbol_name, name)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (at && (!symbol->size || !is_in_range (at, addr, symbol->size))) {
+			free (r_symbol_name);
+			continue;
+		}
+		if ((printHere && !is_in_range (r->offset, symbol->paddr, len))
+				&& (printHere && !is_in_range (r->offset, addr, len))) {
+			free (r_symbol_name);
+			continue;
+		}
+		count ++;
+		snInit (r, &sn, symbol, lang);
+
+		if (IS_MODE_SET (mode) && (is_section_symbol (symbol) || is_file_symbol (symbol))) {
+			/*
+			 * Skip section symbols because they will have their own flag.
+			 * Skip also file symbols because not useful for now.
+			 */
+		} else if (IS_MODE_SET (mode) && is_special_symbol (symbol)) {
+			if (is_arm) {
+				handle_arm_special_symbol (r, symbol, va);
+			}
+		} else if (IS_MODE_SET (mode)) {
+			if (is_arm) {
+				handle_arm_symbol (r, symbol, info, va);
+			}
+			select_flag_space (r, symbol);
+			/* If that's a Classed symbol (method or so) */
+			if (sn.classname) {
+				RFlagItem *fi = r_flag_get (r->flags, sn.methflag);
+				if (r->bin->prefix) {
+					char *prname = r_str_newf (""%s.%s"", r->bin->prefix, sn.methflag);
+					r_name_filter (sn.methflag, -1);
+					free (sn.methflag);
+					sn.methflag = prname;
+				}
+				if (fi) {
+					r_flag_item_set_realname (fi, sn.methname);
+					if ((fi->offset - r->flags->base) == addr) {
+						r_flag_unset (r->flags, fi);
+					}
+				} else {
+					fi = r_flag_set (r->flags, sn.methflag, addr, symbol->size);
+					char *comment = fi->comment ? strdup (fi->comment) : NULL;
+					if (comment) {
+						r_flag_item_set_comment (fi, comment);
+						R_FREE (comment);
+					}
+				}
+			} else {
+				const char *n = sn.demname ? sn.demname : sn.name;
+				const char *fn = sn.demflag ? sn.demflag : sn.nameflag;
+				char *fnp = (r->bin->prefix) ?
+					r_str_newf (""%s.%s"", r->bin->prefix, fn):
+					strdup (fn);
+				RFlagItem *fi = r_flag_set (r->flags, fnp, addr, symbol->size);
+				if (fi) {
+					r_flag_item_set_realname (fi, n);
+					fi->demangled = (bool)(size_t)sn.demname;
+				} else {
+					if (fn) {
+						eprintf (""[Warning] Can't find flag (%s)\n"", fn);
+					}
+				}
+				free (fnp);
+			}
+			if (sn.demname) {
+				r_meta_add (r->anal, R_META_TYPE_COMMENT,
+					addr, symbol->size, sn.demname);
+			}
+			r_flag_space_pop (r->flags);
+		} else if (IS_MODE_JSON (mode)) {
+			char *str = r_str_escape_utf8_for_json (r_symbol_name, -1);
+			r_cons_printf (""%s{\""name\"":\""%s\"",""
+				""\""demname\"":\""%s\"",""
+				""\""flagname\"":\""%s\"",""
+				""\""ordinal\"":%d,""
+				""\""bind\"":\""%s\"",""
+				""\""size\"":%d,""
+				""\""type\"":\""%s\"",""
+				""\""vaddr\"":%""PFMT64d"",""
+				""\""paddr\"":%""PFMT64d""}"",
+				((exponly && firstexp) || printHere) ? """" : (iter->p ? "","" : """"),
+				str,
+				sn.demname? sn.demname: """",
+				sn.nameflag,
+				symbol->ordinal,
+				symbol->bind,
+				(int)symbol->size,
+				symbol->type,
+				(ut64)addr, (ut64)symbol->paddr);
+			free (str);
+		} else if (IS_MODE_SIMPLE (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""0x%08""PFMT64x"" %d %s\n"",
+				addr, (int)symbol->size, name);
+		} else if (IS_MODE_SIMPLEST (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""%s\n"", name);
+		} else if (IS_MODE_RAD (mode)) {
+			/* Skip special symbols because we do not flag them and
+			 * they shouldn't be printed in the rad format either */
+			if (is_special_symbol (symbol)) {
+				goto next;
+			}
+			RBinFile *binfile;
+			RBinPlugin *plugin;
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			if (!name) {
+				goto next;
+			}
+			if (!strncmp (name, ""imp."", 4)) {
+				if (lastfs != 'i') {
+					r_cons_printf (""fs imports\n"");
+				}
+				lastfs = 'i';
+			} else {
+				if (lastfs != 's') {
+					const char *fs = exponly? ""exports"": ""symbols"";
+					r_cons_printf (""fs %s\n"", fs);
+				}
+				lastfs = 's';
+			}
+			if (r->bin->prefix || *name) { // we don't want unnamed symbol flags
+				char *flagname = construct_symbol_flagname (""sym"", name, MAXFLAG_LEN_DEFAULT);
+				if (!flagname) {
+					goto next;
+				}
+				r_cons_printf (""\""f %s%s%s %u 0x%08"" PFMT64x ""\""\n"",
+					r->bin->prefix ? r->bin->prefix : """", r->bin->prefix ? ""."" : """",
+					flagname, symbol->size, addr);
+				free (flagname);
+			}
+			binfile = r_bin_cur (r->bin);
+			plugin = r_bin_file_cur_plugin (binfile);
+			if (plugin && plugin->name) {
+				if (r_str_startswith (plugin->name, ""pe"")) {
+					char *module = strdup (r_symbol_name);
+					char *p = strstr (module, "".dll_"");
+					if (p && strstr (module, ""imp."")) {
+						char *symname = __filterShell (p + 5);
+ 						char *m = __filterShell (module);
+ 						*p = 0;
+ 						if (r->bin->prefix) {
+							r_cons_printf (""\""k bin/pe/%s/%d=%s.%s\""\n"",
+ 								module, symbol->ordinal, r->bin->prefix, symname);
+ 						} else {
+							r_cons_printf (""\""k bin/pe/%s/%d=%s\""\n"",
+ 								module, symbol->ordinal, symname);
+ 						}
+ 						free (symname);
+						free (m);
+					}
+					free (module);
+				}
+			}
+		} else {
+			const char *bind = symbol->bind? symbol->bind: ""NONE"";
+			const char *type = symbol->type? symbol->type: ""NONE"";
+			const char *name = r_str_get (sn.demname? sn.demname: r_symbol_name);
+			r_cons_printf (""%03u"", symbol->ordinal);
+			if (symbol->paddr == UT64_MAX) {
+				r_cons_printf ("" ----------"");
+			} else {
+				r_cons_printf ("" 0x%08""PFMT64x, symbol->paddr);
+			}
+			r_cons_printf ("" 0x%08""PFMT64x"" %6s %6s %4d%s%s\n"",
+			               addr, bind, type, symbol->size, *name? "" "": """", name);
+		}
+next:
+		snFini (&sn);
+		i++;
+		free (r_symbol_name);
+		if (exponly && firstexp) {
+			firstexp = false;
+		}
+		if (printHere) {
+			break;
+		}
+	}
+	if (count == 0 && IS_MODE_JSON (mode)) {
+		r_cons_printf (""{}"");
+	}
+
+
+	if (is_arm) {
+		r_list_foreach (entries, iter, entry) {
+			if (IS_MODE_SET (mode)) {
+				handle_arm_entry (r, entry, info, va);
+			}
+		}
+	}
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""]"");
+	}
+
+	r_spaces_pop (&r->anal->meta_spaces);
+	return true;
+}
+","static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const char *name, bool exponly, const char *args) {
+	RBinInfo *info = r_bin_get_info (r->bin);
+	RList *entries = r_bin_get_entries (r->bin);
+	RBinSymbol *symbol;
+	RBinAddr *entry;
+	RListIter *iter;
+	bool firstexp = true;
+	bool printHere = false;
+	int i = 0, lastfs = 's';
+	bool bin_demangle = r_config_get_i (r->config, ""bin.demangle"");
+	if (!info) {
+		return 0;
+	}
+
+	if (args && *args == '.') {
+		printHere = true;
+	}
+
+	bool is_arm = info && info->arch && !strncmp (info->arch, ""arm"", 3);
+	const char *lang = bin_demangle ? r_config_get (r->config, ""bin.lang"") : NULL;
+
+	RList *symbols = r_bin_get_symbols (r->bin);
+	r_spaces_push (&r->anal->meta_spaces, ""bin"");
+
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""["");
+	} else if (IS_MODE_SET (mode)) {
+		r_flag_space_set (r->flags, R_FLAGS_FS_SYMBOLS);
+	} else if (!at && exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs exports\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Exports]\n"");
+		}
+	} else if (!at && !exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs symbols\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Symbols]\n"");
+		}
+	}
+	if (IS_MODE_NORMAL (mode)) {
+		r_cons_printf (""Num Paddr      Vaddr      Bind     Type Size Name\n"");
+	}
+
+
+	size_t count = 0;
+	r_list_foreach (symbols, iter, symbol) {
+		if (!symbol->name) {
+			continue;
+		}
+		char *r_symbol_name = r_str_escape_utf8 (symbol->name, false, true);
+		ut64 addr = compute_addr (r->bin, symbol->paddr, symbol->vaddr, va);
+		int len = symbol->size ? symbol->size : 32;
+		SymName sn = {0};
+
+		if (exponly && !isAnExport (symbol)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (name && strcmp (r_symbol_name, name)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (at && (!symbol->size || !is_in_range (at, addr, symbol->size))) {
+			free (r_symbol_name);
+			continue;
+		}
+		if ((printHere && !is_in_range (r->offset, symbol->paddr, len))
+				&& (printHere && !is_in_range (r->offset, addr, len))) {
+			free (r_symbol_name);
+			continue;
+		}
+		count ++;
+		snInit (r, &sn, symbol, lang);
+
+		if (IS_MODE_SET (mode) && (is_section_symbol (symbol) || is_file_symbol (symbol))) {
+			/*
+			 * Skip section symbols because they will have their own flag.
+			 * Skip also file symbols because not useful for now.
+			 */
+		} else if (IS_MODE_SET (mode) && is_special_symbol (symbol)) {
+			if (is_arm) {
+				handle_arm_special_symbol (r, symbol, va);
+			}
+		} else if (IS_MODE_SET (mode)) {
+			if (is_arm) {
+				handle_arm_symbol (r, symbol, info, va);
+			}
+			select_flag_space (r, symbol);
+			/* If that's a Classed symbol (method or so) */
+			if (sn.classname) {
+				RFlagItem *fi = r_flag_get (r->flags, sn.methflag);
+				if (r->bin->prefix) {
+					char *prname = r_str_newf (""%s.%s"", r->bin->prefix, sn.methflag);
+					r_name_filter (sn.methflag, -1);
+					free (sn.methflag);
+					sn.methflag = prname;
+				}
+				if (fi) {
+					r_flag_item_set_realname (fi, sn.methname);
+					if ((fi->offset - r->flags->base) == addr) {
+						r_flag_unset (r->flags, fi);
+					}
+				} else {
+					fi = r_flag_set (r->flags, sn.methflag, addr, symbol->size);
+					char *comment = fi->comment ? strdup (fi->comment) : NULL;
+					if (comment) {
+						r_flag_item_set_comment (fi, comment);
+						R_FREE (comment);
+					}
+				}
+			} else {
+				const char *n = sn.demname ? sn.demname : sn.name;
+				const char *fn = sn.demflag ? sn.demflag : sn.nameflag;
+				char *fnp = (r->bin->prefix) ?
+					r_str_newf (""%s.%s"", r->bin->prefix, fn):
+					strdup (fn);
+				RFlagItem *fi = r_flag_set (r->flags, fnp, addr, symbol->size);
+				if (fi) {
+					r_flag_item_set_realname (fi, n);
+					fi->demangled = (bool)(size_t)sn.demname;
+				} else {
+					if (fn) {
+						eprintf (""[Warning] Can't find flag (%s)\n"", fn);
+					}
+				}
+				free (fnp);
+			}
+			if (sn.demname) {
+				r_meta_add (r->anal, R_META_TYPE_COMMENT,
+					addr, symbol->size, sn.demname);
+			}
+			r_flag_space_pop (r->flags);
+		} else if (IS_MODE_JSON (mode)) {
+			char *str = r_str_escape_utf8_for_json (r_symbol_name, -1);
+			r_cons_printf (""%s{\""name\"":\""%s\"",""
+				""\""demname\"":\""%s\"",""
+				""\""flagname\"":\""%s\"",""
+				""\""ordinal\"":%d,""
+				""\""bind\"":\""%s\"",""
+				""\""size\"":%d,""
+				""\""type\"":\""%s\"",""
+				""\""vaddr\"":%""PFMT64d"",""
+				""\""paddr\"":%""PFMT64d""}"",
+				((exponly && firstexp) || printHere) ? """" : (iter->p ? "","" : """"),
+				str,
+				sn.demname? sn.demname: """",
+				sn.nameflag,
+				symbol->ordinal,
+				symbol->bind,
+				(int)symbol->size,
+				symbol->type,
+				(ut64)addr, (ut64)symbol->paddr);
+			free (str);
+		} else if (IS_MODE_SIMPLE (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""0x%08""PFMT64x"" %d %s\n"",
+				addr, (int)symbol->size, name);
+		} else if (IS_MODE_SIMPLEST (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""%s\n"", name);
+		} else if (IS_MODE_RAD (mode)) {
+			/* Skip special symbols because we do not flag them and
+			 * they shouldn't be printed in the rad format either */
+			if (is_special_symbol (symbol)) {
+				goto next;
+			}
+			RBinFile *binfile;
+			RBinPlugin *plugin;
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			if (!name) {
+				goto next;
+			}
+			if (!strncmp (name, ""imp."", 4)) {
+				if (lastfs != 'i') {
+					r_cons_printf (""fs imports\n"");
+				}
+				lastfs = 'i';
+			} else {
+				if (lastfs != 's') {
+					const char *fs = exponly? ""exports"": ""symbols"";
+					r_cons_printf (""fs %s\n"", fs);
+				}
+				lastfs = 's';
+			}
+			if (r->bin->prefix || *name) { // we don't want unnamed symbol flags
+				char *flagname = construct_symbol_flagname (""sym"", name, MAXFLAG_LEN_DEFAULT);
+				if (!flagname) {
+					goto next;
+				}
+				r_cons_printf (""\""f %s%s%s %u 0x%08"" PFMT64x ""\""\n"",
+					r->bin->prefix ? r->bin->prefix : """", r->bin->prefix ? ""."" : """",
+					flagname, symbol->size, addr);
+				free (flagname);
+			}
+			binfile = r_bin_cur (r->bin);
+			plugin = r_bin_file_cur_plugin (binfile);
+			if (plugin && plugin->name) {
+				if (r_str_startswith (plugin->name, ""pe"")) {
+					char *module = strdup (r_symbol_name);
+					char *p = strstr (module, "".dll_"");
+					if (p && strstr (module, ""imp."")) {
+						char *symname = __filterShell (p + 5);
+ 						char *m = __filterShell (module);
+ 						*p = 0;
+ 						if (r->bin->prefix) {
+							r_cons_printf (""k bin/pe/%s/%d=%s.%s\n"",
+ 								module, symbol->ordinal, r->bin->prefix, symname);
+ 						} else {
+							r_cons_printf (""k bin/pe/%s/%d=%s\n"",
+ 								module, symbol->ordinal, symname);
+ 						}
+ 						free (symname);
+						free (m);
+					}
+					free (module);
+				}
+			}
+		} else {
+			const char *bind = symbol->bind? symbol->bind: ""NONE"";
+			const char *type = symbol->type? symbol->type: ""NONE"";
+			const char *name = r_str_get (sn.demname? sn.demname: r_symbol_name);
+			r_cons_printf (""%03u"", symbol->ordinal);
+			if (symbol->paddr == UT64_MAX) {
+				r_cons_printf ("" ----------"");
+			} else {
+				r_cons_printf ("" 0x%08""PFMT64x, symbol->paddr);
+			}
+			r_cons_printf ("" 0x%08""PFMT64x"" %6s %6s %4d%s%s\n"",
+			               addr, bind, type, symbol->size, *name? "" "": """", name);
+		}
+next:
+		snFini (&sn);
+		i++;
+		free (r_symbol_name);
+		if (exponly && firstexp) {
+			firstexp = false;
+		}
+		if (printHere) {
+			break;
+		}
+	}
+	if (count == 0 && IS_MODE_JSON (mode)) {
+		r_cons_printf (""{}"");
+	}
+
+
+	if (is_arm) {
+		r_list_foreach (entries, iter, entry) {
+			if (IS_MODE_SET (mode)) {
+				handle_arm_entry (r, entry, info, va);
+			}
+		}
+	}
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""]"");
+	}
+
+	r_spaces_pop (&r->anal->meta_spaces);
+	return true;
+}
+",C,"							r_cons_printf (""\""k bin/pe/%s/%d=%s.%s\""\n"",
+							r_cons_printf (""\""k bin/pe/%s/%d=%s\""\n"",
+","							r_cons_printf (""k bin/pe/%s/%d=%s.%s\n"",
+							r_cons_printf (""k bin/pe/%s/%d=%s\n"",
+",,"@@ -67,6 +67,8 @@ static char *__filterQuotedShell(const char *arg) {
+ 		switch (*arg) {
+ 		case ' ':
+ 		case '=':
++		case '""':
++		case '\\':
+ 		case '\r':
+ 		case '\n':
+ 			break;
+@@ -88,15 +90,17 @@ static char *__filterShell(const char *arg) {
+ 	}
+ 	char *b = a;
+ 	while (*arg) {
+-		switch (*arg) {
++		char ch = *arg;
++		switch (ch) {
+ 		case '@':
+ 		case '`':
+ 		case '|':
+ 		case ';':
++		case '=':
+ 		case '\n':
+ 			break;
+ 		default:
+-			*b++ = *arg;
++			*b++ = ch;
+ 			break;
+ 		}
+ 		arg++;
+@@ -2225,10 +2229,10 @@ static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const ch
+ 						char *m = __filterShell (module);
+ 						*p = 0;
+ 						if (r->bin->prefix) {
+-							r_cons_printf (""k bin/pe/%s/%d=%s.%s\n"",
++							r_cons_printf (""\""k bin/pe/%s/%d=%s.%s\""\n"",
+ 								module, symbol->ordinal, r->bin->prefix, symname);
+ 						} else {
+-							r_cons_printf (""k bin/pe/%s/%d=%s\n"",
++							r_cons_printf (""\""k bin/pe/%s/%d=%s\""\n"",
+ 								module, symbol->ordinal, symname);
+ 						}
+ 						free (symname);",radare2,5411543a310a470b1257fb93273cdd6e8dfcb3af,7b8df7f5a20afcda6ed5c0ee917aaae277437871,1,"static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const char *name, bool exponly, const char *args) {
+	RBinInfo *info = r_bin_get_info (r->bin);
+	RList *entries = r_bin_get_entries (r->bin);
+	RBinSymbol *symbol;
+	RBinAddr *entry;
+	RListIter *iter;
+	bool firstexp = true;
+	bool printHere = false;
+	int i = 0, lastfs = 's';
+	bool bin_demangle = r_config_get_i (r->config, ""bin.demangle"");
+	if (!info) {
+		return 0;
+	}
+
+	if (args && *args == '.') {
+		printHere = true;
+	}
+
+	bool is_arm = info && info->arch && !strncmp (info->arch, ""arm"", 3);
+	const char *lang = bin_demangle ? r_config_get (r->config, ""bin.lang"") : NULL;
+
+	RList *symbols = r_bin_get_symbols (r->bin);
+	r_spaces_push (&r->anal->meta_spaces, ""bin"");
+
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""["");
+	} else if (IS_MODE_SET (mode)) {
+		r_flag_space_set (r->flags, R_FLAGS_FS_SYMBOLS);
+	} else if (!at && exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs exports\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Exports]\n"");
+		}
+	} else if (!at && !exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs symbols\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Symbols]\n"");
+		}
+	}
+	if (IS_MODE_NORMAL (mode)) {
+		r_cons_printf (""Num Paddr      Vaddr      Bind     Type Size Name\n"");
+	}
+
+
+	size_t count = 0;
+	r_list_foreach (symbols, iter, symbol) {
+		if (!symbol->name) {
+			continue;
+		}
+		char *r_symbol_name = r_str_escape_utf8 (symbol->name, false, true);
+		ut64 addr = compute_addr (r->bin, symbol->paddr, symbol->vaddr, va);
+		int len = symbol->size ? symbol->size : 32;
+		SymName sn = {0};
+
+		if (exponly && !isAnExport (symbol)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (name && strcmp (r_symbol_name, name)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (at && (!symbol->size || !is_in_range (at, addr, symbol->size))) {
+			free (r_symbol_name);
+			continue;
+		}
+		if ((printHere && !is_in_range (r->offset, symbol->paddr, len))
+				&& (printHere && !is_in_range (r->offset, addr, len))) {
+			free (r_symbol_name);
+			continue;
+		}
+		count ++;
+		snInit (r, &sn, symbol, lang);
+
+		if (IS_MODE_SET (mode) && (is_section_symbol (symbol) || is_file_symbol (symbol))) {
+			/*
+			 * Skip section symbols because they will have their own flag.
+			 * Skip also file symbols because not useful for now.
+			 */
+		} else if (IS_MODE_SET (mode) && is_special_symbol (symbol)) {
+			if (is_arm) {
+				handle_arm_special_symbol (r, symbol, va);
+			}
+		} else if (IS_MODE_SET (mode)) {
+			// TODO: provide separate API in RBinPlugin to let plugins handle anal hints/metadata
+			if (is_arm) {
+				handle_arm_symbol (r, symbol, info, va);
+			}
+			select_flag_space (r, symbol);
+			/* If that's a Classed symbol (method or so) */
+			if (sn.classname) {
+				RFlagItem *fi = r_flag_get (r->flags, sn.methflag);
+				if (r->bin->prefix) {
+					char *prname = r_str_newf (""%s.%s"", r->bin->prefix, sn.methflag);
+					r_name_filter (sn.methflag, -1);
+					free (sn.methflag);
+					sn.methflag = prname;
+				}
+				if (fi) {
+					r_flag_item_set_realname (fi, sn.methname);
+					if ((fi->offset - r->flags->base) == addr) {
+				//		char *comment = fi->comment ? strdup (fi->comment) : NULL;
+						r_flag_unset (r->flags, fi);
+					}
+				} else {
+					fi = r_flag_set (r->flags, sn.methflag, addr, symbol->size);
+					char *comment = fi->comment ? strdup (fi->comment) : NULL;
+					if (comment) {
+						r_flag_item_set_comment (fi, comment);
+						R_FREE (comment);
+					}
+				}
+			} else {
+				const char *n = sn.demname ? sn.demname : sn.name;
+				const char *fn = sn.demflag ? sn.demflag : sn.nameflag;
+				char *fnp = (r->bin->prefix) ?
+					r_str_newf (""%s.%s"", r->bin->prefix, fn):
+					strdup (fn);
+				RFlagItem *fi = r_flag_set (r->flags, fnp, addr, symbol->size);
+				if (fi) {
+					r_flag_item_set_realname (fi, n);
+					fi->demangled = (bool)(size_t)sn.demname;
+				} else {
+					if (fn) {
+						eprintf (""[Warning] Can't find flag (%s)\n"", fn);
+					}
+				}
+				free (fnp);
+			}
+			if (sn.demname) {
+				r_meta_add (r->anal, R_META_TYPE_COMMENT,
+					addr, symbol->size, sn.demname);
+			}
+			r_flag_space_pop (r->flags);
+		} else if (IS_MODE_JSON (mode)) {
+			char *str = r_str_escape_utf8_for_json (r_symbol_name, -1);
+			// str = r_str_replace (str, ""\"""", ""\\\"""", 1);
+			r_cons_printf (""%s{\""name\"":\""%s\"",""
+				""\""demname\"":\""%s\"",""
+				""\""flagname\"":\""%s\"",""
+				""\""ordinal\"":%d,""
+				""\""bind\"":\""%s\"",""
+				""\""size\"":%d,""
+				""\""type\"":\""%s\"",""
+				""\""vaddr\"":%""PFMT64d"",""
+				""\""paddr\"":%""PFMT64d""}"",
+				((exponly && firstexp) || printHere) ? """" : (iter->p ? "","" : """"),
+				str,
+				sn.demname? sn.demname: """",
+				sn.nameflag,
+				symbol->ordinal,
+				symbol->bind,
+				(int)symbol->size,
+				symbol->type,
+				(ut64)addr, (ut64)symbol->paddr);
+			free (str);
+		} else if (IS_MODE_SIMPLE (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""0x%08""PFMT64x"" %d %s\n"",
+				addr, (int)symbol->size, name);
+		} else if (IS_MODE_SIMPLEST (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""%s\n"", name);
+		} else if (IS_MODE_RAD (mode)) {
+			/* Skip special symbols because we do not flag them and
+			 * they shouldn't be printed in the rad format either */
+			if (is_special_symbol (symbol)) {
+				goto next;
+			}
+			RBinFile *binfile;
+			RBinPlugin *plugin;
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			if (!name) {
+				goto next;
+			}
+			if (!strncmp (name, ""imp."", 4)) {
+				if (lastfs != 'i') {
+					r_cons_printf (""fs imports\n"");
+				}
+				lastfs = 'i';
+			} else {
+				if (lastfs != 's') {
+					const char *fs = exponly? ""exports"": ""symbols"";
+					r_cons_printf (""fs %s\n"", fs);
+				}
+				lastfs = 's';
+			}
+			if (r->bin->prefix || *name) { // we don't want unnamed symbol flags
+				char *flagname = construct_symbol_flagname (""sym"", name, MAXFLAG_LEN_DEFAULT);
+				if (!flagname) {
+					goto next;
+				}
+				r_cons_printf (""\""f %s%s%s %u 0x%08"" PFMT64x ""\""\n"",
+					r->bin->prefix ? r->bin->prefix : """", r->bin->prefix ? ""."" : """",
+					flagname, symbol->size, addr);
+				free (flagname);
+			}
+			binfile = r_bin_cur (r->bin);
+			plugin = r_bin_file_cur_plugin (binfile);
+			if (plugin && plugin->name) {
+				if (r_str_startswith (plugin->name, ""pe"")) {
+					char *module = strdup (r_symbol_name);
+					char *p = strstr (module, "".dll_"");
+					if (p && strstr (module, ""imp."")) {
+						char *symname = __filterShell (p + 5);
+ 						char *m = __filterShell (module);
+ 						*p = 0;
+ 						if (r->bin->prefix) {
+//flaw_line_below:
+							r_cons_printf (""k bin/pe/%s/%d=%s.%s\n"",
+//fix_flaw_line_below:
+//							r_cons_printf (""\""k bin/pe/%s/%d=%s.%s\""\n"",
+ 								module, symbol->ordinal, r->bin->prefix, symname);
+ 						} else {
+//flaw_line_below:
+							r_cons_printf (""k bin/pe/%s/%d=%s\n"",
+//fix_flaw_line_below:
+//							r_cons_printf (""\""k bin/pe/%s/%d=%s\""\n"",
+ 								module, symbol->ordinal, symname);
+ 						}
+ 						free (symname);
+						free (m);
+					}
+					free (module);
+				}
+			}
+		} else {
+			const char *bind = symbol->bind? symbol->bind: ""NONE"";
+			const char *type = symbol->type? symbol->type: ""NONE"";
+			const char *name = r_str_get (sn.demname? sn.demname: r_symbol_name);
+			// const char *fwd = r_str_get (symbol->forwarder);
+			r_cons_printf (""%03u"", symbol->ordinal);
+			if (symbol->paddr == UT64_MAX) {
+				r_cons_printf ("" ----------"");
+			} else {
+				r_cons_printf ("" 0x%08""PFMT64x, symbol->paddr);
+			}
+			r_cons_printf ("" 0x%08""PFMT64x"" %6s %6s %4d%s%s\n"",
+			               addr, bind, type, symbol->size, *name? "" "": """", name);
+		}
+next:
+		snFini (&sn);
+		i++;
+		free (r_symbol_name);
+		if (exponly && firstexp) {
+			firstexp = false;
+		}
+		if (printHere) {
+			break;
+		}
+	}
+	if (count == 0 && IS_MODE_JSON (mode)) {
+		r_cons_printf (""{}"");
+	}
+
+
+	//handle thumb and arm for entry point since they are not present in symbols
+	if (is_arm) {
+		r_list_foreach (entries, iter, entry) {
+			if (IS_MODE_SET (mode)) {
+				handle_arm_entry (r, entry, info, va);
+			}
+		}
+	}
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""]"");
+	}
+
+	r_spaces_pop (&r->anal->meta_spaces);
+	return true;
+}
+",183358,"static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const char *name, bool exponly, const char *args) {
+	RBinInfo *info = r_bin_get_info (r->bin);
+	RList *entries = r_bin_get_entries (r->bin);
+	RBinSymbol *symbol;
+	RBinAddr *entry;
+	RListIter *iter;
+	bool firstexp = true;
+	bool printHere = false;
+	int i = 0, lastfs = 's';
+	bool bin_demangle = r_config_get_i (r->config, ""bin.demangle"");
+	if (!info) {
+		return 0;
+	}
+
+	if (args && *args == '.') {
+		printHere = true;
+	}
+
+	bool is_arm = info && info->arch && !strncmp (info->arch, ""arm"", 3);
+	const char *lang = bin_demangle ? r_config_get (r->config, ""bin.lang"") : NULL;
+
+	RList *symbols = r_bin_get_symbols (r->bin);
+	r_spaces_push (&r->anal->meta_spaces, ""bin"");
+
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""["");
+	} else if (IS_MODE_SET (mode)) {
+		r_flag_space_set (r->flags, R_FLAGS_FS_SYMBOLS);
+	} else if (!at && exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs exports\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Exports]\n"");
+		}
+	} else if (!at && !exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs symbols\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Symbols]\n"");
+		}
+	}
+	if (IS_MODE_NORMAL (mode)) {
+		r_cons_printf (""Num Paddr      Vaddr      Bind     Type Size Name\n"");
+	}
+
+
+	size_t count = 0;
+	r_list_foreach (symbols, iter, symbol) {
+		if (!symbol->name) {
+			continue;
+		}
+		char *r_symbol_name = r_str_escape_utf8 (symbol->name, false, true);
+		ut64 addr = compute_addr (r->bin, symbol->paddr, symbol->vaddr, va);
+		int len = symbol->size ? symbol->size : 32;
+		SymName sn = {0};
+
+		if (exponly && !isAnExport (symbol)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (name && strcmp (r_symbol_name, name)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (at && (!symbol->size || !is_in_range (at, addr, symbol->size))) {
+			free (r_symbol_name);
+			continue;
+		}
+		if ((printHere && !is_in_range (r->offset, symbol->paddr, len))
+				&& (printHere && !is_in_range (r->offset, addr, len))) {
+			free (r_symbol_name);
+			continue;
+		}
+		count ++;
+		snInit (r, &sn, symbol, lang);
+
+		if (IS_MODE_SET (mode) && (is_section_symbol (symbol) || is_file_symbol (symbol))) {
+			/*
+			 * Skip section symbols because they will have their own flag.
+			 * Skip also file symbols because not useful for now.
+			 */
+		} else if (IS_MODE_SET (mode) && is_special_symbol (symbol)) {
+			if (is_arm) {
+				handle_arm_special_symbol (r, symbol, va);
+			}
+		} else if (IS_MODE_SET (mode)) {
+			if (is_arm) {
+				handle_arm_symbol (r, symbol, info, va);
+			}
+			select_flag_space (r, symbol);
+			/* If that's a Classed symbol (method or so) */
+			if (sn.classname) {
+				RFlagItem *fi = r_flag_get (r->flags, sn.methflag);
+				if (r->bin->prefix) {
+					char *prname = r_str_newf (""%s.%s"", r->bin->prefix, sn.methflag);
+					r_name_filter (sn.methflag, -1);
+					free (sn.methflag);
+					sn.methflag = prname;
+				}
+				if (fi) {
+					r_flag_item_set_realname (fi, sn.methname);
+					if ((fi->offset - r->flags->base) == addr) {
+						r_flag_unset (r->flags, fi);
+					}
+				} else {
+					fi = r_flag_set (r->flags, sn.methflag, addr, symbol->size);
+					char *comment = fi->comment ? strdup (fi->comment) : NULL;
+					if (comment) {
+						r_flag_item_set_comment (fi, comment);
+						R_FREE (comment);
+					}
+				}
+			} else {
+				const char *n = sn.demname ? sn.demname : sn.name;
+				const char *fn = sn.demflag ? sn.demflag : sn.nameflag;
+				char *fnp = (r->bin->prefix) ?
+					r_str_newf (""%s.%s"", r->bin->prefix, fn):
+					strdup (fn);
+				RFlagItem *fi = r_flag_set (r->flags, fnp, addr, symbol->size);
+				if (fi) {
+					r_flag_item_set_realname (fi, n);
+					fi->demangled = (bool)(size_t)sn.demname;
+				} else {
+					if (fn) {
+						eprintf (""[Warning] Can't find flag (%s)\n"", fn);
+					}
+				}
+				free (fnp);
+			}
+			if (sn.demname) {
+				r_meta_add (r->anal, R_META_TYPE_COMMENT,
+					addr, symbol->size, sn.demname);
+			}
+			r_flag_space_pop (r->flags);
+		} else if (IS_MODE_JSON (mode)) {
+			char *str = r_str_escape_utf8_for_json (r_symbol_name, -1);
+			r_cons_printf (""%s{\""name\"":\""%s\"",""
+				""\""demname\"":\""%s\"",""
+				""\""flagname\"":\""%s\"",""
+				""\""ordinal\"":%d,""
+				""\""bind\"":\""%s\"",""
+				""\""size\"":%d,""
+				""\""type\"":\""%s\"",""
+				""\""vaddr\"":%""PFMT64d"",""
+				""\""paddr\"":%""PFMT64d""}"",
+				((exponly && firstexp) || printHere) ? """" : (iter->p ? "","" : """"),
+				str,
+				sn.demname? sn.demname: """",
+				sn.nameflag,
+				symbol->ordinal,
+				symbol->bind,
+				(int)symbol->size,
+				symbol->type,
+				(ut64)addr, (ut64)symbol->paddr);
+			free (str);
+		} else if (IS_MODE_SIMPLE (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""0x%08""PFMT64x"" %d %s\n"",
+				addr, (int)symbol->size, name);
+		} else if (IS_MODE_SIMPLEST (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""%s\n"", name);
+		} else if (IS_MODE_RAD (mode)) {
+			/* Skip special symbols because we do not flag them and
+			 * they shouldn't be printed in the rad format either */
+			if (is_special_symbol (symbol)) {
+				goto next;
+			}
+			RBinFile *binfile;
+			RBinPlugin *plugin;
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			if (!name) {
+				goto next;
+			}
+			if (!strncmp (name, ""imp."", 4)) {
+				if (lastfs != 'i') {
+					r_cons_printf (""fs imports\n"");
+				}
+				lastfs = 'i';
+			} else {
+				if (lastfs != 's') {
+					const char *fs = exponly? ""exports"": ""symbols"";
+					r_cons_printf (""fs %s\n"", fs);
+				}
+				lastfs = 's';
+			}
+			if (r->bin->prefix || *name) { // we don't want unnamed symbol flags
+				char *flagname = construct_symbol_flagname (""sym"", name, MAXFLAG_LEN_DEFAULT);
+				if (!flagname) {
+					goto next;
+				}
+				r_cons_printf (""\""f %s%s%s %u 0x%08"" PFMT64x ""\""\n"",
+					r->bin->prefix ? r->bin->prefix : """", r->bin->prefix ? ""."" : """",
+					flagname, symbol->size, addr);
+				free (flagname);
+			}
+			binfile = r_bin_cur (r->bin);
+			plugin = r_bin_file_cur_plugin (binfile);
+			if (plugin && plugin->name) {
+				if (r_str_startswith (plugin->name, ""pe"")) {
+					char *module = strdup (r_symbol_name);
+					char *p = strstr (module, "".dll_"");
+					if (p && strstr (module, ""imp."")) {
+						char *symname = __filterShell (p + 5);
+ 						char *m = __filterShell (module);
+ 						*p = 0;
+ 						if (r->bin->prefix) {
+							r_cons_printf (""k bin/pe/%s/%d=%s.%s\n"",
+ 								module, symbol->ordinal, r->bin->prefix, symname);
+ 						} else {
+							r_cons_printf (""k bin/pe/%s/%d=%s\n"",
+ 								module, symbol->ordinal, symname);
+ 						}
+ 						free (symname);
+						free (m);
+					}
+					free (module);
+				}
+			}
+		} else {
+			const char *bind = symbol->bind? symbol->bind: ""NONE"";
+			const char *type = symbol->type? symbol->type: ""NONE"";
+			const char *name = r_str_get (sn.demname? sn.demname: r_symbol_name);
+			r_cons_printf (""%03u"", symbol->ordinal);
+			if (symbol->paddr == UT64_MAX) {
+				r_cons_printf ("" ----------"");
+			} else {
+				r_cons_printf ("" 0x%08""PFMT64x, symbol->paddr);
+			}
+			r_cons_printf ("" 0x%08""PFMT64x"" %6s %6s %4d%s%s\n"",
+			               addr, bind, type, symbol->size, *name? "" "": """", name);
+		}
+next:
+		snFini (&sn);
+		i++;
+		free (r_symbol_name);
+		if (exponly && firstexp) {
+			firstexp = false;
+		}
+		if (printHere) {
+			break;
+		}
+	}
+	if (count == 0 && IS_MODE_JSON (mode)) {
+		r_cons_printf (""{}"");
+	}
+
+
+	if (is_arm) {
+		r_list_foreach (entries, iter, entry) {
+			if (IS_MODE_SET (mode)) {
+				handle_arm_entry (r, entry, info, va);
+			}
+		}
+	}
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""]"");
+	}
+
+	r_spaces_pop (&r->anal->meta_spaces);
+	return true;
+}
+","static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const char *name, bool exponly, const char *args) {
+	RBinInfo *info = r_bin_get_info (r->bin);
+	RList *entries = r_bin_get_entries (r->bin);
+	RBinSymbol *symbol;
+	RBinAddr *entry;
+	RListIter *iter;
+	bool firstexp = true;
+	bool printHere = false;
+	int i = 0, lastfs = 's';
+	bool bin_demangle = r_config_get_i (r->config, ""bin.demangle"");
+	if (!info) {
+		return 0;
+	}
+
+	if (args && *args == '.') {
+		printHere = true;
+	}
+
+	bool is_arm = info && info->arch && !strncmp (info->arch, ""arm"", 3);
+	const char *lang = bin_demangle ? r_config_get (r->config, ""bin.lang"") : NULL;
+
+	RList *symbols = r_bin_get_symbols (r->bin);
+	r_spaces_push (&r->anal->meta_spaces, ""bin"");
+
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""["");
+	} else if (IS_MODE_SET (mode)) {
+		r_flag_space_set (r->flags, R_FLAGS_FS_SYMBOLS);
+	} else if (!at && exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs exports\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Exports]\n"");
+		}
+	} else if (!at && !exponly) {
+		if (IS_MODE_RAD (mode)) {
+			r_cons_printf (""fs symbols\n"");
+		} else if (IS_MODE_NORMAL (mode)) {
+			r_cons_printf (printHere ? """" : ""[Symbols]\n"");
+		}
+	}
+	if (IS_MODE_NORMAL (mode)) {
+		r_cons_printf (""Num Paddr      Vaddr      Bind     Type Size Name\n"");
+	}
+
+
+	size_t count = 0;
+	r_list_foreach (symbols, iter, symbol) {
+		if (!symbol->name) {
+			continue;
+		}
+		char *r_symbol_name = r_str_escape_utf8 (symbol->name, false, true);
+		ut64 addr = compute_addr (r->bin, symbol->paddr, symbol->vaddr, va);
+		int len = symbol->size ? symbol->size : 32;
+		SymName sn = {0};
+
+		if (exponly && !isAnExport (symbol)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (name && strcmp (r_symbol_name, name)) {
+			free (r_symbol_name);
+			continue;
+		}
+		if (at && (!symbol->size || !is_in_range (at, addr, symbol->size))) {
+			free (r_symbol_name);
+			continue;
+		}
+		if ((printHere && !is_in_range (r->offset, symbol->paddr, len))
+				&& (printHere && !is_in_range (r->offset, addr, len))) {
+			free (r_symbol_name);
+			continue;
+		}
+		count ++;
+		snInit (r, &sn, symbol, lang);
+
+		if (IS_MODE_SET (mode) && (is_section_symbol (symbol) || is_file_symbol (symbol))) {
+			/*
+			 * Skip section symbols because they will have their own flag.
+			 * Skip also file symbols because not useful for now.
+			 */
+		} else if (IS_MODE_SET (mode) && is_special_symbol (symbol)) {
+			if (is_arm) {
+				handle_arm_special_symbol (r, symbol, va);
+			}
+		} else if (IS_MODE_SET (mode)) {
+			if (is_arm) {
+				handle_arm_symbol (r, symbol, info, va);
+			}
+			select_flag_space (r, symbol);
+			/* If that's a Classed symbol (method or so) */
+			if (sn.classname) {
+				RFlagItem *fi = r_flag_get (r->flags, sn.methflag);
+				if (r->bin->prefix) {
+					char *prname = r_str_newf (""%s.%s"", r->bin->prefix, sn.methflag);
+					r_name_filter (sn.methflag, -1);
+					free (sn.methflag);
+					sn.methflag = prname;
+				}
+				if (fi) {
+					r_flag_item_set_realname (fi, sn.methname);
+					if ((fi->offset - r->flags->base) == addr) {
+						r_flag_unset (r->flags, fi);
+					}
+				} else {
+					fi = r_flag_set (r->flags, sn.methflag, addr, symbol->size);
+					char *comment = fi->comment ? strdup (fi->comment) : NULL;
+					if (comment) {
+						r_flag_item_set_comment (fi, comment);
+						R_FREE (comment);
+					}
+				}
+			} else {
+				const char *n = sn.demname ? sn.demname : sn.name;
+				const char *fn = sn.demflag ? sn.demflag : sn.nameflag;
+				char *fnp = (r->bin->prefix) ?
+					r_str_newf (""%s.%s"", r->bin->prefix, fn):
+					strdup (fn);
+				RFlagItem *fi = r_flag_set (r->flags, fnp, addr, symbol->size);
+				if (fi) {
+					r_flag_item_set_realname (fi, n);
+					fi->demangled = (bool)(size_t)sn.demname;
+				} else {
+					if (fn) {
+						eprintf (""[Warning] Can't find flag (%s)\n"", fn);
+					}
+				}
+				free (fnp);
+			}
+			if (sn.demname) {
+				r_meta_add (r->anal, R_META_TYPE_COMMENT,
+					addr, symbol->size, sn.demname);
+			}
+			r_flag_space_pop (r->flags);
+		} else if (IS_MODE_JSON (mode)) {
+			char *str = r_str_escape_utf8_for_json (r_symbol_name, -1);
+			r_cons_printf (""%s{\""name\"":\""%s\"",""
+				""\""demname\"":\""%s\"",""
+				""\""flagname\"":\""%s\"",""
+				""\""ordinal\"":%d,""
+				""\""bind\"":\""%s\"",""
+				""\""size\"":%d,""
+				""\""type\"":\""%s\"",""
+				""\""vaddr\"":%""PFMT64d"",""
+				""\""paddr\"":%""PFMT64d""}"",
+				((exponly && firstexp) || printHere) ? """" : (iter->p ? "","" : """"),
+				str,
+				sn.demname? sn.demname: """",
+				sn.nameflag,
+				symbol->ordinal,
+				symbol->bind,
+				(int)symbol->size,
+				symbol->type,
+				(ut64)addr, (ut64)symbol->paddr);
+			free (str);
+		} else if (IS_MODE_SIMPLE (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""0x%08""PFMT64x"" %d %s\n"",
+				addr, (int)symbol->size, name);
+		} else if (IS_MODE_SIMPLEST (mode)) {
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			r_cons_printf (""%s\n"", name);
+		} else if (IS_MODE_RAD (mode)) {
+			/* Skip special symbols because we do not flag them and
+			 * they shouldn't be printed in the rad format either */
+			if (is_special_symbol (symbol)) {
+				goto next;
+			}
+			RBinFile *binfile;
+			RBinPlugin *plugin;
+			const char *name = sn.demname? sn.demname: r_symbol_name;
+			if (!name) {
+				goto next;
+			}
+			if (!strncmp (name, ""imp."", 4)) {
+				if (lastfs != 'i') {
+					r_cons_printf (""fs imports\n"");
+				}
+				lastfs = 'i';
+			} else {
+				if (lastfs != 's') {
+					const char *fs = exponly? ""exports"": ""symbols"";
+					r_cons_printf (""fs %s\n"", fs);
+				}
+				lastfs = 's';
+			}
+			if (r->bin->prefix || *name) { // we don't want unnamed symbol flags
+				char *flagname = construct_symbol_flagname (""sym"", name, MAXFLAG_LEN_DEFAULT);
+				if (!flagname) {
+					goto next;
+				}
+				r_cons_printf (""\""f %s%s%s %u 0x%08"" PFMT64x ""\""\n"",
+					r->bin->prefix ? r->bin->prefix : """", r->bin->prefix ? ""."" : """",
+					flagname, symbol->size, addr);
+				free (flagname);
+			}
+			binfile = r_bin_cur (r->bin);
+			plugin = r_bin_file_cur_plugin (binfile);
+			if (plugin && plugin->name) {
+				if (r_str_startswith (plugin->name, ""pe"")) {
+					char *module = strdup (r_symbol_name);
+					char *p = strstr (module, "".dll_"");
+					if (p && strstr (module, ""imp."")) {
+						char *symname = __filterShell (p + 5);
+ 						char *m = __filterShell (module);
+ 						*p = 0;
+ 						if (r->bin->prefix) {
+							r_cons_printf (""\""k bin/pe/%s/%d=%s.%s\""\n"",
+ 								module, symbol->ordinal, r->bin->prefix, symname);
+ 						} else {
+							r_cons_printf (""\""k bin/pe/%s/%d=%s\""\n"",
+ 								module, symbol->ordinal, symname);
+ 						}
+ 						free (symname);
+						free (m);
+					}
+					free (module);
+				}
+			}
+		} else {
+			const char *bind = symbol->bind? symbol->bind: ""NONE"";
+			const char *type = symbol->type? symbol->type: ""NONE"";
+			const char *name = r_str_get (sn.demname? sn.demname: r_symbol_name);
+			r_cons_printf (""%03u"", symbol->ordinal);
+			if (symbol->paddr == UT64_MAX) {
+				r_cons_printf ("" ----------"");
+			} else {
+				r_cons_printf ("" 0x%08""PFMT64x, symbol->paddr);
+			}
+			r_cons_printf ("" 0x%08""PFMT64x"" %6s %6s %4d%s%s\n"",
+			               addr, bind, type, symbol->size, *name? "" "": """", name);
+		}
+next:
+		snFini (&sn);
+		i++;
+		free (r_symbol_name);
+		if (exponly && firstexp) {
+			firstexp = false;
+		}
+		if (printHere) {
+			break;
+		}
+	}
+	if (count == 0 && IS_MODE_JSON (mode)) {
+		r_cons_printf (""{}"");
+	}
+
+
+	if (is_arm) {
+		r_list_foreach (entries, iter, entry) {
+			if (IS_MODE_SET (mode)) {
+				handle_arm_entry (r, entry, info, va);
+			}
+		}
+	}
+	if (IS_MODE_JSON (mode) && !printHere) {
+		r_cons_printf (""]"");
+	}
+
+	r_spaces_pop (&r->anal->meta_spaces);
+	return true;
+}
+","The `bin_symbols` function processes and displays binary symbols from a given binary file in various formats based on the specified mode. It retrieves symbol information, including addresses, sizes, and types, and formats the output accordingly, supporting modes like JSON, normal, and RAD. The function filters symbols based on criteria such as export status, specific names, and address ranges. It also handles special cases for ARM architecture and manages symbol demangling if configured. The output includes detailed symbol information, and the function ensures proper memory management by freeing allocated resources.","The code defines a function that retrieves and displays information about symbols from a binary file, formatting the output based on the specified mode. It processes symbols to filter them according to various criteria, such as export status and address ranges, while also handling special cases for specific architectures. The function supports multiple output formats, including JSON and standard text, and ensures that symbol names are properly escaped for display. Additionally, it manages memory efficiently by freeing allocated resources and maintains a structured output that includes details like addresses, sizes, and types of the symbols.","The vulnerability identified as CWE-78, which pertains to OS command injection, arises from the potential for unvalidated input to be executed as a command. In the vulnerable code, user-supplied data, particularly from the `args` variable, could be improperly handled, allowing an attacker to manipulate command execution. The fix likely involved implementing stricter validation and sanitization of input, particularly ensuring that any input used in command contexts is properly escaped or filtered. This prevents malicious input from being executed, thereby mitigating the risk of command injection vulnerabilities in the application.","The vulnerability classified as CWE-78, related to OS command injection, occurs when user input is not properly validated or sanitized, allowing an attacker to execute arbitrary commands. In the vulnerable code, untrusted input could be directly incorporated into command execution contexts, leading to potential exploitation. The fix likely involved implementing rigorous input validation and sanitization measures to ensure that any user-supplied data is safe and does not contain malicious content. This change effectively prevents the execution of unintended commands, thereby mitigating the risk of command injection attacks and enhancing the overall security of the application.","The vulnerability was fixed by enhancing input validation and sanitization processes, particularly for the `args` variable. The code now checks if `args` starts with a specific character, ensuring that only expected input formats are processed. Additionally, the function employs `r_str_escape_utf8` to escape potentially harmful characters in symbol names, preventing malicious input from being executed. By incorporating these measures, the code mitigates the risk of command injection by ensuring that user-supplied data is properly handled before being used in any command execution context, thus improving overall security.","The vulnerability was addressed by implementing stricter input validation and sanitization measures to ensure that user-supplied data is safe for processing. The code now checks for specific conditions in the input to restrict its format and prevent unexpected values from being executed. Additionally, any potentially harmful characters in the input are properly escaped, which helps to neutralize malicious content. These changes collectively enhance the security of the application by ensuring that only valid and safe input is processed, thereby mitigating the risk of command injection attacks.","CWE-78, CWE-77, CWE-89, CWE-20, CWE-74, CWE-116, CWE-79, CWE-94, CWE-95, CWE-88",Y,1.0,"4,4","3, 4","4,4","3,4"

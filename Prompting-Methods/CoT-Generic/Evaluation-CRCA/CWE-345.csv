@@ -1,0 +1,1592 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,178220,178220,,Remote,Not required,,CVE-2014-4883,https://www.cvedetails.com/cve/CVE-2014-4883/,CWE-345,Medium,,Partial,,2014-11-27,4.3,"resolv.c in the DNS resolver in uIP, and dns.c in the DNS resolver in lwIP 1.4.1 and earlier, does not use random values for ID fields and source ports of DNS query packets, which makes it easier for man-in-the-middle attackers to conduct cache-poisoning attacks via spoofed reply packets.",2015-01-08,,4,https://git.savannah.gnu.org/cgit/lwip.git/commit/?id=9fb46e120655ac481b2af8f865d5ae56c39b831a,9fb46e120655ac481b2af8f865d5ae56c39b831a,,1,,,"dns_stricmp(const char* str1, const char* str2)
+{
+  char c1, c2;
+  *----------------------------------------------------------------------------*/
+ 
+ /* DNS variables */
+static struct udp_pcb        *dns_pcbs[DNS_MAX_SOURCE_PORTS];
+#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
+static u8_t                   dns_last_pcb_idx;
+#endif
+ static u8_t                   dns_seqno;
+ static struct dns_table_entry dns_table[DNS_TABLE_SIZE];
+ static struct dns_req_entry   dns_requests[DNS_MAX_REQUESTS];
+        if (c1_upc != c2_upc) {
+          /* still not equal */
+          /* don't care for < or > */
+          return 1;
+        }
+      } else {
+        /* characters are not equal but none is in the alphabet range */
+        return 1;
+      }
+","dns_stricmp(const char* str1, const char* str2)
+{
+  char c1, c2;
+  *----------------------------------------------------------------------------*/
+ 
+ /* DNS variables */
+static struct udp_pcb        *dns_pcb;
+ static u8_t                   dns_seqno;
+ static struct dns_table_entry dns_table[DNS_TABLE_SIZE];
+ static struct dns_req_entry   dns_requests[DNS_MAX_REQUESTS];
+        if (c1_upc != c2_upc) {
+          /* still not equal */
+          /* don't care for < or > */
+          return 1;
+        }
+      } else {
+        /* characters are not equal but none is in the alphabet range */
+        return 1;
+      }
+",C,"static struct udp_pcb        *dns_pcbs[DNS_MAX_SOURCE_PORTS];
+#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
+static u8_t                   dns_last_pcb_idx;
+#endif
+","static struct udp_pcb        *dns_pcb;
+",8216303524ca786177780a99b006d9d8ef56ed00,"@@ -88,14 +88,15 @@
+ /* A list of DNS security features follows */
+ #define LWIP_DNS_SECURE_RAND_XID                1
+ #define LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING 2
++#define LWIP_DNS_SECURE_RAND_SRC_PORT           4
+ /** Use all DNS security features by default.
+  * This is overridable but should only be needed by very small targets
+  * or when using against non standard DNS servers. */
+ #ifndef LWIP_DNS_SECURE
+-#define LWIP_DNS_SECURE (LWIP_DNS_SECURE_RAND_XID | LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING)
++#define LWIP_DNS_SECURE (LWIP_DNS_SECURE_RAND_XID | LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING | LWIP_DNS_SECURE_RAND_SRC_PORT)
+ #endif
+ 
+-/** Random generator function to create random TXIDs for queries */
++/** Random generator function to create random TXIDs and source ports for queries */
+ #ifndef DNS_RAND_TXID
+ #if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_XID) != 0)
+ #define DNS_RAND_TXID LWIP_RAND
+@@ -105,6 +106,11 @@ static u16_t dns_txid;
+ #endif
+ #endif
+ 
++/** Limits the source port to be >= 1024 by default */
++#ifndef DNS_PORT_ALLOWED
++#define DNS_PORT_ALLOWED(port) ((port) >= 1024)
++#endif
++
+ /** DNS server IP address */
+ #ifndef DNS_SERVER_ADDRESS
+ #define DNS_SERVER_ADDRESS(ipaddr)        (ip4_addr_set_u32(ipaddr, ipaddr_addr(""208.67.222.222""))) /* resolver1.opendns.com */
+@@ -139,6 +145,19 @@ static u16_t dns_txid;
+ #define DNS_MAX_REQUESTS          DNS_TABLE_SIZE
+ #endif
+ 
++/* The number of UDP source ports used in parallel */
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++#ifndef DNS_MAX_SOURCE_PORTS
++#define DNS_MAX_SOURCE_PORTS      DNS_MAX_REQUESTS
++#endif
++#else
++#ifdef DNS_MAX_SOURCE_PORTS
++#undef DNS_MAX_SOURCE_PORTS
++#endif
++#define DNS_MAX_SOURCE_PORTS      1
++#endif
++
++
+ /* DNS protocol flags */
+ #define DNS_FLAG1_RESPONSE        0x80
+ #define DNS_FLAG1_OPCODE_STATUS   0x10
+@@ -204,16 +223,18 @@ struct dns_answer {
+ 
+ /** DNS table entry */
+ struct dns_table_entry {
++  u32_t ttl;
++  ip_addr_t ipaddr;
++  u16_t txid;
+   u8_t  state;
+-  u8_t  numdns;
++  u8_t  server_idx;
+   u8_t  tmr;
+   u8_t  retries;
+   u8_t  seqno;
+-  u8_t  err;
+-  u16_t txid;
+-  u32_t ttl;
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++  u8_t pcb_idx;
++#endif
+   char name[DNS_MAX_NAME_LENGTH];
+-  ip_addr_t ipaddr;
+ };
+ 
+ /** DNS request table entry: used when dns_gehostbyname cannot answer the
+@@ -264,7 +285,10 @@ static void dns_check_entries(void);
+  *----------------------------------------------------------------------------*/
+ 
+ /* DNS variables */
+-static struct udp_pcb        *dns_pcb;
++static struct udp_pcb        *dns_pcbs[DNS_MAX_SOURCE_PORTS];
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++static u8_t                   dns_last_pcb_idx;
++#endif
+ static u8_t                   dns_seqno;
+ static struct dns_table_entry dns_table[DNS_TABLE_SIZE];
+ static struct dns_req_entry   dns_requests[DNS_MAX_REQUESTS];
+@@ -329,23 +353,23 @@ dns_init()
+   LWIP_DEBUGF(DNS_DEBUG, (""dns_init: initializing\n""));
+ 
+   /* if dns client not yet initialized... */
+-  if (dns_pcb == NULL) {
+-    dns_pcb = udp_new();
+-
+-    if (dns_pcb != NULL) {
+-      /* initialize DNS table not needed (initialized to zero since it is a
+-       * global variable) */
+-      LWIP_ASSERT(""For implicit initialization to work, DNS_STATE_UNUSED needs to be 0"",
+-        DNS_STATE_UNUSED == 0);
+-
+-      /* initialize DNS client */
+-      udp_bind(dns_pcb, IP_ADDR_ANY, 0);
+-      udp_recv(dns_pcb, dns_recv, NULL);
+-
+-      /* initialize default DNS primary server */
+-      dns_setserver(0, &dnsserver);
+-    }
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) == 0)
++  if (dns_pcbs[0] == NULL) {
++    dns_pcbs[0] = udp_new();
++    LWIP_ASSERT(""dns_pcbs[0] != NULL"", dns_pcbs[0] != NULL);
++
++    /* initialize DNS table not needed (initialized to zero since it is a
++     * global variable) */
++    LWIP_ASSERT(""For implicit initialization to work, DNS_STATE_UNUSED needs to be 0"",
++      DNS_STATE_UNUSED == 0);
++
++    /* initialize DNS client */
++    udp_bind(dns_pcbs[0], IP_ADDR_ANY, 0);
++    udp_recv(dns_pcbs[0], dns_recv, NULL);
+   }
++#endif
++  /* initialize default DNS primary server */
++  dns_setserver(0, &dnsserver);
+ #if DNS_LOCAL_HOSTLIST
+   dns_init_local();
+ #endif
+@@ -360,9 +384,12 @@ dns_init()
+ void
+ dns_setserver(u8_t numdns, ip_addr_t *dnsserver)
+ {
+-  if ((numdns < DNS_MAX_SERVERS) && (dns_pcb != NULL) &&
+-      (dnsserver != NULL) && !ip_addr_isany(dnsserver)) {
+-    dns_servers[numdns] = (*dnsserver);
++  if (numdns < DNS_MAX_SERVERS) {
++    if (dnsserver != NULL) {
++      dns_servers[numdns] = (*dnsserver);
++    } else {
++      dns_servers[numdns] = *IP_ADDR_ANY;
++    }
+   }
+ }
+ 
+@@ -390,10 +417,8 @@ dns_getserver(u8_t numdns)
+ void
+ dns_tmr(void)
+ {
+-  if (dns_pcb != NULL) {
+-    LWIP_DEBUGF(DNS_DEBUG, (""dns_tmr: dns_check_entries\n""));
+-    dns_check_entries();
+-  }
++  LWIP_DEBUGF(DNS_DEBUG, (""dns_tmr: dns_check_entries\n""));
++  dns_check_entries();
+ }
+ 
+ #if DNS_LOCAL_HOSTLIST
+@@ -470,7 +495,7 @@ dns_local_removehost(const char *hostname, const ip_addr_t *addr)
+   struct local_hostlist_entry *entry = local_hostlist_dynamic;
+   struct local_hostlist_entry *last_entry = NULL;
+   while (entry != NULL) {
+-    if (((hostname == NULL) || !strcmp(entry->name, hostname)) &&
++    if (((hostname == NULL) || !LWIP_DNS_STRICMP(entry->name, hostname)) &&
+         ((addr == NULL) || ip_addr_cmp(&entry->addr, addr))) {
+       struct local_hostlist_entry *free_entry;
+       if (last_entry != NULL) {
+@@ -636,13 +661,11 @@ dns_parse_name(char *query)
+ /**
+  * Send a DNS query packet.
+  *
+- * @param numdns index of the DNS server in the dns_servers table
+- * @param name hostname to query
+- * @param txid transmission id for the query
++ * @param entry the DNS table entry for which to send a request
+  * @return ERR_OK if packet is sent; an err_t indicating the problem otherwise
+  */
+ static err_t
+-dns_send(u8_t numdns, const char* name, u16_t txid)
++dns_send(struct dns_table_entry* entry)
+ {
+   err_t err;
+   struct dns_hdr *hdr;
+@@ -651,11 +674,12 @@ dns_send(u8_t numdns, const char* name, u16_t txid)
+   char *query, *nptr;
+   const char *pHostname;
+   u8_t n;
++  u8_t pcb_idx;
+ 
+   LWIP_DEBUGF(DNS_DEBUG, (""dns_send: dns_servers[%""U16_F""] \""%s\"": request\n"",
+-              (u16_t)(numdns), name));
+-  LWIP_ASSERT(""dns server out of array"", numdns < DNS_MAX_SERVERS);
+-  LWIP_ASSERT(""dns server has no IP address set"", !ip_addr_isany(&dns_servers[numdns]));
++              (u16_t)(entry->server_idx), entry->name));
++  LWIP_ASSERT(""dns server out of array"", entry->server_idx < DNS_MAX_SERVERS);
++  LWIP_ASSERT(""dns server has no IP address set"", !ip_addr_isany(&dns_servers[entry->server_idx]));
+ 
+   /* if here, we have either a new query or a retry on a previous query to process */
+   p = pbuf_alloc(PBUF_TRANSPORT, SIZEOF_DNS_HDR + DNS_MAX_NAME_LENGTH + 1 +
+@@ -666,11 +690,11 @@ dns_send(u8_t numdns, const char* name, u16_t txid)
+     /* fill dns header */
+     hdr = (struct dns_hdr*)p->payload;
+     memset(hdr, 0, SIZEOF_DNS_HDR);
+-    hdr->id = htons(txid);
++    hdr->id = htons(entry->txid);
+     hdr->flags1 = DNS_FLAG1_RD;
+     hdr->numquestions = PP_HTONS(1);
+     query = (char*)hdr + SIZEOF_DNS_HDR;
+-    pHostname = name;
++    pHostname = entry->name;
+     --pHostname;
+ 
+     /* convert hostname into suitable query format. */
+@@ -697,11 +721,15 @@ dns_send(u8_t numdns, const char* name, u16_t txid)
+     LWIP_ASSERT(""p->tot_len >= realloc_size"", p->tot_len >= realloc_size);
+     pbuf_realloc(p, realloc_size);
+ 
+-    /* connect to the server for faster receiving */
+-    udp_connect(dns_pcb, &dns_servers[numdns], DNS_SERVER_PORT);
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++    pcb_idx = entry->pcb_idx;
++#else
++    pcb_idx = 0;
++#endif
+     /* send dns packet */
+-    LWIP_DEBUGF(DNS_DEBUG, (""sending DNS request ID %d for name \""%s\"" to server %d\r\n"", txid, name, numdns));
+-    err = udp_sendto(dns_pcb, p, &dns_servers[numdns], DNS_SERVER_PORT);
++    LWIP_DEBUGF(DNS_DEBUG, (""sending DNS request ID %d for name \""%s\"" to server %d\r\n"",
++      entry->txid, entry->name, entry->server_idx));
++    err = udp_sendto(dns_pcbs[pcb_idx], p, &dns_servers[entry->server_idx], DNS_SERVER_PORT);
+ 
+     /* free pbuf */
+     pbuf_free(p);
+@@ -712,6 +740,76 @@ dns_send(u8_t numdns, const char* name, u16_t txid)
+   return err;
+ }
+ 
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++static struct udp_pcb*
++dns_alloc_random_port(void)
++{
++  err_t err;
++  struct udp_pcb* ret;
++
++  ret = udp_new();
++  if (ret == NULL) {
++    /* out of memory, have to reuse an existing pcb */
++    return NULL;
++  }
++  do {
++    u16_t port = DNS_RAND_TXID();
++    if (!DNS_PORT_ALLOWED(port)) {
++      /* this port is not allowed, try again */
++      err = ERR_USE;
++      continue;
++    }
++    err = udp_bind(ret, IP_ADDR_ANY, port);
++  } while(err == ERR_USE);
++  if ((err != ERR_OK) && (err != ERR_USE)) {
++    udp_remove(ret);
++    return NULL;
++  }
++  udp_recv(ret, dns_recv, NULL);
++  return ret;
++}
++
++/**
++ * dns_alloc_pcb() - allocates a new pcb (or reuses an existing one) to be used
++ * for sending a request
++ *
++ * @return an index into dns_pcbs
++ */
++static u8_t
++dns_alloc_pcb(void)
++{
++  u8_t i;
++  u8_t idx;
++
++  for (i = 0; i < DNS_MAX_SOURCE_PORTS; i++) {
++    if (dns_pcbs[i] == NULL) {
++      break;
++    }
++  }
++  if (i < DNS_MAX_SOURCE_PORTS) {
++    dns_pcbs[i] = dns_alloc_random_port();
++    if (dns_pcbs[i] != NULL) {
++      /* succeeded */
++      dns_last_pcb_idx = i;
++      return i;
++    }
++  }
++  /* if we come here, creating a new UDP pcb failed, so we have to use
++     an already existing one */
++  idx = dns_last_pcb_idx + 1;
++  for (i = 0; i < DNS_MAX_SOURCE_PORTS; i++) {
++    if (idx >= DNS_MAX_SOURCE_PORTS) {
++      idx = 0;
++    }
++    if (dns_pcbs[idx] != NULL) {
++      dns_last_pcb_idx = idx;
++      return idx;
++    }
++  }
++  return DNS_MAX_SOURCE_PORTS;
++}
++#endif /* ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0) */
++
+ /**
+  * dns_call_found() - call the found callback and check if there are duplicate
+  * entries for the given hostname. If there are any, their found callback will
+@@ -723,8 +821,10 @@ dns_send(u8_t numdns, const char* name, u16_t txid)
+ static void
+ dns_call_found(u8_t idx, ip_addr_t* addr)
+ {
+-#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING) != 0)
+   u8_t i;
++  LWIP_UNUSED_ARG(i);
++
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_NO_MULTIPLE_OUTSTANDING) != 0)
+   for (i = 0; i < DNS_MAX_REQUESTS; i++) {
+     if (dns_requests[i].found && (dns_requests[i].dns_table_idx == idx)) {
+       (*dns_requests[i].found)(dns_table[idx].name, addr, dns_requests[i].arg);
+@@ -738,6 +838,27 @@ dns_call_found(u8_t idx, ip_addr_t* addr)
+   }
+   dns_requests[idx].found = NULL;
+ #endif
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++  /* close the pcb used unless other request are using it */
++  for (i = 0; i < DNS_MAX_REQUESTS; i++) {
++    if (i == idx) {
++      continue; /* only check other requests */
++    }
++    if (dns_table[i].state == DNS_STATE_ASKING) {
++      if (dns_table[i].pcb_idx == dns_table[idx].pcb_idx) {
++        /* another request is still using the same pcb */
++        dns_table[idx].pcb_idx = DNS_MAX_SOURCE_PORTS;
++        break;
++      }
++    }
++  }
++  if (dns_table[idx].pcb_idx < DNS_MAX_SOURCE_PORTS) {
++    /* if we come here, the pcb is not used any more and can be removed */
++    udp_remove(dns_pcbs[dns_table[idx].pcb_idx]);
++    dns_pcbs[dns_table[idx].pcb_idx] = NULL;
++    dns_table[idx].pcb_idx = DNS_MAX_SOURCE_PORTS;
++  }
++#endif
+ }
+ 
+ /* Create a query transmission ID that is unique for all outstanding queries */
+@@ -786,13 +907,13 @@ dns_check_entry(u8_t i)
+       /* initialize new entry */
+       txid = dns_create_txid();
+       entry->txid = txid;
+-      entry->state   = DNS_STATE_ASKING;
+-      entry->numdns  = 0;
+-      entry->tmr     = 1;
++      entry->state = DNS_STATE_ASKING;
++      entry->server_idx = 0;
++      entry->tmr = 1;
+       entry->retries = 0;
+ 
+       /* send DNS packet for this entry */
+-      err = dns_send(entry->numdns, entry->name, txid);
++      err = dns_send(entry);
+       if (err != ERR_OK) {
+         LWIP_DEBUGF(DNS_DEBUG | LWIP_DBG_LEVEL_WARNING,
+                     (""dns_send returned error: %s\n"", lwip_strerr(err)));
+@@ -803,10 +924,10 @@ dns_check_entry(u8_t i)
+     case DNS_STATE_ASKING:
+       if (--entry->tmr == 0) {
+         if (++entry->retries == DNS_MAX_RETRIES) {
+-          if ((entry->numdns+1<DNS_MAX_SERVERS) && !ip_addr_isany(&dns_servers[entry->numdns+1])) {
++          if ((entry->server_idx + 1 < DNS_MAX_SERVERS) && !ip_addr_isany(&dns_servers[entry->server_idx + 1])) {
+             /* change of server */
+-            entry->numdns++;
+-            entry->tmr     = 1;
++            entry->server_idx++;
++            entry->tmr = 1;
+             entry->retries = 0;
+             break;
+           } else {
+@@ -814,7 +935,7 @@ dns_check_entry(u8_t i)
+             /* call specified callback function if provided */
+             dns_call_found(i, NULL);
+             /* flush this entry */
+-            entry->state   = DNS_STATE_UNUSED;
++            entry->state = DNS_STATE_UNUSED;
+             break;
+           }
+         }
+@@ -823,7 +944,7 @@ dns_check_entry(u8_t i)
+         entry->tmr = entry->retries;
+ 
+         /* send DNS packet for this entry */
+-        err = dns_send(entry->numdns, entry->name, entry->txid);
++        err = dns_send(entry);
+         if (err != ERR_OK) {
+           LWIP_DEBUGF(DNS_DEBUG | LWIP_DBG_LEVEL_WARNING,
+                       (""dns_send returned error: %s\n"", lwip_strerr(err)));
+@@ -904,9 +1025,10 @@ dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, ip_addr_t *addr, u16_t
+       entry_idx = i;
+       if ((entry->state == DNS_STATE_ASKING) &&
+           (entry->txid == txid)) {
++        u8_t dns_err;
+         /* This entry is now completed. */
+         entry->state = DNS_STATE_DONE;
+-        entry->err   = hdr->flags2 & DNS_FLAG2_ERR_MASK;
++        dns_err = hdr->flags2 & DNS_FLAG2_ERR_MASK;
+ 
+         /* We only care about the question(s) and the answers. The authrr
+            and the extrarr are simply discarded. */
+@@ -914,7 +1036,7 @@ dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, ip_addr_t *addr, u16_t
+         nanswers   = htons(hdr->numanswers);
+ 
+         /* Check for error. If so, call callback to inform. */
+-        if (((hdr->flags1 & DNS_FLAG1_RESPONSE) == 0) || (entry->err != 0) || (nquestions != 1)) {
++        if (((hdr->flags1 & DNS_FLAG1_RESPONSE) == 0) || (dns_err != 0) || (nquestions != 1)) {
+           LWIP_DEBUGF(DNS_DEBUG, (""dns_recv: \""%s\"": error in flags\n"", entry->name));
+           /* call callback to indicate error, clean up memory and return */
+           goto responseerr;
+@@ -922,7 +1044,7 @@ dns_recv(void *arg, struct udp_pcb *pcb, struct pbuf *p, ip_addr_t *addr, u16_t
+ 
+         /* Check whether response comes from the same network address to which the
+            question was sent. (RFC 5452) */
+-        if (!ip_addr_cmp(addr, &dns_servers[entry->numdns])) {
++        if (!ip_addr_cmp(addr, &dns_servers[entry->server_idx])) {
+           /* call callback to indicate error, clean up memory and return */
+           goto responseerr;
+         }
+@@ -1078,7 +1200,7 @@ dns_enqueue(const char *name, size_t hostnamelen, dns_found_callback found,
+   /* find a free request entry */
+   req = NULL;
+   for (r = 0; r < DNS_MAX_REQUESTS; r++) {
+-    if (dns_requests[r].found == 0) {
++    if (dns_requests[r].found == NULL) {
+       req = &dns_requests[r];
+       break;
+     }
+@@ -1088,12 +1210,12 @@ dns_enqueue(const char *name, size_t hostnamelen, dns_found_callback found,
+     LWIP_DEBUGF(DNS_DEBUG, (""dns_enqueue: \""%s\"": DNS request entries table is full\n"", name));
+     return ERR_MEM;
+   }
++  req->dns_table_idx = i;
+ #else
+   /* in this configuration, the entry index is the same as the request index */
+   req = &dns_requests[i];
+ #endif
+ 
+-
+   /* use this entry */
+   LWIP_DEBUGF(DNS_DEBUG, (""dns_enqueue: \""%s\"": use DNS entry %""U16_F""\n"", name, (u16_t)(i)));
+ 
+@@ -1106,6 +1228,18 @@ dns_enqueue(const char *name, size_t hostnamelen, dns_found_callback found,
+   MEMCPY(entry->name, name, namelen);
+   entry->name[namelen] = 0;
+ 
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
++  entry->pcb_idx = dns_alloc_pcb();
++  if (entry->pcb_idx >= DNS_MAX_SOURCE_PORTS) {
++    /* failed to get a UDP pcb */
++    LWIP_DEBUGF(DNS_DEBUG, (""dns_enqueue: \""%s\"": failed to allocate a pcb\n"", name));
++    entry->state = DNS_STATE_UNUSED;
++    req->found = NULL;
++    return ERR_MEM;
++  }
++  LWIP_DEBUGF(DNS_DEBUG, (""dns_enqueue: \""%s\"": use DNS pcb %""U16_F""\n"", name, (u16_t)(entry->pcb_idx)));
++#endif
++
+   dns_seqno++;
+ 
+   /* force to send query without waiting timer */
+@@ -1142,12 +1276,18 @@ dns_gethostbyname(const char *hostname, ip_addr_t *addr, dns_found_callback foun
+   size_t hostnamelen;
+   /* not initialized or no valid server yet, or invalid addr pointer
+    * or invalid hostname or invalid hostname length */
+-  if ((dns_pcb == NULL) || (addr == NULL) ||
++  if ((addr == NULL) ||
+       (!hostname) || (!hostname[0])) {
+     return ERR_ARG;
+   }
++#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) == 0)
++  if (dns_pcbs[0] == NULL) {
++    return ERR_ARG;
++  }
++#endif
+   hostnamelen = strlen(hostname);
+   if (hostnamelen >= DNS_MAX_NAME_LENGTH) {
++    LWIP_DEBUGF(DNS_DEBUG, (""dns_gethostbyname: name too long to resolve""));
+     return ERR_ARG;
+   }",savannah,https://git.savannah.gnu.org/cgit/lwip.git/tree/src/core/dns.c?id=9fb46e120655ac481b2af8f865d5ae56c39b831a,https://git.savannah.gnu.org/cgit/lwip.git/tree/src/core/dns.c?id=8216303524ca786177780a99b006d9d8ef56ed00,1,"dns_stricmp(const char* str1, const char* str2)
+{
+  char c1, c2;
+  *----------------------------------------------------------------------------*/
+ 
+ /* DNS variables */
+//flaw_line_below:
+static struct udp_pcb        *dns_pcb;
+//fix_flaw_line_below:
+//static struct udp_pcb        *dns_pcbs[DNS_MAX_SOURCE_PORTS];
+//fix_flaw_line_below:
+//#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
+//fix_flaw_line_below:
+//static u8_t                   dns_last_pcb_idx;
+//fix_flaw_line_below:
+//#endif
+ static u8_t                   dns_seqno;
+ static struct dns_table_entry dns_table[DNS_TABLE_SIZE];
+ static struct dns_req_entry   dns_requests[DNS_MAX_REQUESTS];
+        if (c1_upc != c2_upc) {
+          /* still not equal */
+          /* don't care for < or > */
+          return 1;
+        }
+      } else {
+        /* characters are not equal but none is in the alphabet range */
+        return 1;
+      }
+",178220,"dns_stricmp(const char* str1, const char* str2)
+{
+  char c1, c2;
+  *----------------------------------------------------------------------------*/
+ 
+ /* DNS variables */
+static struct udp_pcb        *dns_pcb;
+ static u8_t                   dns_seqno;
+ static struct dns_table_entry dns_table[DNS_TABLE_SIZE];
+ static struct dns_req_entry   dns_requests[DNS_MAX_REQUESTS];
+        if (c1_upc != c2_upc) {
+          /* still not equal */
+          /* don't care for < or > */
+          return 1;
+        }
+      } else {
+        /* characters are not equal but none is in the alphabet range */
+        return 1;
+      }
+","dns_stricmp(const char* str1, const char* str2)
+{
+  char c1, c2;
+  *----------------------------------------------------------------------------*/
+ 
+ /* DNS variables */
+static struct udp_pcb        *dns_pcbs[DNS_MAX_SOURCE_PORTS];
+#if ((LWIP_DNS_SECURE & LWIP_DNS_SECURE_RAND_SRC_PORT) != 0)
+static u8_t                   dns_last_pcb_idx;
+#endif
+ static u8_t                   dns_seqno;
+ static struct dns_table_entry dns_table[DNS_TABLE_SIZE];
+ static struct dns_req_entry   dns_requests[DNS_MAX_REQUESTS];
+        if (c1_upc != c2_upc) {
+          /* still not equal */
+          /* don't care for < or > */
+          return 1;
+        }
+      } else {
+        /* characters are not equal but none is in the alphabet range */
+        return 1;
+      }
+","The provided code snippet appears to be part of a DNS (Domain Name System) implementation, specifically focusing on a case-insensitive string comparison function, `dns_stricmp`. This function compares two strings, `str1` and `str2`, character by character, while ignoring case differences. It utilizes static variables for managing DNS requests and entries, including a UDP protocol control block and a sequence number. The comparison logic checks if the characters are equal, and if not, it determines if they fall within the alphabetic range, returning a value indicating their equality status. However, the code is incomplete and lacks full context.","The code snippet is part of a DNS implementation that focuses on comparing two strings in a case-insensitive manner. It checks each character of the strings to determine if they are equal, disregarding differences in case. The implementation includes static variables to manage DNS-related data, such as requests and entries, which are essential for handling DNS queries. The comparison logic evaluates the characters and returns a value indicating whether the strings are equivalent, while also considering characters that fall outside the standard alphabetic range. However, the snippet is incomplete and lacks full context for its functionality.","The vulnerability in the original code arises from the use of a single static variable for managing DNS requests, which could lead to potential buffer overflows or memory corruption if multiple requests are processed simultaneously. The fixed code addresses this issue by introducing an array of protocol control blocks, `dns_pcbs`, allowing for multiple source ports to be handled concurrently. This change enhances the robustness of the DNS implementation by ensuring that each request can be managed independently, reducing the risk of conflicts and improving overall security. The addition of the `dns_last_pcb_idx` variable further supports secure random source port selection.","The vulnerability in the original code stems from the use of a single static variable to manage DNS requests, which can lead to issues such as buffer overflows or memory corruption when handling multiple simultaneous requests. This design flaw makes the system susceptible to conflicts and unpredictable behavior, especially in a multi-threaded environment. The revised code mitigates this risk by implementing an array structure that allows for multiple instances to be managed concurrently, thereby enhancing the system's ability to handle requests independently. This change significantly improves the security and stability of the DNS implementation.","The vulnerability was fixed by replacing the single static variable for managing DNS requests with an array of protocol control blocks, `dns_pcbs`, which allows for handling multiple source ports simultaneously. This change enables the system to manage concurrent DNS requests independently, reducing the risk of buffer overflows and memory corruption. Additionally, the introduction of the `dns_last_pcb_idx` variable supports secure random source port selection, further enhancing the robustness of the implementation. By allowing multiple instances to coexist, the revised code improves both the security and stability of the DNS handling process.","The vulnerability was addressed by transitioning from a single static variable to an array structure that allows for the management of multiple instances simultaneously. This change enables the system to handle concurrent requests independently, significantly reducing the risk of buffer overflows and memory corruption that could occur when multiple requests are processed at the same time. Additionally, the implementation of a mechanism for secure random source port selection further enhances the overall security and stability of the system. This comprehensive approach ensures that the DNS handling process is more robust and less prone to conflicts.","4,4","4, 4","4,3","4, 3"
+1,1,182714,182714,,Remote,Not required,,CVE-2019-15162,https://www.cvedetails.com/cve/CVE-2019-15162/,CWE-345,Low,Partial,,,2019-10-03,5.0,"rpcapd/daemon.c in libpcap before 1.9.1 on non-Windows platforms provides details about why authentication failed, which might make it easier for attackers to enumerate valid usernames.",2019-10-10,,44,https://github.com/the-tcpdump-group/libpcap/commit/484d60cbf7ca4ec758c3cbb8a82d68b244a78d58,484d60cbf7ca4ec758c3cbb8a82d68b244a78d58,"On UN*X, don't tell the client why authentication failed.
+
+""no such user"" tells the client that the user ID isn't valid and,
+therefore, that it needn't bother trying to do password cracking for
+that user ID; just saying that the authentication failed dosn't give
+them that hint.
+
+This resolves the third problem in Include Security issue F11: [libpcap]
+Remote Packet Capture Daemon Multiple Authentication Improvements.
+
+The Windows LogonUser() API returns ERROR_LOGON_FAILURE for both cases,
+so the Windows code doesn't have this issue.  Just return the same
+""Authentication failed"" message on Windows to the user.
+
+For various authentication failures *other* than ""no such user"" and
+""password not valid"", log a message, as there's a problem that may need
+debugging.  We don't need to tell the end user what the problem is, as
+they may not bother reporting it and, even if they do, they may not give
+the full error message.",7,rpcapd/daemon.c,"{""sha"": ""c335fb05524c80260fc814468a5c45253582d88b"", ""filename"": ""rpcapd/daemon.c"", ""status"": ""modified"", ""additions"": 44, ""deletions"": 7, ""changes"": 51, ""blob_url"": ""https://github.com/the-tcpdump-group/libpcap/blob/484d60cbf7ca4ec758c3cbb8a82d68b244a78d58/rpcapd/daemon.c"", ""raw_url"": ""https://github.com/the-tcpdump-group/libpcap/raw/484d60cbf7ca4ec758c3cbb8a82d68b244a78d58/rpcapd/daemon.c"", ""contents_url"": ""https://api.github.com/repos/the-tcpdump-group/libpcap/contents/rpcapd/daemon.c?ref=484d60cbf7ca4ec758c3cbb8a82d68b244a78d58"", ""patch"": ""@@ -1176,20 +1176,33 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)\n \t * stop trying to log in with a given user name and move on\n \t * to another user name.\n \t */\n+\tDWORD error;\n \tHANDLE Token;\n+\tchar errmsgbuf[PCAP_ERRBUF_SIZE];\t// buffer for errors to log\n+\n \tif (LogonUser(username, \"".\"", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)\n \t{\n-\t\tpcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,\n-\t\t    GetLastError(), \""LogonUser() failed\"");\n+\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed\"");\n+\t\terror = GetLastError();\n+\t\tif (error != ERROR_LOGON_FAILURE)\n+\t\t{\n+\t\t\t// Some error other than an authentication error;\n+\t\t\t// log it.\n+\t\t\tpcap_fmt_errmsg_for_win32_err(errmsgbuf,\n+\t\t\t    PCAP_ERRBUF_SIZE, error, \""LogonUser() failed\"");\n+\t\t\trpcapd_log(LOGPRIO_ERROR, \""%s\"", errmsgbuf);\n+\t\t}\t\t\t    \n \t\treturn -1;\n \t}\n \n \t// This call should change the current thread to the selected user.\n \t// I didn't test it.\n \tif (ImpersonateLoggedOnUser(Token) == 0)\n \t{\n-\t\tpcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,\n+\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed\"");\n+\t\tpcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,\n \t\t    GetLastError(), \""ImpersonateLoggedOnUser() failed\"");\n+\t\trpcapd_log(LOGPRIO_ERROR, \""%s\"", errmsgbuf);\n \t\tCloseHandle(Token);\n \t\treturn -1;\n \t}\n@@ -1217,6 +1230,7 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)\n \t * only password database or some other authentication mechanism,\n \t * behind its API.\n \t */\n+\tint error;\n \tstruct passwd *user;\n \tchar *user_password;\n #ifdef HAVE_GETSPNAM\n@@ -1227,15 +1241,15 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)\n \t// This call is needed to get the uid\n \tif ((user = getpwnam(username)) == NULL)\n \t{\n-\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed: user name or password incorrect\"");\n+\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed\"");\n \t\treturn -1;\n \t}\n \n #ifdef HAVE_GETSPNAM\n \t// This call is needed to get the password; otherwise 'x' is returned\n \tif ((usersp = getspnam(username)) == NULL)\n \t{\n-\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed: user name or password incorrect\"");\n+\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed\"");\n \t\treturn -1;\n \t}\n \tuser_password = usersp->sp_pwdp;\n@@ -1253,29 +1267,52 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)\n \tuser_password = user->pw_passwd;\n #endif\n \n+\t//\n+\t// The Single UNIX Specification says that if crypt() fails it\n+\t// sets errno, but some implementatons that haven't been run\n+\t// through the SUS test suite might not do so.\n+\t//\n+\terrno = 0;\n \tcrypt_password = crypt(password, user_password);\n \tif (crypt_password == NULL)\n \t{\n+\t\terror = errno;\n \t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed\"");\n+\t\tif (error == 0)\n+\t\t{\n+\t\t\t// It didn't set errno.\n+\t\t\trpcapd_log(LOGPRIO_ERROR, \""crypt() failed\"");\n+\t\t}\n+\t\telse\n+\t\t{\n+\t\t\trpcapd_log(LOGPRIO_ERROR, \""crypt() failed: %s\"",\n+\t\t\t    strerror(error));\n+\t\t}\n \t\treturn -1;\n \t}\n \tif (strcmp(user_password, crypt_password) != 0)\n \t{\n-\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed: user name or password incorrect\"");\n+\t\tpcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, \""Authentication failed\"");\n \t\treturn -1;\n \t}\n \n \tif (setuid(user->pw_uid))\n \t{\n+\t\terror = errno;\n \t\tpcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,\n-\t\t    errno, \""setuid\"");\n+\t\t    error, \""setuid\"");\n+\t\trpcapd_log(LOGPRIO_ERROR, \""setuid() failed: %s\"",\n+\t\t    strerror(error));\n \t\treturn -1;\n \t}\n \n /*\tif (setgid(user->pw_gid))\n \t{\n+\t\terror = errno;\n \t\tpcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,\n \t\t    errno, \""setgid\"");\n+\t\trpcapd_log(LOGPRIO_ERROR, \""setgid() failed: %s\"",\n+\t\t    strerror(error));\n \t\treturn -1;\n \t}\n */""}","daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+{
+#ifdef _WIN32
+	/*
+	 * Warning: the user which launches the process must have the
+	 * SE_TCB_NAME right.
+	 * This corresponds to have the ""Act as part of the Operating System""
+	 * turned on (administrative tools, local security settings, local
+	 * policies, user right assignment)
+	 * However, it seems to me that if you run it as a service, this
+	 * right should be provided by default.
+	 *
+	 * XXX - hopefully, this returns errors such as ERROR_LOGON_FAILURE,
+	 * which merely indicates that the user name or password is
+	 * incorrect, not whether it's the user name or the password
+	 * that's incorrect, so a client that's trying to brute-force
+	 * accounts doesn't know whether it's the user name or the
+	 * password that's incorrect, so it doesn't know whether to
+ 	 * stop trying to log in with a given user name and move on
+ 	 * to another user name.
+ 	 */
+	DWORD error;
+ 	HANDLE Token;
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to log
+
+ 	if (LogonUser(username, ""."", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		error = GetLastError();
+		if (error != ERROR_LOGON_FAILURE)
+		{
+			// Some error other than an authentication error;
+			// log it.
+			pcap_fmt_errmsg_for_win32_err(errmsgbuf,
+			    PCAP_ERRBUF_SIZE, error, ""LogonUser() failed"");
+			rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+		}			    
+ 		return -1;
+ 	}
+ 
+ 	if (ImpersonateLoggedOnUser(Token) == 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		pcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,
+ 		    GetLastError(), ""ImpersonateLoggedOnUser() failed"");
+		rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+ 		CloseHandle(Token);
+ 		return -1;
+ 	}
+
+	CloseHandle(Token);
+	return 0;
+
+#else
+	/*
+	 * See
+	 *
+	 *	http://www.unixpapa.com/incnote/passwd.html
+	 *
+	 * We use the Solaris/Linux shadow password authentication if
+	 * we have getspnam(), otherwise we just do traditional
+	 * authentication, which, on some platforms, might work, even
+	 * with shadow passwords, if we're running as root.  Traditional
+	 * authenticaion won't work if we're not running as root, as
+	 * I think these days all UN*Xes either won't return the password
+	 * at all with getpwnam() or will only do so if you're root.
+	 *
+	 * XXX - perhaps what we *should* be using is PAM, if we have
+	 * it.  That might hide all the details of username/password
+	 * authentication, whether it's done with a visible-to-root-
+ 	 * only password database or some other authentication mechanism,
+ 	 * behind its API.
+ 	 */
+	int error;
+ 	struct passwd *user;
+ 	char *user_password;
+ #ifdef HAVE_GETSPNAM
+	struct spwd *usersp;
+#endif
+	char *crypt_password;
+
+ 	if ((user = getpwnam(username)) == NULL)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ #ifdef HAVE_GETSPNAM
+ 	if ((usersp = getspnam(username)) == NULL)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 	user_password = usersp->sp_pwdp;
+#else
+	/*
+	 * XXX - what about other platforms?
+	 * The unixpapa.com page claims this Just Works on *BSD if you're
+	 * running as root - it's from 2000, so it doesn't indicate whether
+	 * macOS (which didn't come out until 2001, under the name Mac OS
+	 * X) behaves like the *BSDs or not, and might also work on AIX.
+	 * HP-UX does something else.
+	 *
+	 * Again, hopefully PAM hides all that.
+	 */
+ 	user_password = user->pw_passwd;
+ #endif
+ 
+	//
+	// The Single UNIX Specification says that if crypt() fails it
+	// sets errno, but some implementatons that haven't been run
+	// through the SUS test suite might not do so.
+	//
+	errno = 0;
+ 	crypt_password = crypt(password, user_password);
+ 	if (crypt_password == NULL)
+ 	{
+		error = errno;
+ 		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		if (error == 0)
+		{
+			// It didn't set errno.
+			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed"");
+		}
+		else
+		{
+			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed: %s"",
+			    strerror(error));
+		}
+ 		return -1;
+ 	}
+ 	if (strcmp(user_password, crypt_password) != 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ 	if (setuid(user->pw_uid))
+ 	{
+		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+		    error, ""setuid"");
+		rpcapd_log(LOGPRIO_ERROR, ""setuid() failed: %s"",
+		    strerror(error));
+ 		return -1;
+ 	}
+ 
+ /*	if (setgid(user->pw_gid))
+ 	{
+		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, ""setgid"");
+		rpcapd_log(LOGPRIO_ERROR, ""setgid() failed: %s"",
+		    strerror(error));
+ 		return -1;
+ 	}
+ */
+	return 0;
+
+#endif
+
+}
+","daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+{
+#ifdef _WIN32
+	/*
+	 * Warning: the user which launches the process must have the
+	 * SE_TCB_NAME right.
+	 * This corresponds to have the ""Act as part of the Operating System""
+	 * turned on (administrative tools, local security settings, local
+	 * policies, user right assignment)
+	 * However, it seems to me that if you run it as a service, this
+	 * right should be provided by default.
+	 *
+	 * XXX - hopefully, this returns errors such as ERROR_LOGON_FAILURE,
+	 * which merely indicates that the user name or password is
+	 * incorrect, not whether it's the user name or the password
+	 * that's incorrect, so a client that's trying to brute-force
+	 * accounts doesn't know whether it's the user name or the
+	 * password that's incorrect, so it doesn't know whether to
+ 	 * stop trying to log in with a given user name and move on
+ 	 * to another user name.
+ 	 */
+ 	HANDLE Token;
+ 	if (LogonUser(username, ""."", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
+ 	{
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+		    GetLastError(), ""LogonUser() failed"");
+ 		return -1;
+ 	}
+ 
+ 	if (ImpersonateLoggedOnUser(Token) == 0)
+ 	{
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+ 		    GetLastError(), ""ImpersonateLoggedOnUser() failed"");
+ 		CloseHandle(Token);
+ 		return -1;
+ 	}
+
+	CloseHandle(Token);
+	return 0;
+
+#else
+	/*
+	 * See
+	 *
+	 *	http://www.unixpapa.com/incnote/passwd.html
+	 *
+	 * We use the Solaris/Linux shadow password authentication if
+	 * we have getspnam(), otherwise we just do traditional
+	 * authentication, which, on some platforms, might work, even
+	 * with shadow passwords, if we're running as root.  Traditional
+	 * authenticaion won't work if we're not running as root, as
+	 * I think these days all UN*Xes either won't return the password
+	 * at all with getpwnam() or will only do so if you're root.
+	 *
+	 * XXX - perhaps what we *should* be using is PAM, if we have
+	 * it.  That might hide all the details of username/password
+	 * authentication, whether it's done with a visible-to-root-
+ 	 * only password database or some other authentication mechanism,
+ 	 * behind its API.
+ 	 */
+ 	struct passwd *user;
+ 	char *user_password;
+ #ifdef HAVE_GETSPNAM
+	struct spwd *usersp;
+#endif
+	char *crypt_password;
+
+ 	if ((user = getpwnam(username)) == NULL)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+ 		return -1;
+ 	}
+ 
+ #ifdef HAVE_GETSPNAM
+ 	if ((usersp = getspnam(username)) == NULL)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+ 		return -1;
+ 	}
+ 	user_password = usersp->sp_pwdp;
+#else
+	/*
+	 * XXX - what about other platforms?
+	 * The unixpapa.com page claims this Just Works on *BSD if you're
+	 * running as root - it's from 2000, so it doesn't indicate whether
+	 * macOS (which didn't come out until 2001, under the name Mac OS
+	 * X) behaves like the *BSDs or not, and might also work on AIX.
+	 * HP-UX does something else.
+	 *
+	 * Again, hopefully PAM hides all that.
+	 */
+ 	user_password = user->pw_passwd;
+ #endif
+ 
+ 	crypt_password = crypt(password, user_password);
+ 	if (crypt_password == NULL)
+ 	{
+ 		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 	if (strcmp(user_password, crypt_password) != 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+ 		return -1;
+ 	}
+ 
+ 	if (setuid(user->pw_uid))
+ 	{
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+		    errno, ""setuid"");
+ 		return -1;
+ 	}
+ 
+ /*	if (setgid(user->pw_gid))
+ 	{
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, ""setgid"");
+ 		return -1;
+ 	}
+ */
+	return 0;
+
+#endif
+
+}
+",C,"	DWORD error;
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to log
+
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		error = GetLastError();
+		if (error != ERROR_LOGON_FAILURE)
+		{
+			// Some error other than an authentication error;
+			// log it.
+			pcap_fmt_errmsg_for_win32_err(errmsgbuf,
+			    PCAP_ERRBUF_SIZE, error, ""LogonUser() failed"");
+			rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+		}			    
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		pcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,
+		rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+	int error;
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+	//
+	// The Single UNIX Specification says that if crypt() fails it
+	// sets errno, but some implementatons that haven't been run
+	// through the SUS test suite might not do so.
+	//
+	errno = 0;
+		error = errno;
+		if (error == 0)
+		{
+			// It didn't set errno.
+			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed"");
+		}
+		else
+		{
+			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed: %s"",
+			    strerror(error));
+		}
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		error = errno;
+		    error, ""setuid"");
+		rpcapd_log(LOGPRIO_ERROR, ""setuid() failed: %s"",
+		    strerror(error));
+		error = errno;
+		rpcapd_log(LOGPRIO_ERROR, ""setgid() failed: %s"",
+		    strerror(error));
+","		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+		    GetLastError(), ""LogonUser() failed"");
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+		    errno, ""setuid"");
+",,"@@ -1176,20 +1176,33 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+ 	 * stop trying to log in with a given user name and move on
+ 	 * to another user name.
+ 	 */
++	DWORD error;
+ 	HANDLE Token;
++	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to log
++
+ 	if (LogonUser(username, ""."", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
+ 	{
+-		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+-		    GetLastError(), ""LogonUser() failed"");
++		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
++		error = GetLastError();
++		if (error != ERROR_LOGON_FAILURE)
++		{
++			// Some error other than an authentication error;
++			// log it.
++			pcap_fmt_errmsg_for_win32_err(errmsgbuf,
++			    PCAP_ERRBUF_SIZE, error, ""LogonUser() failed"");
++			rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
++		}			    
+ 		return -1;
+ 	}
+ 
+ 	// This call should change the current thread to the selected user.
+ 	// I didn't test it.
+ 	if (ImpersonateLoggedOnUser(Token) == 0)
+ 	{
+-		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
++		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
++		pcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,
+ 		    GetLastError(), ""ImpersonateLoggedOnUser() failed"");
++		rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+ 		CloseHandle(Token);
+ 		return -1;
+ 	}
+@@ -1217,6 +1230,7 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+ 	 * only password database or some other authentication mechanism,
+ 	 * behind its API.
+ 	 */
++	int error;
+ 	struct passwd *user;
+ 	char *user_password;
+ #ifdef HAVE_GETSPNAM
+@@ -1227,15 +1241,15 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+ 	// This call is needed to get the uid
+ 	if ((user = getpwnam(username)) == NULL)
+ 	{
+-		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
++		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ #ifdef HAVE_GETSPNAM
+ 	// This call is needed to get the password; otherwise 'x' is returned
+ 	if ((usersp = getspnam(username)) == NULL)
+ 	{
+-		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
++		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 	user_password = usersp->sp_pwdp;
+@@ -1253,29 +1267,52 @@ daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+ 	user_password = user->pw_passwd;
+ #endif
+ 
++	//
++	// The Single UNIX Specification says that if crypt() fails it
++	// sets errno, but some implementatons that haven't been run
++	// through the SUS test suite might not do so.
++	//
++	errno = 0;
+ 	crypt_password = crypt(password, user_password);
+ 	if (crypt_password == NULL)
+ 	{
++		error = errno;
+ 		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
++		if (error == 0)
++		{
++			// It didn't set errno.
++			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed"");
++		}
++		else
++		{
++			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed: %s"",
++			    strerror(error));
++		}
+ 		return -1;
+ 	}
+ 	if (strcmp(user_password, crypt_password) != 0)
+ 	{
+-		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
++		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ 	if (setuid(user->pw_uid))
+ 	{
++		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+-		    errno, ""setuid"");
++		    error, ""setuid"");
++		rpcapd_log(LOGPRIO_ERROR, ""setuid() failed: %s"",
++		    strerror(error));
+ 		return -1;
+ 	}
+ 
+ /*	if (setgid(user->pw_gid))
+ 	{
++		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, ""setgid"");
++		rpcapd_log(LOGPRIO_ERROR, ""setgid() failed: %s"",
++		    strerror(error));
+ 		return -1;
+ 	}
+ */",libpcap,484d60cbf7ca4ec758c3cbb8a82d68b244a78d58,437b273761adedcbd880f714bfa44afeec186a31,1,"daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+{
+#ifdef _WIN32
+	/*
+	 * Warning: the user which launches the process must have the
+	 * SE_TCB_NAME right.
+	 * This corresponds to have the ""Act as part of the Operating System""
+	 * turned on (administrative tools, local security settings, local
+	 * policies, user right assignment)
+	 * However, it seems to me that if you run it as a service, this
+	 * right should be provided by default.
+	 *
+	 * XXX - hopefully, this returns errors such as ERROR_LOGON_FAILURE,
+	 * which merely indicates that the user name or password is
+	 * incorrect, not whether it's the user name or the password
+	 * that's incorrect, so a client that's trying to brute-force
+	 * accounts doesn't know whether it's the user name or the
+	 * password that's incorrect, so it doesn't know whether to
+ 	 * stop trying to log in with a given user name and move on
+ 	 * to another user name.
+ 	 */
+//fix_flaw_line_below:
+//	DWORD error;
+ 	HANDLE Token;
+//fix_flaw_line_below:
+//	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to log
+//fix_flaw_line_below:
+//
+ 	if (LogonUser(username, ""."", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
+ 	{
+//flaw_line_below:
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+//flaw_line_below:
+		    GetLastError(), ""LogonUser() failed"");
+//fix_flaw_line_below:
+//		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+//fix_flaw_line_below:
+//		error = GetLastError();
+//fix_flaw_line_below:
+//		if (error != ERROR_LOGON_FAILURE)
+//fix_flaw_line_below:
+//		{
+//fix_flaw_line_below:
+//			// Some error other than an authentication error;
+//fix_flaw_line_below:
+//			// log it.
+//fix_flaw_line_below:
+//			pcap_fmt_errmsg_for_win32_err(errmsgbuf,
+//fix_flaw_line_below:
+//			    PCAP_ERRBUF_SIZE, error, ""LogonUser() failed"");
+//fix_flaw_line_below:
+//			rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+//fix_flaw_line_below:
+//		}			    
+ 		return -1;
+ 	}
+ 
+ 	// This call should change the current thread to the selected user.
+ 	// I didn't test it.
+ 	if (ImpersonateLoggedOnUser(Token) == 0)
+ 	{
+//flaw_line_below:
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+//fix_flaw_line_below:
+//		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+//fix_flaw_line_below:
+//		pcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,
+ 		    GetLastError(), ""ImpersonateLoggedOnUser() failed"");
+//fix_flaw_line_below:
+//		rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+ 		CloseHandle(Token);
+ 		return -1;
+ 	}
+
+	CloseHandle(Token);
+	return 0;
+
+#else
+	/*
+	 * See
+	 *
+	 *	http://www.unixpapa.com/incnote/passwd.html
+	 *
+	 * We use the Solaris/Linux shadow password authentication if
+	 * we have getspnam(), otherwise we just do traditional
+	 * authentication, which, on some platforms, might work, even
+	 * with shadow passwords, if we're running as root.  Traditional
+	 * authenticaion won't work if we're not running as root, as
+	 * I think these days all UN*Xes either won't return the password
+	 * at all with getpwnam() or will only do so if you're root.
+	 *
+	 * XXX - perhaps what we *should* be using is PAM, if we have
+	 * it.  That might hide all the details of username/password
+	 * authentication, whether it's done with a visible-to-root-
+ 	 * only password database or some other authentication mechanism,
+ 	 * behind its API.
+ 	 */
+//fix_flaw_line_below:
+//	int error;
+ 	struct passwd *user;
+ 	char *user_password;
+ #ifdef HAVE_GETSPNAM
+	struct spwd *usersp;
+#endif
+	char *crypt_password;
+
+ 	// This call is needed to get the uid
+ 	if ((user = getpwnam(username)) == NULL)
+ 	{
+//flaw_line_below:
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+//fix_flaw_line_below:
+//		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ #ifdef HAVE_GETSPNAM
+ 	// This call is needed to get the password; otherwise 'x' is returned
+ 	if ((usersp = getspnam(username)) == NULL)
+ 	{
+//flaw_line_below:
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+//fix_flaw_line_below:
+//		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 	user_password = usersp->sp_pwdp;
+#else
+	/*
+	 * XXX - what about other platforms?
+	 * The unixpapa.com page claims this Just Works on *BSD if you're
+	 * running as root - it's from 2000, so it doesn't indicate whether
+	 * macOS (which didn't come out until 2001, under the name Mac OS
+	 * X) behaves like the *BSDs or not, and might also work on AIX.
+	 * HP-UX does something else.
+	 *
+	 * Again, hopefully PAM hides all that.
+	 */
+ 	user_password = user->pw_passwd;
+ #endif
+ 
+//fix_flaw_line_below:
+//	//
+//fix_flaw_line_below:
+//	// The Single UNIX Specification says that if crypt() fails it
+//fix_flaw_line_below:
+//	// sets errno, but some implementatons that haven't been run
+//fix_flaw_line_below:
+//	// through the SUS test suite might not do so.
+//fix_flaw_line_below:
+//	//
+//fix_flaw_line_below:
+//	errno = 0;
+ 	crypt_password = crypt(password, user_password);
+ 	if (crypt_password == NULL)
+ 	{
+//fix_flaw_line_below:
+//		error = errno;
+ 		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+//fix_flaw_line_below:
+//		if (error == 0)
+//fix_flaw_line_below:
+//		{
+//fix_flaw_line_below:
+//			// It didn't set errno.
+//fix_flaw_line_below:
+//			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed"");
+//fix_flaw_line_below:
+//		}
+//fix_flaw_line_below:
+//		else
+//fix_flaw_line_below:
+//		{
+//fix_flaw_line_below:
+//			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed: %s"",
+//fix_flaw_line_below:
+//			    strerror(error));
+//fix_flaw_line_below:
+//		}
+ 		return -1;
+ 	}
+ 	if (strcmp(user_password, crypt_password) != 0)
+ 	{
+//flaw_line_below:
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+//fix_flaw_line_below:
+//		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ 	if (setuid(user->pw_uid))
+ 	{
+//fix_flaw_line_below:
+//		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+//flaw_line_below:
+		    errno, ""setuid"");
+//fix_flaw_line_below:
+//		    error, ""setuid"");
+//fix_flaw_line_below:
+//		rpcapd_log(LOGPRIO_ERROR, ""setuid() failed: %s"",
+//fix_flaw_line_below:
+//		    strerror(error));
+ 		return -1;
+ 	}
+ 
+ /*	if (setgid(user->pw_gid))
+ 	{
+//fix_flaw_line_below:
+//		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, ""setgid"");
+//fix_flaw_line_below:
+//		rpcapd_log(LOGPRIO_ERROR, ""setgid() failed: %s"",
+//fix_flaw_line_below:
+//		    strerror(error));
+ 		return -1;
+ 	}
+ */
+	return 0;
+
+#endif
+
+}
+",182714,"daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+{
+#ifdef _WIN32
+	/*
+	 * Warning: the user which launches the process must have the
+	 * SE_TCB_NAME right.
+	 * This corresponds to have the ""Act as part of the Operating System""
+	 * turned on (administrative tools, local security settings, local
+	 * policies, user right assignment)
+	 * However, it seems to me that if you run it as a service, this
+	 * right should be provided by default.
+	 *
+	 * XXX - hopefully, this returns errors such as ERROR_LOGON_FAILURE,
+	 * which merely indicates that the user name or password is
+	 * incorrect, not whether it's the user name or the password
+	 * that's incorrect, so a client that's trying to brute-force
+	 * accounts doesn't know whether it's the user name or the
+	 * password that's incorrect, so it doesn't know whether to
+	 * stop trying to log in with a given user name and move on
+	 * to another user name.
+	 */
+	HANDLE Token;
+	if (LogonUser(username, ""."", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
+	{
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+		    GetLastError(), ""LogonUser() failed"");
+		return -1;
+	}
+
+	// This call should change the current thread to the selected user.
+	// I didn't test it.
+	if (ImpersonateLoggedOnUser(Token) == 0)
+	{
+		pcap_fmt_errmsg_for_win32_err(errbuf, PCAP_ERRBUF_SIZE,
+		    GetLastError(), ""ImpersonateLoggedOnUser() failed"");
+		CloseHandle(Token);
+		return -1;
+	}
+
+	CloseHandle(Token);
+	return 0;
+
+#else
+	/*
+	 * See
+	 *
+	 *	http://www.unixpapa.com/incnote/passwd.html
+	 *
+	 * We use the Solaris/Linux shadow password authentication if
+	 * we have getspnam(), otherwise we just do traditional
+	 * authentication, which, on some platforms, might work, even
+	 * with shadow passwords, if we're running as root.  Traditional
+	 * authenticaion won't work if we're not running as root, as
+	 * I think these days all UN*Xes either won't return the password
+	 * at all with getpwnam() or will only do so if you're root.
+	 *
+	 * XXX - perhaps what we *should* be using is PAM, if we have
+	 * it.  That might hide all the details of username/password
+	 * authentication, whether it's done with a visible-to-root-
+	 * only password database or some other authentication mechanism,
+	 * behind its API.
+	 */
+	struct passwd *user;
+	char *user_password;
+#ifdef HAVE_GETSPNAM
+	struct spwd *usersp;
+#endif
+	char *crypt_password;
+
+	// This call is needed to get the uid
+	if ((user = getpwnam(username)) == NULL)
+	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+		return -1;
+	}
+
+#ifdef HAVE_GETSPNAM
+	// This call is needed to get the password; otherwise 'x' is returned
+	if ((usersp = getspnam(username)) == NULL)
+	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+		return -1;
+	}
+	user_password = usersp->sp_pwdp;
+#else
+	/*
+	 * XXX - what about other platforms?
+	 * The unixpapa.com page claims this Just Works on *BSD if you're
+	 * running as root - it's from 2000, so it doesn't indicate whether
+	 * macOS (which didn't come out until 2001, under the name Mac OS
+	 * X) behaves like the *BSDs or not, and might also work on AIX.
+	 * HP-UX does something else.
+	 *
+	 * Again, hopefully PAM hides all that.
+	 */
+	user_password = user->pw_passwd;
+#endif
+
+	crypt_password = crypt(password, user_password);
+	if (crypt_password == NULL)
+	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		return -1;
+	}
+	if (strcmp(user_password, crypt_password) != 0)
+	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed: user name or password incorrect"");
+		return -1;
+	}
+
+	if (setuid(user->pw_uid))
+	{
+		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+		    errno, ""setuid"");
+		return -1;
+	}
+
+/*	if (setgid(user->pw_gid))
+	{
+		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+		    errno, ""setgid"");
+		return -1;
+	}
+*/
+	return 0;
+
+#endif
+
+}","daemon_AuthUserPwd(char *username, char *password, char *errbuf)
+{
+#ifdef _WIN32
+	/*
+	 * Warning: the user which launches the process must have the
+	 * SE_TCB_NAME right.
+	 * This corresponds to have the ""Act as part of the Operating System""
+	 * turned on (administrative tools, local security settings, local
+	 * policies, user right assignment)
+	 * However, it seems to me that if you run it as a service, this
+	 * right should be provided by default.
+	 *
+	 * XXX - hopefully, this returns errors such as ERROR_LOGON_FAILURE,
+	 * which merely indicates that the user name or password is
+	 * incorrect, not whether it's the user name or the password
+	 * that's incorrect, so a client that's trying to brute-force
+	 * accounts doesn't know whether it's the user name or the
+	 * password that's incorrect, so it doesn't know whether to
+ 	 * stop trying to log in with a given user name and move on
+ 	 * to another user name.
+ 	 */
+	DWORD error;
+ 	HANDLE Token;
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to log
+
+ 	if (LogonUser(username, ""."", password, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, &Token) == 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		error = GetLastError();
+		if (error != ERROR_LOGON_FAILURE)
+		{
+			// Some error other than an authentication error;
+			// log it.
+			pcap_fmt_errmsg_for_win32_err(errmsgbuf,
+			    PCAP_ERRBUF_SIZE, error, ""LogonUser() failed"");
+			rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+		}			    
+ 		return -1;
+ 	}
+ 
+ 	if (ImpersonateLoggedOnUser(Token) == 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		pcap_fmt_errmsg_for_win32_err(errmsgbuf, PCAP_ERRBUF_SIZE,
+ 		    GetLastError(), ""ImpersonateLoggedOnUser() failed"");
+		rpcapd_log(LOGPRIO_ERROR, ""%s"", errmsgbuf);
+ 		CloseHandle(Token);
+ 		return -1;
+ 	}
+
+	CloseHandle(Token);
+	return 0;
+
+#else
+	/*
+	 * See
+	 *
+	 *	http://www.unixpapa.com/incnote/passwd.html
+	 *
+	 * We use the Solaris/Linux shadow password authentication if
+	 * we have getspnam(), otherwise we just do traditional
+	 * authentication, which, on some platforms, might work, even
+	 * with shadow passwords, if we're running as root.  Traditional
+	 * authenticaion won't work if we're not running as root, as
+	 * I think these days all UN*Xes either won't return the password
+	 * at all with getpwnam() or will only do so if you're root.
+	 *
+	 * XXX - perhaps what we *should* be using is PAM, if we have
+	 * it.  That might hide all the details of username/password
+	 * authentication, whether it's done with a visible-to-root-
+ 	 * only password database or some other authentication mechanism,
+ 	 * behind its API.
+ 	 */
+	int error;
+ 	struct passwd *user;
+ 	char *user_password;
+ #ifdef HAVE_GETSPNAM
+	struct spwd *usersp;
+#endif
+	char *crypt_password;
+
+ 	if ((user = getpwnam(username)) == NULL)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ #ifdef HAVE_GETSPNAM
+ 	if ((usersp = getspnam(username)) == NULL)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 	user_password = usersp->sp_pwdp;
+#else
+	/*
+	 * XXX - what about other platforms?
+	 * The unixpapa.com page claims this Just Works on *BSD if you're
+	 * running as root - it's from 2000, so it doesn't indicate whether
+	 * macOS (which didn't come out until 2001, under the name Mac OS
+	 * X) behaves like the *BSDs or not, and might also work on AIX.
+	 * HP-UX does something else.
+	 *
+	 * Again, hopefully PAM hides all that.
+	 */
+ 	user_password = user->pw_passwd;
+ #endif
+ 
+	//
+	// The Single UNIX Specification says that if crypt() fails it
+	// sets errno, but some implementatons that haven't been run
+	// through the SUS test suite might not do so.
+	//
+	errno = 0;
+ 	crypt_password = crypt(password, user_password);
+ 	if (crypt_password == NULL)
+ 	{
+		error = errno;
+ 		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+		if (error == 0)
+		{
+			// It didn't set errno.
+			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed"");
+		}
+		else
+		{
+			rpcapd_log(LOGPRIO_ERROR, ""crypt() failed: %s"",
+			    strerror(error));
+		}
+ 		return -1;
+ 	}
+ 	if (strcmp(user_password, crypt_password) != 0)
+ 	{
+		pcap_snprintf(errbuf, PCAP_ERRBUF_SIZE, ""Authentication failed"");
+ 		return -1;
+ 	}
+ 
+ 	if (setuid(user->pw_uid))
+ 	{
+		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+		    error, ""setuid"");
+		rpcapd_log(LOGPRIO_ERROR, ""setuid() failed: %s"",
+		    strerror(error));
+ 		return -1;
+ 	}
+ 
+ /*	if (setgid(user->pw_gid))
+ 	{
+		error = errno;
+ 		pcap_fmt_errmsg_for_errno(errbuf, PCAP_ERRBUF_SIZE,
+ 		    errno, ""setgid"");
+		rpcapd_log(LOGPRIO_ERROR, ""setgid() failed: %s"",
+		    strerror(error));
+ 		return -1;
+ 	}
+ */
+	return 0;
+
+#endif
+
+}
+","The `daemon_AuthUserPwd` function is designed to authenticate a user based on their username and password, with different implementations for Windows and Unix-like systems. On Windows, it uses the `LogonUser` and `ImpersonateLoggedOnUser` functions to validate credentials and impersonate the user if successful. On Unix-like systems, it retrieves user information and password hashes using `getpwnam` and `getspnam`, then compares the provided password against the stored hash using `crypt`. If authentication is successful, it changes the process's user ID to that of the authenticated user; otherwise, it populates an error buffer with relevant messages.","The code implements a user authentication mechanism that operates differently based on the operating system. For Windows, it verifies user credentials and allows the process to impersonate the authenticated user if successful. In contrast, for Unix-like systems, it retrieves user information and password hashes, then checks the provided password against the stored hash. If the authentication is successful, the process's user ID is changed to that of the authenticated user. In both cases, if authentication fails, an error message is generated to indicate the reason for the failure, ensuring secure access control.","The vulnerability in the original code stemmed from insufficient error handling during the authentication process, particularly regarding the feedback provided to potential attackers. Specifically, the use of generic error messages like ""Authentication failed: user name or password incorrect"" did not differentiate between incorrect usernames and passwords, allowing brute-force attacks to be more effective. The fixed code improves this by capturing specific error codes from the `LogonUser` function and logging detailed error messages when authentication fails, thus providing better security by obscuring whether the username or password was incorrect, making it harder for attackers to exploit the system.","The vulnerability in the original code was primarily due to inadequate error handling, which provided generic failure messages that did not specify whether the username or password was incorrect. This lack of specificity allowed attackers to conduct brute-force attacks more effectively, as they could not determine which credential was wrong. The revised code addresses this issue by implementing more detailed error logging and differentiating between various types of authentication failures. By obscuring the exact reason for authentication failure, the updated code enhances security and makes it more difficult for attackers to exploit the system.","The vulnerability was fixed by enhancing error handling and logging mechanisms in the authentication process. In the revised code, specific error codes are captured using the `GetLastError` function after the `LogonUser` call, allowing the program to distinguish between different failure reasons. Instead of providing a generic failure message, the code now logs detailed error messages using `rpcapd_log`, which helps identify non-authentication-related errors. Additionally, the code checks for errors from the `crypt` function and logs them appropriately, ensuring that attackers cannot easily determine whether the username or password was incorrect, thereby improving overall security.","The vulnerability was addressed by improving the error handling and logging mechanisms within the authentication process. The updated code captures specific error codes to differentiate between various failure scenarios, rather than providing a generic failure message. This allows the system to log detailed information about authentication failures, which helps identify issues without revealing whether the username or password was incorrect. By obscuring the exact reasons for failure, the revised implementation enhances security and makes it more challenging for attackers to exploit the system through brute-force methods.","5,4","5,5","4,4","5,4"

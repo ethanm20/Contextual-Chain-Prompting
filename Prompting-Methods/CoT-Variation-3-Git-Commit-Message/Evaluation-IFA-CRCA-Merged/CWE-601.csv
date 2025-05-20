@@ -1,0 +1,140 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,182921,182921,,Remote,Not required,,CVE-2019-3877,https://www.cvedetails.com/cve/CVE-2019-3877/,CWE-601,Medium,,Partial,,2019-03-27,4.3,"A vulnerability was found in mod_auth_mellon before v0.14.2. An open redirect in the logout URL allows requests with backslashes to pass through by assuming that it is a relative URL, while the browsers silently convert backslash characters into forward slashes treating them as an absolute URL. This mismatch allows an attacker to bypass the redirect URL validation logic in apr_uri_parse function.",2019-04-16,Bypass ,7,https://github.com/Uninett/mod_auth_mellon/commit/62041428a32de402e0be6ba45fe12df6a83bedb8,62041428a32de402e0be6ba45fe12df6a83bedb8,"Fix redirect URL validation bypass
+
+It turns out that browsers silently convert backslash characters into
+forward slashes, while apr_uri_parse() does not.
+
+This mismatch allows an attacker to bypass the redirect URL validation
+by using an URL like:
+
+  https://sp.example.org/mellon/logout?ReturnTo=https:%5c%5cmalicious.example.org/
+
+mod_auth_mellon will assume that it is a relative URL and allow the
+request to pass through, while the browsers will use it as an absolute
+url and redirect to https://malicious.example.org/ .
+
+This patch fixes this issue by rejecting all redirect URLs with
+backslashes.",0,auth_mellon_util.c,"{""sha"": ""fd442f90e4f12669e18f64095c441881b8614c8d"", ""filename"": ""auth_mellon_util.c"", ""status"": ""modified"", ""additions"": 7, ""deletions"": 0, ""changes"": 7, ""blob_url"": ""https://github.com/Uninett/mod_auth_mellon/blob/62041428a32de402e0be6ba45fe12df6a83bedb8/auth_mellon_util.c"", ""raw_url"": ""https://github.com/Uninett/mod_auth_mellon/raw/62041428a32de402e0be6ba45fe12df6a83bedb8/auth_mellon_util.c"", ""contents_url"": ""https://api.github.com/repos/Uninett/mod_auth_mellon/contents/auth_mellon_util.c?ref=62041428a32de402e0be6ba45fe12df6a83bedb8"", ""patch"": ""@@ -927,6 +927,13 @@ int am_check_url(request_rec *r, const char *url)\n                           \""Control character detected in URL.\"");\n             return HTTP_BAD_REQUEST;\n         }\n+        if (*i == '\\\\') {\n+            /* Reject backslash character, as it can be used to bypass\n+             * redirect URL validation. */\n+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,\n+                          \""Backslash character detected in URL.\"");\n+            return HTTP_BAD_REQUEST;\n+        }\n     }\n \n     return OK;""}","int am_check_url(request_rec *r, const char *url)
+{
+    const char *i;
+
+    for (i = url; *i; i++) {
+        if (*i >= 0 && *i < ' ') {
+            /* Deny all control-characters. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                           ""Control character detected in URL."");
+             return HTTP_BAD_REQUEST;
+         }
+        if (*i == '\\') {
+            /* Reject backslash character, as it can be used to bypass
+             * redirect URL validation. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                          ""Backslash character detected in URL."");
+            return HTTP_BAD_REQUEST;
+        }
+     }
+ 
+     return OK;
+}
+","int am_check_url(request_rec *r, const char *url)
+{
+    const char *i;
+
+    for (i = url; *i; i++) {
+        if (*i >= 0 && *i < ' ') {
+            /* Deny all control-characters. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                           ""Control character detected in URL."");
+             return HTTP_BAD_REQUEST;
+         }
+     }
+ 
+     return OK;
+}
+",C,"        if (*i == '\\') {
+            /* Reject backslash character, as it can be used to bypass
+             * redirect URL validation. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                          ""Backslash character detected in URL."");
+            return HTTP_BAD_REQUEST;
+        }
+",,,"@@ -927,6 +927,13 @@ int am_check_url(request_rec *r, const char *url)
+                           ""Control character detected in URL."");
+             return HTTP_BAD_REQUEST;
+         }
++        if (*i == '\\') {
++            /* Reject backslash character, as it can be used to bypass
++             * redirect URL validation. */
++            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
++                          ""Backslash character detected in URL."");
++            return HTTP_BAD_REQUEST;
++        }
+     }
+ 
+     return OK;",mod_auth_mellon,62041428a32de402e0be6ba45fe12df6a83bedb8,7bc436760d10edb4be27fc326548ef3e7ffddf65,1,"int am_check_url(request_rec *r, const char *url)
+{
+    const char *i;
+
+    for (i = url; *i; i++) {
+        if (*i >= 0 && *i < ' ') {
+            /* Deny all control-characters. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                           ""Control character detected in URL."");
+             return HTTP_BAD_REQUEST;
+         }
+//fix_flaw_line_below:
+//        if (*i == '\\') {
+//fix_flaw_line_below:
+//            /* Reject backslash character, as it can be used to bypass
+//fix_flaw_line_below:
+//             * redirect URL validation. */
+//fix_flaw_line_below:
+//            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+//fix_flaw_line_below:
+//                          ""Backslash character detected in URL."");
+//fix_flaw_line_below:
+//            return HTTP_BAD_REQUEST;
+//fix_flaw_line_below:
+//        }
+     }
+ 
+     return OK;
+}
+",182921,"int am_check_url(request_rec *r, const char *url)
+{
+    const char *i;
+
+    for (i = url; *i; i++) {
+        if (*i >= 0 && *i < ' ') {
+            /* Deny all control-characters. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                           ""Control character detected in URL."");
+             return HTTP_BAD_REQUEST;
+         }
+     }
+ 
+     return OK;
+}
+","int am_check_url(request_rec *r, const char *url)
+{
+    const char *i;
+
+    for (i = url; *i; i++) {
+        if (*i >= 0 && *i < ' ') {
+            /* Deny all control-characters. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                           ""Control character detected in URL."");
+             return HTTP_BAD_REQUEST;
+         }
+        if (*i == '\\') {
+            /* Reject backslash character, as it can be used to bypass
+             * redirect URL validation. */
+            AM_LOG_RERROR(APLOG_MARK, APLOG_ERR, HTTP_BAD_REQUEST, r,
+                          ""Backslash character detected in URL."");
+            return HTTP_BAD_REQUEST;
+        }
+     }
+ 
+     return OK;
+}
+","The `am_check_url` function is designed to validate a given URL by checking for the presence of control characters, which are non-printable characters that can lead to security vulnerabilities. It iterates through each character in the provided URL string, and if it encounters any character with an ASCII value less than a space (i.e., less than 32), it logs an error message indicating a control character was detected and returns an HTTP 400 Bad Request status. If no control characters are found, the function returns an OK status, indicating the URL is valid.","The provided code defines a function that checks a given URL for the presence of control characters, which are non-printable and can pose security risks. It iterates through each character in the URL, and if it finds any character with an ASCII value less than a space, it logs an error message indicating the detection of a control character and returns a status indicating a bad request. If the URL contains no such characters, the function returns a status indicating that the URL is valid. This validation helps ensure the integrity and safety of URL inputs.","The vulnerability in the original code stemmed from its failure to check for backslash characters in the URL, which could be exploited to bypass redirect URL validation. Attackers could craft URLs containing backslashes, which browsers would convert to forward slashes, leading to unintended redirection to malicious sites. The fixed code addresses this issue by adding a condition to explicitly reject any URL containing backslashes. This enhancement ensures that any URL with such characters is logged as an error and results in a bad request, thereby preventing potential security breaches related to URL redirection.","The vulnerability in the original code allowed attackers to exploit the handling of backslash characters in URLs, which browsers convert to forward slashes without proper validation. This discrepancy meant that a malicious URL could be interpreted as a relative path by the server, while browsers would treat it as an absolute URL, leading to unauthorized redirection to harmful sites. The fix implemented in the updated code addresses this issue by adding a check to reject any URLs containing backslashes, thereby preventing the bypass of redirect URL validation and enhancing overall security against such attacks.","The vulnerability was fixed by adding a specific condition in the updated code to check for backslash characters within the URL. In the loop that iterates through each character of the URL, an additional `if` statement was introduced to detect the presence of backslashes. If a backslash is found, an error message is logged using the `AM_LOG_RERROR` function, and the function returns an HTTP_BAD_REQUEST status. This enhancement ensures that any URL containing backslashes is rejected, effectively preventing attackers from bypassing redirect URL validation and mitigating the associated security risks.","The vulnerability was fixed by introducing a check for backslash characters in the URL during the validation process. The updated code now includes a condition that specifically identifies backslashes, which could be exploited to bypass redirect URL validation. When a backslash is detected, the code logs an error message and returns a status indicating a bad request. This modification ensures that any URL containing backslashes is rejected, thereby preventing potential security breaches related to unauthorized redirection and enhancing the overall integrity of the URL validation mechanism.","CWE-601, CWE-20, CWE-284, CWE-640, CWE-116, CWE-22, CWE-287, CWE-79, CWE-200, CWE-74",Y,1.0,"5,5","5,5","4,4","4,4"

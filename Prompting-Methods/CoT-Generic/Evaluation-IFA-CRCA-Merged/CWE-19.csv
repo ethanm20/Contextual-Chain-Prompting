@@ -1,0 +1,2335 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,180133,180133,,Remote,Not required,Complete,CVE-2016-7117,https://www.cvedetails.com/cve/CVE-2016-7117/,CWE-19,Low,Complete,Complete,,2016-10-10,10.0,Use-after-free vulnerability in the __sys_recvmmsg function in net/socket.c in the Linux kernel before 4.5.2 allows remote attackers to execute arbitrary code via vectors involving a recvmmsg system call that is mishandled during error processing.,2018-01-04,Exec Code ,19,https://github.com/torvalds/linux/commit/34b88a68f26a75e4fded796f1a49c40f82234b7d,34b88a68f26a75e4fded796f1a49c40f82234b7d,"net: Fix use after free in the recvmmsg exit path
+
+The syzkaller fuzzer hit the following use-after-free:
+
+  Call Trace:
+   [<ffffffff8175ea0e>] __asan_report_load8_noabort+0x3e/0x40 mm/kasan/report.c:295
+   [<ffffffff851cc31a>] __sys_recvmmsg+0x6fa/0x7f0 net/socket.c:2261
+   [<     inline     >] SYSC_recvmmsg net/socket.c:2281
+   [<ffffffff851cc57f>] SyS_recvmmsg+0x16f/0x180 net/socket.c:2270
+   [<ffffffff86332bb6>] entry_SYSCALL_64_fastpath+0x16/0x7a
+  arch/x86/entry/entry_64.S:185
+
+And, as Dmitry rightly assessed, that is because we can drop the
+reference and then touch it when the underlying recvmsg calls return
+some packets and then hit an error, which will make recvmmsg to set
+sock->sk->sk_err, oops, fix it.
+
+Reported-and-Tested-by: Dmitry Vyukov <dvyukov@google.com>
+Cc: Alexander Potapenko <glider@google.com>
+Cc: Eric Dumazet <edumazet@google.com>
+Cc: Kostya Serebryany <kcc@google.com>
+Cc: Sasha Levin <sasha.levin@oracle.com>
+Fixes: a2e2725541fa (""net: Introduce recvmmsg socket syscall"")
+http://lkml.kernel.org/r/20160122211644.GC2470@redhat.com
+Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",17,net/socket.c,"{""sha"": ""5f77a8e93830bd30cef60e68354bda683c9acc43"", ""filename"": ""net/socket.c"", ""status"": ""modified"", ""additions"": 19, ""deletions"": 19, ""changes"": 38, ""blob_url"": ""https://github.com/torvalds/linux/blob/34b88a68f26a75e4fded796f1a49c40f82234b7d/net/socket.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/34b88a68f26a75e4fded796f1a49c40f82234b7d/net/socket.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/net/socket.c?ref=34b88a68f26a75e4fded796f1a49c40f82234b7d"", ""patch"": ""@@ -2244,31 +2244,31 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,\n \t\tcond_resched();\n \t}\n \n-out_put:\n-\tfput_light(sock->file, fput_needed);\n-\n \tif (err == 0)\n-\t\treturn datagrams;\n+\t\tgoto out_put;\n \n-\tif (datagrams != 0) {\n+\tif (datagrams == 0) {\n+\t\tdatagrams = err;\n+\t\tgoto out_put;\n+\t}\n+\n+\t/*\n+\t * We may return less entries than requested (vlen) if the\n+\t * sock is non block and there aren't enough datagrams...\n+\t */\n+\tif (err != -EAGAIN) {\n \t\t/*\n-\t\t * We may return less entries than requested (vlen) if the\n-\t\t * sock is non block and there aren't enough datagrams...\n+\t\t * ... or  if recvmsg returns an error after we\n+\t\t * received some datagrams, where we record the\n+\t\t * error to return on the next call or if the\n+\t\t * app asks about it using getsockopt(SO_ERROR).\n \t\t */\n-\t\tif (err != -EAGAIN) {\n-\t\t\t/*\n-\t\t\t * ... or  if recvmsg returns an error after we\n-\t\t\t * received some datagrams, where we record the\n-\t\t\t * error to return on the next call or if the\n-\t\t\t * app asks about it using getsockopt(SO_ERROR).\n-\t\t\t */\n-\t\t\tsock->sk->sk_err = -err;\n-\t\t}\n-\n-\t\treturn datagrams;\n+\t\tsock->sk->sk_err = -err;\n \t}\n+out_put:\n+\tfput_light(sock->file, fput_needed);\n \n-\treturn err;\n+\treturn datagrams;\n }\n \n SYSCALL_DEFINE5(recvmmsg, int, fd, struct mmsghdr __user *, mmsg,""}","int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
+		   unsigned int flags, struct timespec *timeout)
+{
+	int fput_needed, err, datagrams;
+	struct socket *sock;
+	struct mmsghdr __user *entry;
+	struct compat_mmsghdr __user *compat_entry;
+	struct msghdr msg_sys;
+	struct timespec end_time;
+
+	if (timeout &&
+	    poll_select_set_timeout(&end_time, timeout->tv_sec,
+				    timeout->tv_nsec))
+		return -EINVAL;
+
+	datagrams = 0;
+
+	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+	if (!sock)
+		return err;
+
+	err = sock_error(sock->sk);
+	if (err)
+		goto out_put;
+
+	entry = mmsg;
+	compat_entry = (struct compat_mmsghdr __user *)mmsg;
+
+	while (datagrams < vlen) {
+		/*
+		 * No need to ask LSM for more than the first datagram.
+		 */
+		if (MSG_CMSG_COMPAT & flags) {
+			err = ___sys_recvmsg(sock, (struct user_msghdr __user *)compat_entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = __put_user(err, &compat_entry->msg_len);
+			++compat_entry;
+		} else {
+			err = ___sys_recvmsg(sock,
+					     (struct user_msghdr __user *)entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = put_user(err, &entry->msg_len);
+			++entry;
+		}
+
+		if (err)
+			break;
+		++datagrams;
+
+		/* MSG_WAITFORONE turns on MSG_DONTWAIT after one packet */
+		if (flags & MSG_WAITFORONE)
+			flags |= MSG_DONTWAIT;
+
+		if (timeout) {
+			ktime_get_ts(timeout);
+			*timeout = timespec_sub(end_time, *timeout);
+			if (timeout->tv_sec < 0) {
+				timeout->tv_sec = timeout->tv_nsec = 0;
+				break;
+			}
+
+			/* Timeout, return less than vlen datagrams */
+			if (timeout->tv_nsec == 0 && timeout->tv_sec == 0)
+				break;
+		}
+
+		/* Out of band data, return right away */
+		if (msg_sys.msg_flags & MSG_OOB)
+			break;
+ 		cond_resched();
+ 	}
+ 
+ 	if (err == 0)
+		goto out_put;
+ 
+	if (datagrams == 0) {
+		datagrams = err;
+		goto out_put;
+	}
+
+	/*
+	 * We may return less entries than requested (vlen) if the
+	 * sock is non block and there aren't enough datagrams...
+	 */
+	if (err != -EAGAIN) {
+ 		/*
+		 * ... or  if recvmsg returns an error after we
+		 * received some datagrams, where we record the
+		 * error to return on the next call or if the
+		 * app asks about it using getsockopt(SO_ERROR).
+ 		 */
+		sock->sk->sk_err = -err;
+ 	}
+out_put:
+	fput_light(sock->file, fput_needed);
+ 
+	return datagrams;
+ }
+","int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
+		   unsigned int flags, struct timespec *timeout)
+{
+	int fput_needed, err, datagrams;
+	struct socket *sock;
+	struct mmsghdr __user *entry;
+	struct compat_mmsghdr __user *compat_entry;
+	struct msghdr msg_sys;
+	struct timespec end_time;
+
+	if (timeout &&
+	    poll_select_set_timeout(&end_time, timeout->tv_sec,
+				    timeout->tv_nsec))
+		return -EINVAL;
+
+	datagrams = 0;
+
+	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+	if (!sock)
+		return err;
+
+	err = sock_error(sock->sk);
+	if (err)
+		goto out_put;
+
+	entry = mmsg;
+	compat_entry = (struct compat_mmsghdr __user *)mmsg;
+
+	while (datagrams < vlen) {
+		/*
+		 * No need to ask LSM for more than the first datagram.
+		 */
+		if (MSG_CMSG_COMPAT & flags) {
+			err = ___sys_recvmsg(sock, (struct user_msghdr __user *)compat_entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = __put_user(err, &compat_entry->msg_len);
+			++compat_entry;
+		} else {
+			err = ___sys_recvmsg(sock,
+					     (struct user_msghdr __user *)entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = put_user(err, &entry->msg_len);
+			++entry;
+		}
+
+		if (err)
+			break;
+		++datagrams;
+
+		/* MSG_WAITFORONE turns on MSG_DONTWAIT after one packet */
+		if (flags & MSG_WAITFORONE)
+			flags |= MSG_DONTWAIT;
+
+		if (timeout) {
+			ktime_get_ts(timeout);
+			*timeout = timespec_sub(end_time, *timeout);
+			if (timeout->tv_sec < 0) {
+				timeout->tv_sec = timeout->tv_nsec = 0;
+				break;
+			}
+
+			/* Timeout, return less than vlen datagrams */
+			if (timeout->tv_nsec == 0 && timeout->tv_sec == 0)
+				break;
+		}
+
+		/* Out of band data, return right away */
+		if (msg_sys.msg_flags & MSG_OOB)
+			break;
+ 		cond_resched();
+ 	}
+ 
+out_put:
+	fput_light(sock->file, fput_needed);
+ 	if (err == 0)
+		return datagrams;
+ 
+	if (datagrams != 0) {
+ 		/*
+		 * We may return less entries than requested (vlen) if the
+		 * sock is non block and there aren't enough datagrams...
+ 		 */
+		if (err != -EAGAIN) {
+			/*
+			 * ... or  if recvmsg returns an error after we
+			 * received some datagrams, where we record the
+			 * error to return on the next call or if the
+			 * app asks about it using getsockopt(SO_ERROR).
+			 */
+			sock->sk->sk_err = -err;
+		}
+		return datagrams;
+ 	}
+ 
+	return err;
+ }
+",C,"		goto out_put;
+	if (datagrams == 0) {
+		datagrams = err;
+		goto out_put;
+	}
+
+	/*
+	 * We may return less entries than requested (vlen) if the
+	 * sock is non block and there aren't enough datagrams...
+	 */
+	if (err != -EAGAIN) {
+		 * ... or  if recvmsg returns an error after we
+		 * received some datagrams, where we record the
+		 * error to return on the next call or if the
+		 * app asks about it using getsockopt(SO_ERROR).
+		sock->sk->sk_err = -err;
+out_put:
+	fput_light(sock->file, fput_needed);
+	return datagrams;
+","out_put:
+	fput_light(sock->file, fput_needed);
+		return datagrams;
+	if (datagrams != 0) {
+		 * We may return less entries than requested (vlen) if the
+		 * sock is non block and there aren't enough datagrams...
+		if (err != -EAGAIN) {
+			/*
+			 * ... or  if recvmsg returns an error after we
+			 * received some datagrams, where we record the
+			 * error to return on the next call or if the
+			 * app asks about it using getsockopt(SO_ERROR).
+			 */
+			sock->sk->sk_err = -err;
+		}
+		return datagrams;
+	return err;
+",,"@@ -2244,31 +2244,31 @@ int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
+ 		cond_resched();
+ 	}
+ 
+-out_put:
+-	fput_light(sock->file, fput_needed);
+-
+ 	if (err == 0)
+-		return datagrams;
++		goto out_put;
+ 
+-	if (datagrams != 0) {
++	if (datagrams == 0) {
++		datagrams = err;
++		goto out_put;
++	}
++
++	/*
++	 * We may return less entries than requested (vlen) if the
++	 * sock is non block and there aren't enough datagrams...
++	 */
++	if (err != -EAGAIN) {
+ 		/*
+-		 * We may return less entries than requested (vlen) if the
+-		 * sock is non block and there aren't enough datagrams...
++		 * ... or  if recvmsg returns an error after we
++		 * received some datagrams, where we record the
++		 * error to return on the next call or if the
++		 * app asks about it using getsockopt(SO_ERROR).
+ 		 */
+-		if (err != -EAGAIN) {
+-			/*
+-			 * ... or  if recvmsg returns an error after we
+-			 * received some datagrams, where we record the
+-			 * error to return on the next call or if the
+-			 * app asks about it using getsockopt(SO_ERROR).
+-			 */
+-			sock->sk->sk_err = -err;
+-		}
+-
+-		return datagrams;
++		sock->sk->sk_err = -err;
+ 	}
++out_put:
++	fput_light(sock->file, fput_needed);
+ 
+-	return err;
++	return datagrams;
+ }
+ 
+ SYSCALL_DEFINE5(recvmmsg, int, fd, struct mmsghdr __user *, mmsg,",linux,34b88a68f26a75e4fded796f1a49c40f82234b7d,b6e4038262bc933f2ef5427b6bcd2607d02ba4bb,1,"int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
+		   unsigned int flags, struct timespec *timeout)
+{
+	int fput_needed, err, datagrams;
+	struct socket *sock;
+	struct mmsghdr __user *entry;
+	struct compat_mmsghdr __user *compat_entry;
+	struct msghdr msg_sys;
+	struct timespec end_time;
+
+	if (timeout &&
+	    poll_select_set_timeout(&end_time, timeout->tv_sec,
+				    timeout->tv_nsec))
+		return -EINVAL;
+
+	datagrams = 0;
+
+	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+	if (!sock)
+		return err;
+
+	err = sock_error(sock->sk);
+	if (err)
+		goto out_put;
+
+	entry = mmsg;
+	compat_entry = (struct compat_mmsghdr __user *)mmsg;
+
+	while (datagrams < vlen) {
+		/*
+		 * No need to ask LSM for more than the first datagram.
+		 */
+		if (MSG_CMSG_COMPAT & flags) {
+			err = ___sys_recvmsg(sock, (struct user_msghdr __user *)compat_entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = __put_user(err, &compat_entry->msg_len);
+			++compat_entry;
+		} else {
+			err = ___sys_recvmsg(sock,
+					     (struct user_msghdr __user *)entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = put_user(err, &entry->msg_len);
+			++entry;
+		}
+
+		if (err)
+			break;
+		++datagrams;
+
+		/* MSG_WAITFORONE turns on MSG_DONTWAIT after one packet */
+		if (flags & MSG_WAITFORONE)
+			flags |= MSG_DONTWAIT;
+
+		if (timeout) {
+			ktime_get_ts(timeout);
+			*timeout = timespec_sub(end_time, *timeout);
+			if (timeout->tv_sec < 0) {
+				timeout->tv_sec = timeout->tv_nsec = 0;
+				break;
+			}
+
+			/* Timeout, return less than vlen datagrams */
+			if (timeout->tv_nsec == 0 && timeout->tv_sec == 0)
+				break;
+		}
+
+		/* Out of band data, return right away */
+		if (msg_sys.msg_flags & MSG_OOB)
+			break;
+ 		cond_resched();
+ 	}
+ 
+//flaw_line_below:
+out_put:
+//flaw_line_below:
+	fput_light(sock->file, fput_needed);
+//flaw_line_below:
+
+ 	if (err == 0)
+//flaw_line_below:
+		return datagrams;
+//fix_flaw_line_below:
+//		goto out_put;
+ 
+//flaw_line_below:
+	if (datagrams != 0) {
+//fix_flaw_line_below:
+//	if (datagrams == 0) {
+//fix_flaw_line_below:
+//		datagrams = err;
+//fix_flaw_line_below:
+//		goto out_put;
+//fix_flaw_line_below:
+//	}
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//	/*
+//fix_flaw_line_below:
+//	 * We may return less entries than requested (vlen) if the
+//fix_flaw_line_below:
+//	 * sock is non block and there aren't enough datagrams...
+//fix_flaw_line_below:
+//	 */
+//fix_flaw_line_below:
+//	if (err != -EAGAIN) {
+ 		/*
+//flaw_line_below:
+		 * We may return less entries than requested (vlen) if the
+//flaw_line_below:
+		 * sock is non block and there aren't enough datagrams...
+//fix_flaw_line_below:
+//		 * ... or  if recvmsg returns an error after we
+//fix_flaw_line_below:
+//		 * received some datagrams, where we record the
+//fix_flaw_line_below:
+//		 * error to return on the next call or if the
+//fix_flaw_line_below:
+//		 * app asks about it using getsockopt(SO_ERROR).
+ 		 */
+//flaw_line_below:
+		if (err != -EAGAIN) {
+//flaw_line_below:
+			/*
+//flaw_line_below:
+			 * ... or  if recvmsg returns an error after we
+//flaw_line_below:
+			 * received some datagrams, where we record the
+//flaw_line_below:
+			 * error to return on the next call or if the
+//flaw_line_below:
+			 * app asks about it using getsockopt(SO_ERROR).
+//flaw_line_below:
+			 */
+//flaw_line_below:
+			sock->sk->sk_err = -err;
+//flaw_line_below:
+		}
+//flaw_line_below:
+
+//flaw_line_below:
+		return datagrams;
+//fix_flaw_line_below:
+//		sock->sk->sk_err = -err;
+ 	}
+//fix_flaw_line_below:
+//out_put:
+//fix_flaw_line_below:
+//	fput_light(sock->file, fput_needed);
+ 
+//flaw_line_below:
+	return err;
+//fix_flaw_line_below:
+//	return datagrams;
+ }
+",180133,"int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
+		   unsigned int flags, struct timespec *timeout)
+{
+	int fput_needed, err, datagrams;
+	struct socket *sock;
+	struct mmsghdr __user *entry;
+	struct compat_mmsghdr __user *compat_entry;
+	struct msghdr msg_sys;
+	struct timespec end_time;
+
+	if (timeout &&
+	    poll_select_set_timeout(&end_time, timeout->tv_sec,
+				    timeout->tv_nsec))
+		return -EINVAL;
+
+	datagrams = 0;
+
+	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+	if (!sock)
+		return err;
+
+	err = sock_error(sock->sk);
+	if (err)
+		goto out_put;
+
+	entry = mmsg;
+	compat_entry = (struct compat_mmsghdr __user *)mmsg;
+
+	while (datagrams < vlen) {
+		/*
+		 * No need to ask LSM for more than the first datagram.
+		 */
+		if (MSG_CMSG_COMPAT & flags) {
+			err = ___sys_recvmsg(sock, (struct user_msghdr __user *)compat_entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = __put_user(err, &compat_entry->msg_len);
+			++compat_entry;
+		} else {
+			err = ___sys_recvmsg(sock,
+					     (struct user_msghdr __user *)entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = put_user(err, &entry->msg_len);
+			++entry;
+		}
+
+		if (err)
+			break;
+		++datagrams;
+
+		/* MSG_WAITFORONE turns on MSG_DONTWAIT after one packet */
+		if (flags & MSG_WAITFORONE)
+			flags |= MSG_DONTWAIT;
+
+		if (timeout) {
+			ktime_get_ts(timeout);
+			*timeout = timespec_sub(end_time, *timeout);
+			if (timeout->tv_sec < 0) {
+				timeout->tv_sec = timeout->tv_nsec = 0;
+				break;
+			}
+
+			/* Timeout, return less than vlen datagrams */
+			if (timeout->tv_nsec == 0 && timeout->tv_sec == 0)
+				break;
+		}
+
+		/* Out of band data, return right away */
+		if (msg_sys.msg_flags & MSG_OOB)
+			break;
+ 		cond_resched();
+ 	}
+ 
+out_put:
+	fput_light(sock->file, fput_needed);
+ 	if (err == 0)
+		return datagrams;
+ 
+	if (datagrams != 0) {
+ 		/*
+		 * We may return less entries than requested (vlen) if the
+		 * sock is non block and there aren't enough datagrams...
+ 		 */
+		if (err != -EAGAIN) {
+			/*
+			 * ... or  if recvmsg returns an error after we
+			 * received some datagrams, where we record the
+			 * error to return on the next call or if the
+			 * app asks about it using getsockopt(SO_ERROR).
+			 */
+			sock->sk->sk_err = -err;
+		}
+		return datagrams;
+ 	}
+ 
+	return err;
+ }
+","int __sys_recvmmsg(int fd, struct mmsghdr __user *mmsg, unsigned int vlen,
+		   unsigned int flags, struct timespec *timeout)
+{
+	int fput_needed, err, datagrams;
+	struct socket *sock;
+	struct mmsghdr __user *entry;
+	struct compat_mmsghdr __user *compat_entry;
+	struct msghdr msg_sys;
+	struct timespec end_time;
+
+	if (timeout &&
+	    poll_select_set_timeout(&end_time, timeout->tv_sec,
+				    timeout->tv_nsec))
+		return -EINVAL;
+
+	datagrams = 0;
+
+	sock = sockfd_lookup_light(fd, &err, &fput_needed);
+	if (!sock)
+		return err;
+
+	err = sock_error(sock->sk);
+	if (err)
+		goto out_put;
+
+	entry = mmsg;
+	compat_entry = (struct compat_mmsghdr __user *)mmsg;
+
+	while (datagrams < vlen) {
+		/*
+		 * No need to ask LSM for more than the first datagram.
+		 */
+		if (MSG_CMSG_COMPAT & flags) {
+			err = ___sys_recvmsg(sock, (struct user_msghdr __user *)compat_entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = __put_user(err, &compat_entry->msg_len);
+			++compat_entry;
+		} else {
+			err = ___sys_recvmsg(sock,
+					     (struct user_msghdr __user *)entry,
+					     &msg_sys, flags & ~MSG_WAITFORONE,
+					     datagrams);
+			if (err < 0)
+				break;
+			err = put_user(err, &entry->msg_len);
+			++entry;
+		}
+
+		if (err)
+			break;
+		++datagrams;
+
+		/* MSG_WAITFORONE turns on MSG_DONTWAIT after one packet */
+		if (flags & MSG_WAITFORONE)
+			flags |= MSG_DONTWAIT;
+
+		if (timeout) {
+			ktime_get_ts(timeout);
+			*timeout = timespec_sub(end_time, *timeout);
+			if (timeout->tv_sec < 0) {
+				timeout->tv_sec = timeout->tv_nsec = 0;
+				break;
+			}
+
+			/* Timeout, return less than vlen datagrams */
+			if (timeout->tv_nsec == 0 && timeout->tv_sec == 0)
+				break;
+		}
+
+		/* Out of band data, return right away */
+		if (msg_sys.msg_flags & MSG_OOB)
+			break;
+ 		cond_resched();
+ 	}
+ 
+ 	if (err == 0)
+		goto out_put;
+ 
+	if (datagrams == 0) {
+		datagrams = err;
+		goto out_put;
+	}
+
+	/*
+	 * We may return less entries than requested (vlen) if the
+	 * sock is non block and there aren't enough datagrams...
+	 */
+	if (err != -EAGAIN) {
+ 		/*
+		 * ... or  if recvmsg returns an error after we
+		 * received some datagrams, where we record the
+		 * error to return on the next call or if the
+		 * app asks about it using getsockopt(SO_ERROR).
+ 		 */
+		sock->sk->sk_err = -err;
+ 	}
+out_put:
+	fput_light(sock->file, fput_needed);
+ 
+	return datagrams;
+ }
+","The provided code implements the `__sys_recvmmsg` function, which is responsible for receiving multiple messages from a socket in a Linux environment. It takes parameters such as a file descriptor, a user-space array of message headers, a maximum number of messages to receive, flags for message handling, and an optional timeout. The function checks for valid input, retrieves the socket associated with the file descriptor, and enters a loop to receive messages until the specified limit is reached or an error occurs. It handles compatibility for different message formats, manages timeouts, and ensures proper resource cleanup before returning the number of successfully received messages or an error code.","The code defines a function that facilitates the reception of multiple messages from a socket in a Linux system. It validates input parameters, retrieves the associated socket, and enters a loop to receive messages until a specified limit is reached or an error occurs. The function accommodates different message formats and manages timeouts to control the duration of the operation. It also ensures that resources are properly released after use. Ultimately, the function returns the count of successfully received messages or an error code, reflecting the outcome of the operation.","The vulnerability in the original code arises from improper handling of error conditions and resource management, particularly when the function encounters an error after successfully receiving some messages. In the fixed code, the logic was improved to ensure that if an error occurs after receiving datagrams, the function correctly updates the socket's error state using `sock->sk->sk_err = -err` and returns the number of datagrams received instead of an erroneous state. This change prevents potential misuse of the socket's state and ensures that the function behaves predictably, enhancing overall stability and security.","The vulnerability in the original code stemmed from inadequate error handling and resource management, particularly when an error occurred after successfully receiving some messages. This could lead to inconsistent socket states and potential misuse, as the function did not properly record the error for future reference. The fixed code addressed this issue by ensuring that if an error was encountered after receiving messages, the socket's error state was updated appropriately, and the function returned the count of successfully received messages. This change improved the reliability and predictability of the function's behavior, enhancing overall security.","The vulnerability was fixed by enhancing the error handling logic within the function. In the revised code, after an error occurs during message reception, the socket's error state is updated using `sock->sk->sk_err = -err`, ensuring that the error is recorded for future reference. Additionally, the function now returns the number of successfully received datagrams instead of an erroneous state when an error is encountered after some messages have been processed. This change ensures that the function behaves predictably and maintains the integrity of the socket's state, improving overall reliability and security.","The vulnerability was addressed by improving the error handling mechanism within the function. The updated code ensures that when an error occurs after successfully receiving some messages, the error state is properly recorded, allowing for accurate tracking of the socket's status. Additionally, the function now returns the count of successfully received messages instead of an erroneous value, which enhances the predictability of its behavior. These changes collectively ensure that the function maintains the integrity of the socket's state and provides a more reliable and secure operation overall.","CWE-755, CWE-391, CWE-248, CWE-460, CWE-703, CWE-388, CWE-394, CWE-390, CWE-544, CWE-252",N,-1.0,"4, 4","5,5","4,4","4,4"
+1,1,180609,180609,,Local,Not required,,CVE-2016-2085,https://www.cvedetails.com/cve/CVE-2016-2085/,CWE-19,Low,,Partial,,2016-04-27,2.1,"The evm_verify_hmac function in security/integrity/evm/evm_main.c in the Linux kernel before 4.5 does not properly copy data, which makes it easier for local users to forge MAC values via a timing side-channel attack.",2016-12-02,,1,https://github.com/torvalds/linux/commit/613317bd212c585c20796c10afe5daaa95d4b0a1,613317bd212c585c20796c10afe5daaa95d4b0a1,"EVM: Use crypto_memneq() for digest comparisons
+
+This patch fixes vulnerability CVE-2016-2085.  The problem exists
+because the vm_verify_hmac() function includes a use of memcmp().
+Unfortunately, this allows timing side channel attacks; specifically
+a MAC forgery complexity drop from 2^128 to 2^12.  This patch changes
+the memcmp() to the cryptographically safe crypto_memneq().
+
+Reported-by: Xiaofei Rex Guo <xiaofei.rex.guo@intel.com>
+Signed-off-by: Ryan Ware <ware@linux.intel.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Mimi Zohar <zohar@linux.vnet.ibm.com>
+Signed-off-by: James Morris <james.l.morris@oracle.com>",1,security/integrity/evm/evm_main.c,"{""sha"": ""e6ea9d4b1de91a8d58e3ccab0fd3cef222ea6fcd"", ""filename"": ""security/integrity/evm/evm_main.c"", ""status"": ""modified"", ""additions"": 2, ""deletions"": 1, ""changes"": 3, ""blob_url"": ""https://github.com/torvalds/linux/blob/613317bd212c585c20796c10afe5daaa95d4b0a1/security/integrity/evm/evm_main.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/613317bd212c585c20796c10afe5daaa95d4b0a1/security/integrity/evm/evm_main.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/security/integrity/evm/evm_main.c?ref=613317bd212c585c20796c10afe5daaa95d4b0a1"", ""patch"": ""@@ -23,6 +23,7 @@\n #include <linux/integrity.h>\n #include <linux/evm.h>\n #include <crypto/hash.h>\n+#include <crypto/algapi.h>\n #include \""evm.h\""\n \n int evm_initialized;\n@@ -148,7 +149,7 @@ static enum integrity_status evm_verify_hmac(struct dentry *dentry,\n \t\t\t\t   xattr_value_len, calc.digest);\n \t\tif (rc)\n \t\t\tbreak;\n-\t\trc = memcmp(xattr_data->digest, calc.digest,\n+\t\trc = crypto_memneq(xattr_data->digest, calc.digest,\n \t\t\t    sizeof(calc.digest));\n \t\tif (rc)\n \t\t\trc = -EINVAL;""}","static enum integrity_status evm_verify_hmac(struct dentry *dentry,
+					     const char *xattr_name,
+					     char *xattr_value,
+					     size_t xattr_value_len,
+					     struct integrity_iint_cache *iint)
+{
+	struct evm_ima_xattr_data *xattr_data = NULL;
+	struct evm_ima_xattr_data calc;
+	enum integrity_status evm_status = INTEGRITY_PASS;
+	int rc, xattr_len;
+
+	if (iint && iint->evm_status == INTEGRITY_PASS)
+		return iint->evm_status;
+
+	/* if status is not PASS, try to check again - against -ENOMEM */
+
+	/* first need to know the sig type */
+	rc = vfs_getxattr_alloc(dentry, XATTR_NAME_EVM, (char **)&xattr_data, 0,
+				GFP_NOFS);
+	if (rc <= 0) {
+		evm_status = INTEGRITY_FAIL;
+		if (rc == -ENODATA) {
+			rc = evm_find_protected_xattrs(dentry);
+			if (rc > 0)
+				evm_status = INTEGRITY_NOLABEL;
+			else if (rc == 0)
+				evm_status = INTEGRITY_NOXATTRS; /* new file */
+		} else if (rc == -EOPNOTSUPP) {
+			evm_status = INTEGRITY_UNKNOWN;
+		}
+		goto out;
+	}
+
+	xattr_len = rc;
+
+	/* check value type */
+	switch (xattr_data->type) {
+	case EVM_XATTR_HMAC:
+		rc = evm_calc_hmac(dentry, xattr_name, xattr_value,
+ 				   xattr_value_len, calc.digest);
+ 		if (rc)
+ 			break;
+		rc = crypto_memneq(xattr_data->digest, calc.digest,
+ 			    sizeof(calc.digest));
+ 		if (rc)
+ 			rc = -EINVAL;
+		break;
+	case EVM_IMA_XATTR_DIGSIG:
+		rc = evm_calc_hash(dentry, xattr_name, xattr_value,
+				xattr_value_len, calc.digest);
+		if (rc)
+			break;
+		rc = integrity_digsig_verify(INTEGRITY_KEYRING_EVM,
+					(const char *)xattr_data, xattr_len,
+					calc.digest, sizeof(calc.digest));
+		if (!rc) {
+			/* Replace RSA with HMAC if not mounted readonly and
+			 * not immutable
+			 */
+			if (!IS_RDONLY(d_backing_inode(dentry)) &&
+			    !IS_IMMUTABLE(d_backing_inode(dentry)))
+				evm_update_evmxattr(dentry, xattr_name,
+						    xattr_value,
+						    xattr_value_len);
+		}
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	if (rc)
+		evm_status = (rc == -ENODATA) ?
+				INTEGRITY_NOXATTRS : INTEGRITY_FAIL;
+out:
+	if (iint)
+		iint->evm_status = evm_status;
+	kfree(xattr_data);
+	return evm_status;
+}
+","static enum integrity_status evm_verify_hmac(struct dentry *dentry,
+					     const char *xattr_name,
+					     char *xattr_value,
+					     size_t xattr_value_len,
+					     struct integrity_iint_cache *iint)
+{
+	struct evm_ima_xattr_data *xattr_data = NULL;
+	struct evm_ima_xattr_data calc;
+	enum integrity_status evm_status = INTEGRITY_PASS;
+	int rc, xattr_len;
+
+	if (iint && iint->evm_status == INTEGRITY_PASS)
+		return iint->evm_status;
+
+	/* if status is not PASS, try to check again - against -ENOMEM */
+
+	/* first need to know the sig type */
+	rc = vfs_getxattr_alloc(dentry, XATTR_NAME_EVM, (char **)&xattr_data, 0,
+				GFP_NOFS);
+	if (rc <= 0) {
+		evm_status = INTEGRITY_FAIL;
+		if (rc == -ENODATA) {
+			rc = evm_find_protected_xattrs(dentry);
+			if (rc > 0)
+				evm_status = INTEGRITY_NOLABEL;
+			else if (rc == 0)
+				evm_status = INTEGRITY_NOXATTRS; /* new file */
+		} else if (rc == -EOPNOTSUPP) {
+			evm_status = INTEGRITY_UNKNOWN;
+		}
+		goto out;
+	}
+
+	xattr_len = rc;
+
+	/* check value type */
+	switch (xattr_data->type) {
+	case EVM_XATTR_HMAC:
+		rc = evm_calc_hmac(dentry, xattr_name, xattr_value,
+ 				   xattr_value_len, calc.digest);
+ 		if (rc)
+ 			break;
+		rc = memcmp(xattr_data->digest, calc.digest,
+ 			    sizeof(calc.digest));
+ 		if (rc)
+ 			rc = -EINVAL;
+		break;
+	case EVM_IMA_XATTR_DIGSIG:
+		rc = evm_calc_hash(dentry, xattr_name, xattr_value,
+				xattr_value_len, calc.digest);
+		if (rc)
+			break;
+		rc = integrity_digsig_verify(INTEGRITY_KEYRING_EVM,
+					(const char *)xattr_data, xattr_len,
+					calc.digest, sizeof(calc.digest));
+		if (!rc) {
+			/* Replace RSA with HMAC if not mounted readonly and
+			 * not immutable
+			 */
+			if (!IS_RDONLY(d_backing_inode(dentry)) &&
+			    !IS_IMMUTABLE(d_backing_inode(dentry)))
+				evm_update_evmxattr(dentry, xattr_name,
+						    xattr_value,
+						    xattr_value_len);
+		}
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	if (rc)
+		evm_status = (rc == -ENODATA) ?
+				INTEGRITY_NOXATTRS : INTEGRITY_FAIL;
+out:
+	if (iint)
+		iint->evm_status = evm_status;
+	kfree(xattr_data);
+	return evm_status;
+}
+",C,"		rc = crypto_memneq(xattr_data->digest, calc.digest,
+","		rc = memcmp(xattr_data->digest, calc.digest,
+",,"@@ -23,6 +23,7 @@
+ #include <linux/integrity.h>
+ #include <linux/evm.h>
+ #include <crypto/hash.h>
++#include <crypto/algapi.h>
+ #include ""evm.h""
+ 
+ int evm_initialized;
+@@ -148,7 +149,7 @@ static enum integrity_status evm_verify_hmac(struct dentry *dentry,
+ 				   xattr_value_len, calc.digest);
+ 		if (rc)
+ 			break;
+-		rc = memcmp(xattr_data->digest, calc.digest,
++		rc = crypto_memneq(xattr_data->digest, calc.digest,
+ 			    sizeof(calc.digest));
+ 		if (rc)
+ 			rc = -EINVAL;",linux,613317bd212c585c20796c10afe5daaa95d4b0a1,c05235d50f681bf685e7290cae05ab3b4fa493f3,1,"static enum integrity_status evm_verify_hmac(struct dentry *dentry,
+					     const char *xattr_name,
+					     char *xattr_value,
+					     size_t xattr_value_len,
+					     struct integrity_iint_cache *iint)
+{
+	struct evm_ima_xattr_data *xattr_data = NULL;
+	struct evm_ima_xattr_data calc;
+	enum integrity_status evm_status = INTEGRITY_PASS;
+	int rc, xattr_len;
+
+	if (iint && iint->evm_status == INTEGRITY_PASS)
+		return iint->evm_status;
+
+	/* if status is not PASS, try to check again - against -ENOMEM */
+
+	/* first need to know the sig type */
+	rc = vfs_getxattr_alloc(dentry, XATTR_NAME_EVM, (char **)&xattr_data, 0,
+				GFP_NOFS);
+	if (rc <= 0) {
+		evm_status = INTEGRITY_FAIL;
+		if (rc == -ENODATA) {
+			rc = evm_find_protected_xattrs(dentry);
+			if (rc > 0)
+				evm_status = INTEGRITY_NOLABEL;
+			else if (rc == 0)
+				evm_status = INTEGRITY_NOXATTRS; /* new file */
+		} else if (rc == -EOPNOTSUPP) {
+			evm_status = INTEGRITY_UNKNOWN;
+		}
+		goto out;
+	}
+
+	xattr_len = rc;
+
+	/* check value type */
+	switch (xattr_data->type) {
+	case EVM_XATTR_HMAC:
+		rc = evm_calc_hmac(dentry, xattr_name, xattr_value,
+ 				   xattr_value_len, calc.digest);
+ 		if (rc)
+ 			break;
+//flaw_line_below:
+		rc = memcmp(xattr_data->digest, calc.digest,
+//fix_flaw_line_below:
+//		rc = crypto_memneq(xattr_data->digest, calc.digest,
+ 			    sizeof(calc.digest));
+ 		if (rc)
+ 			rc = -EINVAL;
+		break;
+	case EVM_IMA_XATTR_DIGSIG:
+		rc = evm_calc_hash(dentry, xattr_name, xattr_value,
+				xattr_value_len, calc.digest);
+		if (rc)
+			break;
+		rc = integrity_digsig_verify(INTEGRITY_KEYRING_EVM,
+					(const char *)xattr_data, xattr_len,
+					calc.digest, sizeof(calc.digest));
+		if (!rc) {
+			/* Replace RSA with HMAC if not mounted readonly and
+			 * not immutable
+			 */
+			if (!IS_RDONLY(d_backing_inode(dentry)) &&
+			    !IS_IMMUTABLE(d_backing_inode(dentry)))
+				evm_update_evmxattr(dentry, xattr_name,
+						    xattr_value,
+						    xattr_value_len);
+		}
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	if (rc)
+		evm_status = (rc == -ENODATA) ?
+				INTEGRITY_NOXATTRS : INTEGRITY_FAIL;
+out:
+	if (iint)
+		iint->evm_status = evm_status;
+	kfree(xattr_data);
+	return evm_status;
+}
+",180609,"static enum integrity_status evm_verify_hmac(struct dentry *dentry,
+					     const char *xattr_name,
+					     char *xattr_value,
+					     size_t xattr_value_len,
+					     struct integrity_iint_cache *iint)
+{
+	struct evm_ima_xattr_data *xattr_data = NULL;
+	struct evm_ima_xattr_data calc;
+	enum integrity_status evm_status = INTEGRITY_PASS;
+	int rc, xattr_len;
+
+	if (iint && iint->evm_status == INTEGRITY_PASS)
+		return iint->evm_status;
+
+	/* if status is not PASS, try to check again - against -ENOMEM */
+
+	/* first need to know the sig type */
+	rc = vfs_getxattr_alloc(dentry, XATTR_NAME_EVM, (char **)&xattr_data, 0,
+				GFP_NOFS);
+	if (rc <= 0) {
+		evm_status = INTEGRITY_FAIL;
+		if (rc == -ENODATA) {
+			rc = evm_find_protected_xattrs(dentry);
+			if (rc > 0)
+				evm_status = INTEGRITY_NOLABEL;
+			else if (rc == 0)
+				evm_status = INTEGRITY_NOXATTRS; /* new file */
+		} else if (rc == -EOPNOTSUPP) {
+			evm_status = INTEGRITY_UNKNOWN;
+		}
+		goto out;
+	}
+
+	xattr_len = rc;
+
+	/* check value type */
+	switch (xattr_data->type) {
+	case EVM_XATTR_HMAC:
+		rc = evm_calc_hmac(dentry, xattr_name, xattr_value,
+ 				   xattr_value_len, calc.digest);
+ 		if (rc)
+ 			break;
+		rc = memcmp(xattr_data->digest, calc.digest,
+ 			    sizeof(calc.digest));
+ 		if (rc)
+ 			rc = -EINVAL;
+		break;
+	case EVM_IMA_XATTR_DIGSIG:
+		rc = evm_calc_hash(dentry, xattr_name, xattr_value,
+				xattr_value_len, calc.digest);
+		if (rc)
+			break;
+		rc = integrity_digsig_verify(INTEGRITY_KEYRING_EVM,
+					(const char *)xattr_data, xattr_len,
+					calc.digest, sizeof(calc.digest));
+		if (!rc) {
+			/* Replace RSA with HMAC if not mounted readonly and
+			 * not immutable
+			 */
+			if (!IS_RDONLY(d_backing_inode(dentry)) &&
+			    !IS_IMMUTABLE(d_backing_inode(dentry)))
+				evm_update_evmxattr(dentry, xattr_name,
+						    xattr_value,
+						    xattr_value_len);
+		}
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	if (rc)
+		evm_status = (rc == -ENODATA) ?
+				INTEGRITY_NOXATTRS : INTEGRITY_FAIL;
+out:
+	if (iint)
+		iint->evm_status = evm_status;
+	kfree(xattr_data);
+	return evm_status;
+}
+","static enum integrity_status evm_verify_hmac(struct dentry *dentry,
+					     const char *xattr_name,
+					     char *xattr_value,
+					     size_t xattr_value_len,
+					     struct integrity_iint_cache *iint)
+{
+	struct evm_ima_xattr_data *xattr_data = NULL;
+	struct evm_ima_xattr_data calc;
+	enum integrity_status evm_status = INTEGRITY_PASS;
+	int rc, xattr_len;
+
+	if (iint && iint->evm_status == INTEGRITY_PASS)
+		return iint->evm_status;
+
+	/* if status is not PASS, try to check again - against -ENOMEM */
+
+	/* first need to know the sig type */
+	rc = vfs_getxattr_alloc(dentry, XATTR_NAME_EVM, (char **)&xattr_data, 0,
+				GFP_NOFS);
+	if (rc <= 0) {
+		evm_status = INTEGRITY_FAIL;
+		if (rc == -ENODATA) {
+			rc = evm_find_protected_xattrs(dentry);
+			if (rc > 0)
+				evm_status = INTEGRITY_NOLABEL;
+			else if (rc == 0)
+				evm_status = INTEGRITY_NOXATTRS; /* new file */
+		} else if (rc == -EOPNOTSUPP) {
+			evm_status = INTEGRITY_UNKNOWN;
+		}
+		goto out;
+	}
+
+	xattr_len = rc;
+
+	/* check value type */
+	switch (xattr_data->type) {
+	case EVM_XATTR_HMAC:
+		rc = evm_calc_hmac(dentry, xattr_name, xattr_value,
+ 				   xattr_value_len, calc.digest);
+ 		if (rc)
+ 			break;
+		rc = crypto_memneq(xattr_data->digest, calc.digest,
+ 			    sizeof(calc.digest));
+ 		if (rc)
+ 			rc = -EINVAL;
+		break;
+	case EVM_IMA_XATTR_DIGSIG:
+		rc = evm_calc_hash(dentry, xattr_name, xattr_value,
+				xattr_value_len, calc.digest);
+		if (rc)
+			break;
+		rc = integrity_digsig_verify(INTEGRITY_KEYRING_EVM,
+					(const char *)xattr_data, xattr_len,
+					calc.digest, sizeof(calc.digest));
+		if (!rc) {
+			/* Replace RSA with HMAC if not mounted readonly and
+			 * not immutable
+			 */
+			if (!IS_RDONLY(d_backing_inode(dentry)) &&
+			    !IS_IMMUTABLE(d_backing_inode(dentry)))
+				evm_update_evmxattr(dentry, xattr_name,
+						    xattr_value,
+						    xattr_value_len);
+		}
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+
+	if (rc)
+		evm_status = (rc == -ENODATA) ?
+				INTEGRITY_NOXATTRS : INTEGRITY_FAIL;
+out:
+	if (iint)
+		iint->evm_status = evm_status;
+	kfree(xattr_data);
+	return evm_status;
+}
+","The `evm_verify_hmac` function verifies the integrity of a file's extended attributes (xattrs) using HMAC or digital signatures. It first checks if the integrity status is already marked as ""PASS"" in the provided cache; if not, it retrieves the EVM xattr data. Depending on the type of signature (HMAC or digital signature), it calculates the corresponding digest and compares it with the stored value. If the verification fails, it updates the integrity status accordingly. The function also handles various error conditions, such as missing data or unsupported operations, and cleans up allocated memory before returning the integrity status.","The code implements a function that verifies the integrity of a file's extended attributes by checking their associated signatures. It first assesses the current integrity status and retrieves the relevant attribute data. Depending on the type of signature, it calculates a digest and compares it to the stored value to determine if the integrity check passes or fails. The function also addresses various error scenarios, such as missing data or unsupported operations, and updates the integrity status accordingly. Finally, it ensures proper memory management by releasing any allocated resources before returning the integrity status.","The vulnerability in the original code stemmed from the use of `memcmp` to compare digests, which could lead to timing attacks, allowing an attacker to infer information about the comparison based on the time taken to execute. This was addressed in the fixed code by replacing `memcmp` with `crypto_memneq`, a constant-time comparison function that mitigates timing attacks by ensuring that the execution time remains consistent regardless of the input values. This change enhances the security of the integrity verification process by preventing attackers from gaining insights into the validity of the digests based on timing discrepancies.","The vulnerability in the original code was due to the use of a standard comparison method that could be exploited through timing attacks, allowing an attacker to deduce information about the integrity check based on the time taken for the comparison. This could potentially lead to unauthorized access or manipulation of data. The fix involved replacing this method with a constant-time comparison approach, which ensures that the execution time remains consistent regardless of the input values being compared. This change significantly enhances security by preventing attackers from gaining insights into the validity of the integrity checks based on timing variations.","The vulnerability was fixed by replacing the use of `memcmp` with `crypto_memneq` for comparing digests. The original `memcmp` function could reveal timing differences based on the comparison results, making it susceptible to timing attacks. By using `crypto_memneq`, the code ensures that the comparison is performed in constant time, regardless of the input values. This change prevents attackers from inferring information about the integrity of the data based on how long the comparison takes. As a result, the integrity verification process is more secure against potential exploitation through timing analysis.","The vulnerability was addressed by replacing a standard comparison method with a constant-time comparison approach. The original method could be exploited through timing attacks, allowing an attacker to infer information based on the duration of the comparison operation. The new approach ensures that the execution time remains consistent, regardless of the values being compared. This change effectively mitigates the risk of timing analysis, enhancing the security of the integrity verification process. As a result, the system is better protected against potential exploitation that could arise from discrepancies in timing during the comparison of critical data.","CWE-208, CWE-203, CWE-385, CWE-1254, CWE-361, CWE-362, CWE-1284, CWE-184, CWE-367, CWE-597",N,-1.0,"5, 5","5,5","5,5","5, 4"
+2,2,181958,181958,,Remote,Not required,Partial,CVE-2016-7540,https://www.cvedetails.com/cve/CVE-2016-7540/,CWE-19,Medium,,,,2017-04-20,4.3,coders/rgf.c in ImageMagick before 6.9.4-10 allows remote attackers to cause a denial of service (assertion failure) by converting an image to rgf format.,2017-05-08,DoS ,3,https://github.com/ImageMagick/ImageMagick/commit/a0108a892f9ea3c2bb1e7a49b7d71376c2ecbff7,a0108a892f9ea3c2bb1e7a49b7d71376c2ecbff7,"Fix abort when writing to rgf format
+
+The rgf format (LEGO MINDSTORMS EV3 images) caused a software abort because
+exception == NULL. When WriteRGFImage is called from WriteImage, it is only
+passed two parameters, not three. So, removed the extra parameter and use
+image->exception instead as in other coders.",5,coders/rgf.c,"{""sha"": ""e572f96d2441183b2e45850a6f8096f4ab2cc2b3"", ""filename"": ""coders/rgf.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 8, ""changes"": 13, ""blob_url"": ""https://github.com/ImageMagick/ImageMagick/blob/a0108a892f9ea3c2bb1e7a49b7d71376c2ecbff7/coders/rgf.c"", ""raw_url"": ""https://github.com/ImageMagick/ImageMagick/raw/a0108a892f9ea3c2bb1e7a49b7d71376c2ecbff7/coders/rgf.c"", ""contents_url"": ""https://api.github.com/repos/ImageMagick/ImageMagick/contents/coders/rgf.c?ref=a0108a892f9ea3c2bb1e7a49b7d71376c2ecbff7"", ""patch"": ""@@ -68,7 +68,7 @@\n   Forward declarations.\n */\n static MagickBooleanType\n-  WriteRGFImage(const ImageInfo *,Image *,ExceptionInfo *);\n+  WriteRGFImage(const ImageInfo *,Image *);\n \f\n /*\n %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%\n@@ -305,7 +305,7 @@ ModuleExport void UnregisterRGFImage(void)\n %  The format of the WriteRGFImage method is:\n %\n %      MagickBooleanType WriteRGFImage(const ImageInfo *image_info,\n-%        Image *image,ExceptionInfo *exception)\n+%        Image *image)\n %\n %  A description of each parameter follows.\n %\n@@ -316,8 +316,7 @@ ModuleExport void UnregisterRGFImage(void)\n %    o exception: return any errors or warnings in this structure.\n %\n */\n-static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,\n-  ExceptionInfo *exception)\n+static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image)\n {\n   MagickBooleanType\n     status;\n@@ -346,9 +345,7 @@ static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,\n   assert(image->signature == MagickSignature);\n   if (image->debug != MagickFalse)\n     (void) LogMagickEvent(TraceEvent,GetMagickModule(),\""%s\"",image->filename);\n-  assert(exception != (ExceptionInfo *) NULL);\n-  assert(exception->signature == MagickSignature);\n-  status=OpenBlob(image_info,image,WriteBinaryBlobMode,exception);\n+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,&image->exception);\n   if (status == MagickFalse)\n     return(status);\n   (void) TransformImageColorspace(image,sRGBColorspace);\n@@ -367,7 +364,7 @@ static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,\n   y=0;\n   for (y=0; y < (ssize_t) image->rows; y++)\n   {\n-    p=GetVirtualPixels(image,0,y,image->columns,1,exception);\n+    p=GetVirtualPixels(image,0,y,image->columns,1,&image->exception);\n     if (p == (const PixelPacket *) NULL)\n       break;\n     bit=0;""}","static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image)
+ {
+   MagickBooleanType
+     status;
+
+  int
+    bit;
+
+  register const PixelPacket
+    *p;
+
+  register ssize_t
+    x;
+
+  ssize_t
+    y;
+
+  unsigned char
+    byte;
+
+  /*
+    Open output image file.
+  */
+  assert(image_info != (const ImageInfo *) NULL);
+  assert(image_info->signature == MagickSignature);
+  assert(image != (Image *) NULL);
+   assert(image->signature == MagickSignature);
+   if (image->debug != MagickFalse)
+     (void) LogMagickEvent(TraceEvent,GetMagickModule(),""%s"",image->filename);
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,&image->exception);
+   if (status == MagickFalse)
+     return(status);
+   (void) TransformImageColorspace(image,sRGBColorspace);
+  if((image->columns > 255L) || (image->rows > 255L))
+    ThrowWriterException(ImageError,""Dimensions must be less than 255x255"");
+  /*
+    Write header (just the image dimensions)
+  */
+  (void) WriteBlobByte(image,image->columns & 0xff);
+  (void) WriteBlobByte(image,image->rows & 0xff);
+  /*
+    Convert MIFF to bit pixels.
+  */
+  (void) SetImageType(image,BilevelType);
+  x=0;
+   y=0;
+   for (y=0; y < (ssize_t) image->rows; y++)
+   {
+    p=GetVirtualPixels(image,0,y,image->columns,1,&image->exception);
+     if (p == (const PixelPacket *) NULL)
+       break;
+     bit=0;
+    byte=0;
+    for (x=0; x < (ssize_t) image->columns; x++)
+    {
+      byte>>=1;
+      if (GetPixelLuma(image,p) < (QuantumRange/2.0))
+        byte|=0x80;
+      bit++;
+      if (bit == 8)
+        {
+          /*
+            Write a bitmap byte to the image file.
+          */
+       	  (void) WriteBlobByte(image,byte);
+          bit=0;
+          byte=0;
+        }
+      p++;
+    }
+    if (bit != 0)
+      (void) WriteBlobByte(image,byte);
+    status=SetImageProgress(image,SaveImageTag,(MagickOffsetType) y,
+      image->rows);
+    if (status == MagickFalse)
+      break;
+  }
+  (void) CloseBlob(image);
+  return(MagickTrue);
+}
+","static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+  ExceptionInfo *exception)
+ {
+   MagickBooleanType
+     status;
+
+  int
+    bit;
+
+  register const PixelPacket
+    *p;
+
+  register ssize_t
+    x;
+
+  ssize_t
+    y;
+
+  unsigned char
+    byte;
+
+  /*
+    Open output image file.
+  */
+  assert(image_info != (const ImageInfo *) NULL);
+  assert(image_info->signature == MagickSignature);
+  assert(image != (Image *) NULL);
+   assert(image->signature == MagickSignature);
+   if (image->debug != MagickFalse)
+     (void) LogMagickEvent(TraceEvent,GetMagickModule(),""%s"",image->filename);
+  assert(exception != (ExceptionInfo *) NULL);
+  assert(exception->signature == MagickSignature);
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,exception);
+   if (status == MagickFalse)
+     return(status);
+   (void) TransformImageColorspace(image,sRGBColorspace);
+  if((image->columns > 255L) || (image->rows > 255L))
+    ThrowWriterException(ImageError,""Dimensions must be less than 255x255"");
+  /*
+    Write header (just the image dimensions)
+  */
+  (void) WriteBlobByte(image,image->columns & 0xff);
+  (void) WriteBlobByte(image,image->rows & 0xff);
+  /*
+    Convert MIFF to bit pixels.
+  */
+  (void) SetImageType(image,BilevelType);
+  x=0;
+   y=0;
+   for (y=0; y < (ssize_t) image->rows; y++)
+   {
+    p=GetVirtualPixels(image,0,y,image->columns,1,exception);
+     if (p == (const PixelPacket *) NULL)
+       break;
+     bit=0;
+    byte=0;
+    for (x=0; x < (ssize_t) image->columns; x++)
+    {
+      byte>>=1;
+      if (GetPixelLuma(image,p) < (QuantumRange/2.0))
+        byte|=0x80;
+      bit++;
+      if (bit == 8)
+        {
+          /*
+            Write a bitmap byte to the image file.
+          */
+       	  (void) WriteBlobByte(image,byte);
+          bit=0;
+          byte=0;
+        }
+      p++;
+    }
+    if (bit != 0)
+      (void) WriteBlobByte(image,byte);
+    status=SetImageProgress(image,SaveImageTag,(MagickOffsetType) y,
+      image->rows);
+    if (status == MagickFalse)
+      break;
+  }
+  (void) CloseBlob(image);
+  return(MagickTrue);
+}
+",C,"static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image)
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,&image->exception);
+    p=GetVirtualPixels(image,0,y,image->columns,1,&image->exception);
+","  ExceptionInfo *exception)
+  assert(exception != (ExceptionInfo *) NULL);
+  assert(exception->signature == MagickSignature);
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,exception);
+    p=GetVirtualPixels(image,0,y,image->columns,1,exception);
+",,"@@ -68,7 +68,7 @@
+   Forward declarations.
+ */
+ static MagickBooleanType
+-  WriteRGFImage(const ImageInfo *,Image *,ExceptionInfo *);
++  WriteRGFImage(const ImageInfo *,Image *);
+ 
+ /*
+ %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+@@ -305,7 +305,7 @@ ModuleExport void UnregisterRGFImage(void)
+ %  The format of the WriteRGFImage method is:
+ %
+ %      MagickBooleanType WriteRGFImage(const ImageInfo *image_info,
+-%        Image *image,ExceptionInfo *exception)
++%        Image *image)
+ %
+ %  A description of each parameter follows.
+ %
+@@ -316,8 +316,7 @@ ModuleExport void UnregisterRGFImage(void)
+ %    o exception: return any errors or warnings in this structure.
+ %
+ */
+-static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+-  ExceptionInfo *exception)
++static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image)
+ {
+   MagickBooleanType
+     status;
+@@ -346,9 +345,7 @@ static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+   assert(image->signature == MagickSignature);
+   if (image->debug != MagickFalse)
+     (void) LogMagickEvent(TraceEvent,GetMagickModule(),""%s"",image->filename);
+-  assert(exception != (ExceptionInfo *) NULL);
+-  assert(exception->signature == MagickSignature);
+-  status=OpenBlob(image_info,image,WriteBinaryBlobMode,exception);
++  status=OpenBlob(image_info,image,WriteBinaryBlobMode,&image->exception);
+   if (status == MagickFalse)
+     return(status);
+   (void) TransformImageColorspace(image,sRGBColorspace);
+@@ -367,7 +364,7 @@ static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+   y=0;
+   for (y=0; y < (ssize_t) image->rows; y++)
+   {
+-    p=GetVirtualPixels(image,0,y,image->columns,1,exception);
++    p=GetVirtualPixels(image,0,y,image->columns,1,&image->exception);
+     if (p == (const PixelPacket *) NULL)
+       break;
+     bit=0;",ImageMagick,a0108a892f9ea3c2bb1e7a49b7d71376c2ecbff7,8627a99c524c27b203cb14555046326b9d53d0d9,1,"static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+//flaw_line_below:
+  ExceptionInfo *exception)
+//fix_flaw_line_below:
+//static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image)
+ {
+   MagickBooleanType
+     status;
+
+  int
+    bit;
+
+  register const PixelPacket
+    *p;
+
+  register ssize_t
+    x;
+
+  ssize_t
+    y;
+
+  unsigned char
+    byte;
+
+  /*
+    Open output image file.
+  */
+  assert(image_info != (const ImageInfo *) NULL);
+  assert(image_info->signature == MagickSignature);
+  assert(image != (Image *) NULL);
+   assert(image->signature == MagickSignature);
+   if (image->debug != MagickFalse)
+     (void) LogMagickEvent(TraceEvent,GetMagickModule(),""%s"",image->filename);
+//flaw_line_below:
+  assert(exception != (ExceptionInfo *) NULL);
+//flaw_line_below:
+  assert(exception->signature == MagickSignature);
+//flaw_line_below:
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,exception);
+//fix_flaw_line_below:
+//  status=OpenBlob(image_info,image,WriteBinaryBlobMode,&image->exception);
+   if (status == MagickFalse)
+     return(status);
+   (void) TransformImageColorspace(image,sRGBColorspace);
+  if((image->columns > 255L) || (image->rows > 255L))
+    ThrowWriterException(ImageError,""Dimensions must be less than 255x255"");
+  /*
+    Write header (just the image dimensions)
+  */
+  (void) WriteBlobByte(image,image->columns & 0xff);
+  (void) WriteBlobByte(image,image->rows & 0xff);
+  /*
+    Convert MIFF to bit pixels.
+  */
+  (void) SetImageType(image,BilevelType);
+  x=0;
+   y=0;
+   for (y=0; y < (ssize_t) image->rows; y++)
+   {
+//flaw_line_below:
+    p=GetVirtualPixels(image,0,y,image->columns,1,exception);
+//fix_flaw_line_below:
+//    p=GetVirtualPixels(image,0,y,image->columns,1,&image->exception);
+     if (p == (const PixelPacket *) NULL)
+       break;
+     bit=0;
+    byte=0;
+    for (x=0; x < (ssize_t) image->columns; x++)
+    {
+      byte>>=1;
+      if (GetPixelLuma(image,p) < (QuantumRange/2.0))
+        byte|=0x80;
+      bit++;
+      if (bit == 8)
+        {
+          /*
+            Write a bitmap byte to the image file.
+          */
+       	  (void) WriteBlobByte(image,byte);
+          bit=0;
+          byte=0;
+        }
+      p++;
+    }
+    if (bit != 0)
+      (void) WriteBlobByte(image,byte);
+    status=SetImageProgress(image,SaveImageTag,(MagickOffsetType) y,
+      image->rows);
+    if (status == MagickFalse)
+      break;
+  }
+  (void) CloseBlob(image);
+  return(MagickTrue);
+}
+",181958,"static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+  ExceptionInfo *exception)
+ {
+   MagickBooleanType
+     status;
+
+  int
+    bit;
+
+  register const PixelPacket
+    *p;
+
+  register ssize_t
+    x;
+
+  ssize_t
+    y;
+
+  unsigned char
+    byte;
+
+  /*
+    Open output image file.
+  */
+  assert(image_info != (const ImageInfo *) NULL);
+  assert(image_info->signature == MagickSignature);
+  assert(image != (Image *) NULL);
+   assert(image->signature == MagickSignature);
+   if (image->debug != MagickFalse)
+     (void) LogMagickEvent(TraceEvent,GetMagickModule(),""%s"",image->filename);
+  assert(exception != (ExceptionInfo *) NULL);
+  assert(exception->signature == MagickSignature);
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,exception);
+   if (status == MagickFalse)
+     return(status);
+   (void) TransformImageColorspace(image,sRGBColorspace);
+  if((image->columns > 255L) || (image->rows > 255L))
+    ThrowWriterException(ImageError,""Dimensions must be less than 255x255"");
+  /*
+    Write header (just the image dimensions)
+  */
+  (void) WriteBlobByte(image,image->columns & 0xff);
+  (void) WriteBlobByte(image,image->rows & 0xff);
+  /*
+    Convert MIFF to bit pixels.
+  */
+  (void) SetImageType(image,BilevelType);
+  x=0;
+   y=0;
+   for (y=0; y < (ssize_t) image->rows; y++)
+   {
+    p=GetVirtualPixels(image,0,y,image->columns,1,exception);
+     if (p == (const PixelPacket *) NULL)
+       break;
+     bit=0;
+    byte=0;
+    for (x=0; x < (ssize_t) image->columns; x++)
+    {
+      byte>>=1;
+      if (GetPixelLuma(image,p) < (QuantumRange/2.0))
+        byte|=0x80;
+      bit++;
+      if (bit == 8)
+        {
+          /*
+            Write a bitmap byte to the image file.
+          */
+       	  (void) WriteBlobByte(image,byte);
+          bit=0;
+          byte=0;
+        }
+      p++;
+    }
+    if (bit != 0)
+      (void) WriteBlobByte(image,byte);
+    status=SetImageProgress(image,SaveImageTag,(MagickOffsetType) y,
+      image->rows);
+    if (status == MagickFalse)
+      break;
+  }
+  (void) CloseBlob(image);
+  return(MagickTrue);
+}
+","static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image,
+static MagickBooleanType WriteRGFImage(const ImageInfo *image_info,Image *image)
+ {
+   MagickBooleanType
+     status;
+
+  int
+    bit;
+
+  register const PixelPacket
+    *p;
+
+  register ssize_t
+    x;
+
+  ssize_t
+    y;
+
+  unsigned char
+    byte;
+
+  /*
+    Open output image file.
+  */
+  assert(image_info != (const ImageInfo *) NULL);
+  assert(image_info->signature == MagickSignature);
+  assert(image != (Image *) NULL);
+   assert(image->signature == MagickSignature);
+   if (image->debug != MagickFalse)
+     (void) LogMagickEvent(TraceEvent,GetMagickModule(),""%s"",image->filename);
+  status=OpenBlob(image_info,image,WriteBinaryBlobMode,&image->exception);
+   if (status == MagickFalse)
+     return(status);
+   (void) TransformImageColorspace(image,sRGBColorspace);
+  if((image->columns > 255L) || (image->rows > 255L))
+    ThrowWriterException(ImageError,""Dimensions must be less than 255x255"");
+  /*
+    Write header (just the image dimensions)
+  */
+  (void) WriteBlobByte(image,image->columns & 0xff);
+  (void) WriteBlobByte(image,image->rows & 0xff);
+  /*
+    Convert MIFF to bit pixels.
+  */
+  (void) SetImageType(image,BilevelType);
+  x=0;
+   y=0;
+   for (y=0; y < (ssize_t) image->rows; y++)
+   {
+    p=GetVirtualPixels(image,0,y,image->columns,1,&image->exception);
+     if (p == (const PixelPacket *) NULL)
+       break;
+     bit=0;
+    byte=0;
+    for (x=0; x < (ssize_t) image->columns; x++)
+    {
+      byte>>=1;
+      if (GetPixelLuma(image,p) < (QuantumRange/2.0))
+        byte|=0x80;
+      bit++;
+      if (bit == 8)
+        {
+          /*
+            Write a bitmap byte to the image file.
+          */
+       	  (void) WriteBlobByte(image,byte);
+          bit=0;
+          byte=0;
+        }
+      p++;
+    }
+    if (bit != 0)
+      (void) WriteBlobByte(image,byte);
+    status=SetImageProgress(image,SaveImageTag,(MagickOffsetType) y,
+      image->rows);
+    if (status == MagickFalse)
+      break;
+  }
+  (void) CloseBlob(image);
+  return(MagickTrue);
+}
+","The `WriteRGFImage` function is designed to write an image in a specific binary format, ensuring that the image dimensions do not exceed 255x255 pixels. It begins by validating input parameters and opening a binary output file. The function transforms the image colorspace to sRGB and sets the image type to Bilevel. It then writes the image dimensions as a header, followed by processing each pixel to convert it into a bit representation based on its luminance. The resulting bytes are written to the output file, and the function tracks progress before closing the file and returning a success status.","The code defines a function that writes an image in a specific binary format, ensuring the dimensions are within a defined limit. It begins by validating input parameters and opening a binary output file for writing. The image is transformed to a standard colorspace and set to a specific type. The function then writes the image dimensions as a header and processes each pixel to convert it into a binary representation based on its brightness. The resulting bytes are written to the output file, while progress is tracked, before closing the file and indicating successful completion.","The vulnerability in the original code arises from the lack of proper error handling when accessing pixel data, specifically when calling the `GetVirtualPixels` function. If this function fails, it could return a null pointer, leading to potential dereferencing of a null pointer in subsequent operations, which could cause a crash or undefined behavior. The fixed code addresses this issue by passing the address of the `exception` variable from the `image` structure to `GetVirtualPixels`, allowing for better error reporting and handling. This change ensures that any errors encountered during pixel retrieval are properly managed, enhancing the code's robustness.","The vulnerability in the original code stems from inadequate error handling when accessing pixel data, which could lead to dereferencing a null pointer if the pixel retrieval fails. This situation could result in crashes or unpredictable behavior during execution. The fixed code improves this by enhancing error reporting mechanisms, allowing for better management of any issues encountered during the pixel access process. By ensuring that errors are properly captured and handled, the revised code significantly increases its robustness and stability, preventing potential crashes and improving overall reliability.","The vulnerability was fixed by modifying the call to the `GetVirtualPixels` function to include the address of the `exception` variable from the `image` structure. This change allows the function to report any errors encountered during pixel retrieval, ensuring that if a null pointer is returned, the error can be properly handled. Additionally, the fixed code maintains the integrity of the program by preventing potential dereferencing of null pointers, which could lead to crashes. Overall, this enhancement improves error management and increases the robustness of the image processing functionality.","The vulnerability was addressed by enhancing the error handling mechanism during pixel data retrieval. The updated code ensures that any errors encountered are reported effectively, allowing the program to manage potential issues more gracefully. By incorporating a method to capture and handle exceptions, the revised implementation prevents the possibility of dereferencing null pointers, which could lead to crashes or undefined behavior. This improvement not only increases the stability of the code but also enhances its overall robustness, ensuring that the program can respond appropriately to errors during execution.","CWE-476, CWE-690, CWE-754, CWE-391, CWE-252, CWE-248, CWE-755, CWE-703, CWE-460, CWE-544",N,-1.0,"4,4","5,5","5,4","4,3"
+3,3,182092,182092,,Local,Not required,Complete,CVE-2006-5331,https://www.cvedetails.com/cve/CVE-2006-5331/,CWE-19,Low,,,,2017-10-29,4.9,"The altivec_unavailable_exception function in arch/powerpc/kernel/traps.c in the Linux kernel before 2.6.19 on 64-bit systems mishandles the case where CONFIG_ALTIVEC is defined and the CPU actually supports Altivec, but the Altivec support was not detected by the kernel, which allows local users to cause a denial of service (panic) by triggering execution of an Altivec instruction.",2017-11-17,DoS ,1,https://github.com/torvalds/linux/commit/6c4841c2b6c32a134f9f36e5e08857138cc12b10,6c4841c2b6c32a134f9f36e5e08857138cc12b10,"[POWERPC] Never panic when taking altivec exceptions from userspace
+
+At the moment we rely on a cpu feature bit or a firmware property to
+detect altivec. If we dont have either of these and the cpu does in fact
+support altivec we can cause a panic from userspace.
+
+It seems safer to always send a signal if we manage to get an 0xf20
+exception from userspace.
+
+Signed-off-by: Anton Blanchard <anton@samba.org>
+Signed-off-by: Paul Mackerras <paulus@samba.org>",2,arch/powerpc/kernel/traps.c,"{""sha"": ""5ed4c2ceb5caa8632c11f229193afe0596893650"", ""filename"": ""arch/powerpc/kernel/traps.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 2, ""changes"": 3, ""blob_url"": ""https://github.com/torvalds/linux/blob/6c4841c2b6c32a134f9f36e5e08857138cc12b10/arch/powerpc/kernel/traps.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/6c4841c2b6c32a134f9f36e5e08857138cc12b10/arch/powerpc/kernel/traps.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/arch/powerpc/kernel/traps.c?ref=6c4841c2b6c32a134f9f36e5e08857138cc12b10"", ""patch"": ""@@ -900,14 +900,13 @@ void kernel_fp_unavailable_exception(struct pt_regs *regs)\n \n void altivec_unavailable_exception(struct pt_regs *regs)\n {\n-#if !defined(CONFIG_ALTIVEC)\n \tif (user_mode(regs)) {\n \t\t/* A user program has executed an altivec instruction,\n \t\t   but this kernel doesn't support altivec. */\n \t\t_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);\n \t\treturn;\n \t}\n-#endif\n+\n \tprintk(KERN_EMERG \""Unrecoverable VMX/Altivec Unavailable Exception \""\n \t\t\t\""%lx at %lx\\n\"", regs->trap, regs->nip);\n \tdie(\""Unrecoverable VMX/Altivec Unavailable Exception\"", regs, SIGABRT);""}"," void altivec_unavailable_exception(struct pt_regs *regs)
+ {
+ 	if (user_mode(regs)) {
+ 		/* A user program has executed an altivec instruction,
+ 		   but this kernel doesn't support altivec. */
+ 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+ 		return;
+ 	}
+
+ 	printk(KERN_EMERG ""Unrecoverable VMX/Altivec Unavailable Exception ""
+ 			""%lx at %lx\n"", regs->trap, regs->nip);
+ 	die(""Unrecoverable VMX/Altivec Unavailable Exception"", regs, SIGABRT);
+}
+"," void altivec_unavailable_exception(struct pt_regs *regs)
+ {
+#if !defined(CONFIG_ALTIVEC)
+ 	if (user_mode(regs)) {
+ 		/* A user program has executed an altivec instruction,
+ 		   but this kernel doesn't support altivec. */
+ 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+ 		return;
+ 	}
+#endif
+ 	printk(KERN_EMERG ""Unrecoverable VMX/Altivec Unavailable Exception ""
+ 			""%lx at %lx\n"", regs->trap, regs->nip);
+ 	die(""Unrecoverable VMX/Altivec Unavailable Exception"", regs, SIGABRT);
+}
+",C,"
+","#if !defined(CONFIG_ALTIVEC)
+#endif
+",,"@@ -900,14 +900,13 @@ void kernel_fp_unavailable_exception(struct pt_regs *regs)
+ 
+ void altivec_unavailable_exception(struct pt_regs *regs)
+ {
+-#if !defined(CONFIG_ALTIVEC)
+ 	if (user_mode(regs)) {
+ 		/* A user program has executed an altivec instruction,
+ 		   but this kernel doesn't support altivec. */
+ 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+ 		return;
+ 	}
+-#endif
++
+ 	printk(KERN_EMERG ""Unrecoverable VMX/Altivec Unavailable Exception ""
+ 			""%lx at %lx\n"", regs->trap, regs->nip);
+ 	die(""Unrecoverable VMX/Altivec Unavailable Exception"", regs, SIGABRT);",linux,6c4841c2b6c32a134f9f36e5e08857138cc12b10,60b2a46cd60c54bd6551ddfa01f0aab08ca58a5d,1," void altivec_unavailable_exception(struct pt_regs *regs)
+ {
+//flaw_line_below:
+#if !defined(CONFIG_ALTIVEC)
+ 	if (user_mode(regs)) {
+ 		/* A user program has executed an altivec instruction,
+ 		   but this kernel doesn't support altivec. */
+ 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+ 		return;
+ 	}
+//flaw_line_below:
+#endif
+//fix_flaw_line_below:
+//
+ 	printk(KERN_EMERG ""Unrecoverable VMX/Altivec Unavailable Exception ""
+ 			""%lx at %lx\n"", regs->trap, regs->nip);
+ 	die(""Unrecoverable VMX/Altivec Unavailable Exception"", regs, SIGABRT);
+}
+",182092," void altivec_unavailable_exception(struct pt_regs *regs)
+ {
+#if !defined(CONFIG_ALTIVEC)
+ 	if (user_mode(regs)) {
+ 		/* A user program has executed an altivec instruction,
+ 		   but this kernel doesn't support altivec. */
+ 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+ 		return;
+ 	}
+#endif
+ 	printk(KERN_EMERG ""Unrecoverable VMX/Altivec Unavailable Exception ""
+ 			""%lx at %lx\n"", regs->trap, regs->nip);
+ 	die(""Unrecoverable VMX/Altivec Unavailable Exception"", regs, SIGABRT);
+}
+"," void altivec_unavailable_exception(struct pt_regs *regs)
+ {
+ 	if (user_mode(regs)) {
+ 		/* A user program has executed an altivec instruction,
+ 		   but this kernel doesn't support altivec. */
+ 		_exception(SIGILL, regs, ILL_ILLOPC, regs->nip);
+ 		return;
+ 	}
+
+ 	printk(KERN_EMERG ""Unrecoverable VMX/Altivec Unavailable Exception ""
+ 			""%lx at %lx\n"", regs->trap, regs->nip);
+ 	die(""Unrecoverable VMX/Altivec Unavailable Exception"", regs, SIGABRT);
+}
+","The provided code defines a function `altivec_unavailable_exception` that handles exceptions related to the Altivec instruction set when it is not supported by the kernel. If the exception occurs in user mode, it triggers an illegal instruction signal (SIGILL) indicating that a user program attempted to execute an unsupported Altivec instruction. If the exception occurs in kernel mode, it logs an emergency message detailing the exception and the instruction pointer at the time of the fault. Finally, it calls the `die` function to terminate the process with a SIGABRT signal, indicating a critical failure due to the unavailable Altivec feature.","The code defines a function that manages exceptions related to an unsupported instruction set in the kernel. When an exception occurs in user mode, it signals an illegal instruction error, indicating that a user program attempted to use an unsupported feature. In cases where the exception arises in kernel mode, it logs a critical error message that includes details about the exception and the instruction that caused it. Subsequently, the function terminates the process with a signal indicating a severe failure, highlighting the unavailability of the specific instruction set feature.","The vulnerability in the original code arises from the lack of a check for the availability of the Altivec instruction set before handling exceptions, which could lead to undefined behavior if a user program attempts to execute unsupported instructions. In the fixed code, the check for user mode remains, but the handling of the exception is streamlined, ensuring that the function only processes the exception if the instruction is indeed unsupported. This prevents potential exploitation by ensuring that the system responds appropriately to illegal instructions, thereby enhancing the overall security and stability of the kernel.","The vulnerability in the original code stems from inadequate handling of exceptions related to an unsupported instruction set, which could lead to improper responses when user programs attempt to execute these instructions. This oversight could result in undefined behavior or system instability. The fixed code addresses this issue by ensuring that exceptions are only processed when the instruction is confirmed to be unsupported, thereby providing a more robust response mechanism. This change enhances security by preventing potential exploitation and ensuring that the system behaves predictably when encountering illegal instructions, ultimately improving kernel stability.","The vulnerability was fixed by refining the exception handling logic within the function. In the original code, the handling of unsupported instructions lacked a clear distinction between user mode and kernel mode, which could lead to improper responses. The revised code maintains the check for user mode using the `user_mode` function, ensuring that if a user program executes an unsupported instruction, it triggers an illegal instruction signal through the `_exception` function. This structured approach allows for appropriate logging of the error with `printk` and a controlled termination of the process using the `die` function, enhancing overall system stability and security.","The vulnerability was fixed by improving the exception handling process to ensure that unsupported instructions are managed more effectively. The revised code introduces a clear distinction between user mode and kernel mode, allowing for appropriate responses based on the context of the exception. When an unsupported instruction is detected in user mode, the system now correctly triggers an illegal instruction signal, while also logging critical error information. This structured approach ensures that the system can respond predictably and securely to such exceptions, ultimately enhancing the stability and security of the overall environment.","CWE-755, CWE-248, CWE-391, CWE-703, CWE-754, CWE-395, CWE-388, CWE-697, CWE-Alps-1285, CWE-346",N,-1.0,"4, 5","4,4","4,4","3, 4"
+4,4,184619,184619,,Remote,Not required,Partial,CVE-2011-3927,https://www.cvedetails.com/cve/CVE-2011-3927/,CWE-19,Low,Partial,Partial,,2012-01-23,7.5,"Skia, as used in Google Chrome before 16.0.912.77, does not perform all required initialization of values, which allows remote attackers to cause a denial of service or possibly have unspecified other impact via unknown vectors.",2017-09-18,DoS ,11,https://github.com/chromium/chromium/commit/58ffd25567098d8ce9443b7c977382929d163b3d,58ffd25567098d8ce9443b7c977382929d163b3d,"[skia] not all convex paths are convex, so recompute convexity for the problematic ones
+https://bugs.webkit.org/show_bug.cgi?id=75960
+
+Reviewed by Stephen White.
+
+No new tests.
+See related chrome issue
+http://code.google.com/p/chromium/issues/detail?id=108605
+
+* platform/graphics/skia/GraphicsContextSkia.cpp:
+(WebCore::setPathFromConvexPoints):
+
+
+git-svn-id: svn://svn.chromium.org/blink/trunk@104609 bbb929c8-8fbe-4397-9dbb-9b2b20218538",1,third_party/WebKit/Source/WebCore/platform/graphics/skia/GraphicsContextSkia.cpp,"{""sha"": ""8710fc85b1d579e074c14b06e77c1c52fb6b1bf9"", ""filename"": ""third_party/WebKit/Source/WebCore/ChangeLog"", ""status"": ""modified"", ""additions"": 14, ""deletions"": 0, ""changes"": 14, ""blob_url"": ""https://github.com/chromium/chromium/blob/58ffd25567098d8ce9443b7c977382929d163b3d/third_party/WebKit/Source/WebCore/ChangeLog"", ""raw_url"": ""https://github.com/chromium/chromium/raw/58ffd25567098d8ce9443b7c977382929d163b3d/third_party/WebKit/Source/WebCore/ChangeLog"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/WebCore/ChangeLog?ref=58ffd25567098d8ce9443b7c977382929d163b3d"", ""patch"": ""@@ -1,3 +1,17 @@\n+2012-01-10  Mike Reed  <reed@google.com>\n+\n+        [skia] not all convex paths are convex, so recompute convexity for the problematic ones\n+        https://bugs.webkit.org/show_bug.cgi?id=75960\n+\n+        Reviewed by Stephen White.\n+\n+        No new tests.\n+        See related chrome issue\n+        http://code.google.com/p/chromium/issues/detail?id=108605\n+\n+        * platform/graphics/skia/GraphicsContextSkia.cpp:\n+        (WebCore::setPathFromConvexPoints):\n+\n 2012-01-10  Gavin Barraclough  <barraclough@apple.com>\n \n         Do not allow Array length to be set if it is non-configurable""}<_**next**_>{""sha"": ""db343615fb8840fc386b646fb2d057a4d3ae6936"", ""filename"": ""third_party/WebKit/Source/WebCore/platform/graphics/skia/GraphicsContextSkia.cpp"", ""status"": ""modified"", ""additions"": 11, ""deletions"": 1, ""changes"": 12, ""blob_url"": ""https://github.com/chromium/chromium/blob/58ffd25567098d8ce9443b7c977382929d163b3d/third_party/WebKit/Source/WebCore/platform/graphics/skia/GraphicsContextSkia.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/58ffd25567098d8ce9443b7c977382929d163b3d/third_party/WebKit/Source/WebCore/platform/graphics/skia/GraphicsContextSkia.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/WebCore/platform/graphics/skia/GraphicsContextSkia.cpp?ref=58ffd25567098d8ce9443b7c977382929d163b3d"", ""patch"": ""@@ -440,7 +440,17 @@ static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatP\n         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),\n                      WebCoreFloatToSkScalar(points[i].y()));\n     }\n-    path->setIsConvex(true);\n+\n+    /*  The code used to just blindly call this\n+            path->setIsConvex(true);\n+        But webkit can sometimes send us non-convex 4-point values, so we mark the path's\n+        convexity as unknown, so it will get computed by skia at draw time.\n+        See crbug.com 108605\n+    */\n+    SkPath::Convexity convexity = SkPath::kConvex_Convexity;\n+    if (numPoints == 4)\n+        convexity = SkPath::kUnknown_Convexity;\n+    path->setConvexity(convexity);\n }\n \n void GraphicsContext::drawConvexPolygon(size_t numPoints,""}","static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatPoint* points)
+{
+    path->incReserve(numPoints);
+    path->moveTo(WebCoreFloatToSkScalar(points[0].x()),
+                 WebCoreFloatToSkScalar(points[0].y()));
+    for (size_t i = 1; i < numPoints; ++i) {
+         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),
+                      WebCoreFloatToSkScalar(points[i].y()));
+     }
+
+    /*  The code used to just blindly call this
+            path->setIsConvex(true);
+        But webkit can sometimes send us non-convex 4-point values, so we mark the path's
+        convexity as unknown, so it will get computed by skia at draw time.
+        See crbug.com 108605
+    */
+    SkPath::Convexity convexity = SkPath::kConvex_Convexity;
+    if (numPoints == 4)
+        convexity = SkPath::kUnknown_Convexity;
+    path->setConvexity(convexity);
+ }
+","static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatPoint* points)
+{
+    path->incReserve(numPoints);
+    path->moveTo(WebCoreFloatToSkScalar(points[0].x()),
+                 WebCoreFloatToSkScalar(points[0].y()));
+    for (size_t i = 1; i < numPoints; ++i) {
+         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),
+                      WebCoreFloatToSkScalar(points[i].y()));
+     }
+    path->setIsConvex(true);
+ }
+",C,"
+    /*  The code used to just blindly call this
+            path->setIsConvex(true);
+        But webkit can sometimes send us non-convex 4-point values, so we mark the path's
+        convexity as unknown, so it will get computed by skia at draw time.
+        See crbug.com 108605
+    */
+    SkPath::Convexity convexity = SkPath::kConvex_Convexity;
+    if (numPoints == 4)
+        convexity = SkPath::kUnknown_Convexity;
+    path->setConvexity(convexity);
+","    path->setIsConvex(true);
+",,"@@ -440,7 +440,17 @@ static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatP
+         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),
+                      WebCoreFloatToSkScalar(points[i].y()));
+     }
+-    path->setIsConvex(true);
++
++    /*  The code used to just blindly call this
++            path->setIsConvex(true);
++        But webkit can sometimes send us non-convex 4-point values, so we mark the path's
++        convexity as unknown, so it will get computed by skia at draw time.
++        See crbug.com 108605
++    */
++    SkPath::Convexity convexity = SkPath::kConvex_Convexity;
++    if (numPoints == 4)
++        convexity = SkPath::kUnknown_Convexity;
++    path->setConvexity(convexity);
+ }
+ 
+ void GraphicsContext::drawConvexPolygon(size_t numPoints,",Chrome,58ffd25567098d8ce9443b7c977382929d163b3d,d18b03cf294a6f08e872e98b78f196ba20d37163,1,"static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatPoint* points)
+{
+    path->incReserve(numPoints);
+    path->moveTo(WebCoreFloatToSkScalar(points[0].x()),
+                 WebCoreFloatToSkScalar(points[0].y()));
+    for (size_t i = 1; i < numPoints; ++i) {
+         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),
+                      WebCoreFloatToSkScalar(points[i].y()));
+     }
+//flaw_line_below:
+    path->setIsConvex(true);
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//    /*  The code used to just blindly call this
+//fix_flaw_line_below:
+//            path->setIsConvex(true);
+//fix_flaw_line_below:
+//        But webkit can sometimes send us non-convex 4-point values, so we mark the path's
+//fix_flaw_line_below:
+//        convexity as unknown, so it will get computed by skia at draw time.
+//fix_flaw_line_below:
+//        See crbug.com 108605
+//fix_flaw_line_below:
+//    */
+//fix_flaw_line_below:
+//    SkPath::Convexity convexity = SkPath::kConvex_Convexity;
+//fix_flaw_line_below:
+//    if (numPoints == 4)
+//fix_flaw_line_below:
+//        convexity = SkPath::kUnknown_Convexity;
+//fix_flaw_line_below:
+//    path->setConvexity(convexity);
+ }
+",184619,"static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatPoint* points)
+{
+    path->incReserve(numPoints);
+    path->moveTo(WebCoreFloatToSkScalar(points[0].x()),
+                 WebCoreFloatToSkScalar(points[0].y()));
+    for (size_t i = 1; i < numPoints; ++i) {
+         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),
+                      WebCoreFloatToSkScalar(points[i].y()));
+     }
+    path->setIsConvex(true);
+ }
+","static void setPathFromConvexPoints(SkPath* path, size_t numPoints, const FloatPoint* points)
+{
+    path->incReserve(numPoints);
+    path->moveTo(WebCoreFloatToSkScalar(points[0].x()),
+                 WebCoreFloatToSkScalar(points[0].y()));
+    for (size_t i = 1; i < numPoints; ++i) {
+         path->lineTo(WebCoreFloatToSkScalar(points[i].x()),
+                      WebCoreFloatToSkScalar(points[i].y()));
+     }
+
+    /*  The code used to just blindly call this
+            path->setIsConvex(true);
+        But webkit can sometimes send us non-convex 4-point values, so we mark the path's
+        convexity as unknown, so it will get computed by skia at draw time.
+        See crbug.com 108605
+    */
+    SkPath::Convexity convexity = SkPath::kConvex_Convexity;
+    if (numPoints == 4)
+        convexity = SkPath::kUnknown_Convexity;
+    path->setConvexity(convexity);
+ }
+","The provided code defines a function `setPathFromConvexPoints` that constructs a Skia path using a series of convex points. It takes three parameters: a pointer to a `SkPath` object, the number of points, and an array of `FloatPoint` structures representing the coordinates. The function first reserves space in the path for the specified number of points, then initializes the path by moving to the first point's coordinates. It subsequently creates straight lines to each of the remaining points in the array. Finally, it marks the path as convex, indicating that the shape formed by the points does not intersect itself.","The code defines a function that creates a geometric path based on a set of convex points. It begins by reserving space for the specified number of points in the path. The function then sets the starting point of the path to the first point's coordinates. Following this, it sequentially adds straight line segments to connect each subsequent point in the provided array. After all points have been processed, the function marks the path as convex, indicating that the shape formed by the points is simple and does not intersect itself, ensuring a clear and defined outline.","The vulnerability in the original code stemmed from the assumption that all paths created from four points would be convex, leading to potential incorrect rendering when non-convex shapes were provided. This oversight could result in visual artifacts or unexpected behavior during drawing operations. The fixed code addresses this issue by introducing a check for the number of points; if there are exactly four points, it sets the path's convexity to unknown instead of convex. This change ensures that the rendering engine can accurately compute the path's convexity at draw time, preventing errors associated with incorrect assumptions about the shape's geometry.","The vulnerability in the original code arose from the incorrect assumption that all paths formed by four points would be convex, which could lead to rendering issues when non-convex shapes were encountered. This flaw could result in visual artifacts or unexpected behavior during the drawing process. The revised code mitigates this risk by introducing a conditional check for the number of points; specifically, it marks the convexity as unknown when there are four points. This adjustment allows the rendering engine to accurately determine the path's convexity at draw time, ensuring proper handling of various geometric configurations and preventing potential errors.","The vulnerability was fixed by modifying how the path's convexity is determined based on the number of points provided. In the original code, the function blindly set the path's convexity to convex, which could lead to issues when non-convex shapes were created with four points. The updated code introduces a conditional check that sets the convexity to unknown when the number of points equals four. This change allows the rendering engine to compute the correct convexity at draw time, ensuring that the path is accurately represented and preventing rendering errors associated with incorrect assumptions about the shape's geometry.","The vulnerability was addressed by changing the way the path's convexity is determined based on the number of points provided. Instead of assuming that all paths with four points are convex, the revised approach introduces a conditional check that marks the convexity as unknown for four-point shapes. This adjustment allows the rendering system to accurately assess the path's geometry at the time of drawing, ensuring that non-convex shapes are handled correctly. By implementing this logic, the fix prevents potential rendering issues and visual artifacts that could arise from incorrect assumptions about the shape's properties.","CWE-190, CWE-682, CWE-697, CWE-191, CWE-682, CWE-457, CWE-665, CWE-704, CWE-703, CWE-137",N,-1.0,"4,3","5,5","5,4","4, 4"
+5,5,186514,186514,,Remote,Not required,,CVE-2016-5225,https://www.cvedetails.com/cve/CVE-2016-5225/,CWE-19,Medium,,Partial,,2017-01-19,4.3,"Blink in Google Chrome prior to 55.0.2883.75 for Mac, Windows and Linux, and 55.0.2883.84 for Android incorrectly handled form actions, which allowed a remote attacker to bypass Content Security Policy via a crafted HTML page.",2018-01-04,Bypass ,5,https://github.com/chromium/chromium/commit/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0,4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0,"Enforce form-action CSP even when form.target is present.
+
+BUG=630332
+
+Review-Url: https://codereview.chromium.org/2464123004
+Cr-Commit-Position: refs/heads/master@{#429922}",3,third_party/WebKit/Source/core/html/HTMLFormElement.cpp,"{""sha"": ""7b22df1678c243254c0861227ada90d0d291a7c6"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank-expected.txt"", ""status"": ""added"", ""additions"": 13, ""deletions"": 0, ""changes"": 13, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank-expected.txt"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank-expected.txt"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank-expected.txt?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -0,0 +1,13 @@\n+CONSOLE MESSAGE: line 15: submit event fired.\n+CONSOLE ERROR: line 19: Refused to send form data to 'http://127.0.0.1:8000/navigation/resources/form-target.pl' because it violates the following Content Security Policy directive: \""form-action 'none'\"".\n+\n+CONSOLE MESSAGE: line 24: securitypolicyviolation event fired.\n+CONSOLE MESSAGE: line 25: securitypolicyviolation_event.documentURI=http://127.0.0.1:8000/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank.html\n+CONSOLE MESSAGE: line 26: securitypolicyviolation_event.blockedURI=http://127.0.0.1:8000/navigation/resources/form-target.pl\n+CONSOLE MESSAGE: line 27: securitypolicyviolation_event.violatedDirective=form-action\n+  \n+Tests that blocking form actions works correctly. If this test passes, you will see a console error, and will not see a page indicating a form was POSTed.\n+\n+============== Back Forward List ==============\n+curr->  http://127.0.0.1:8000/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank.html\n+===============================================""}<_**next**_>{""sha"": ""09103f5b1998e37db283dc7e0ddd65e98cab7ef4"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank.html"", ""status"": ""added"", ""additions"": 43, ""deletions"": 0, ""changes"": 43, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank.html"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank.html"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-blank.html?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -0,0 +1,43 @@\n+<!DOCTYPE html>\n+<html>\n+<head>\n+<meta http-equiv=\""Content-Security-Policy\"" content=\""form-action 'none'\"">\n+<script>\n+    if (window.testRunner) {\n+        testRunner.dumpAsText();\n+        testRunner.waitUntilDone();\n+        testRunner.clearBackForwardList();\n+        testRunner.dumpBackForwardList();\n+    }\n+\n+    window.addEventListener('load', function() {\n+        document.getElementById('theform').addEventListener('submit', function(e) {\n+            console.log('submit event fired.');\n+        });\n+\n+        setTimeout(function() {\n+            document.getElementById('submit').click();\n+        }, 0);\n+    });\n+\n+    document.addEventListener('securitypolicyviolation', function(e) {\n+        console.log('securitypolicyviolation event fired.');\n+        console.log('securitypolicyviolation_event.documentURI=' + e.documentURI);\n+        console.log('securitypolicyviolation_event.blockedURI=' + e.blockedURI);\n+        console.log('securitypolicyviolation_event.violatedDirective=' + e.violatedDirective);\n+        setTimeout(function() {\n+            testRunner.notifyDone();\n+        }, 0);\n+    });\n+</script>\n+</head>\n+<body>\n+    <form action='/navigation/resources/form-target.pl' id='theform'\n+          method='post' target=\""_blank\"">\n+        <input type='text' name='fieldname' value='fieldvalue'>\n+        <input type='submit' id='submit' value='submit'>\n+    </form>\n+\n+    <p>Tests that blocking form actions works correctly. If this test passes, you will see a console error, and will not see a page indicating a form was POSTed.</p>\n+</body>\n+</html>""}<_**next**_>{""sha"": ""957bce5a723faa41fc0fdc7e63df512af9713125"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window-expected.txt"", ""status"": ""added"", ""additions"": 9, ""deletions"": 0, ""changes"": 9, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window-expected.txt"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window-expected.txt"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window-expected.txt?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -0,0 +1,9 @@\n+CONSOLE MESSAGE: line 19: submit event fired.\n+CONSOLE ERROR: line 23: Refused to send form data to 'http://127.0.0.1:8000/navigation/resources/form-target.pl' because it violates the following Content Security Policy directive: \""form-action 'none'\"".\n+\n+CONSOLE MESSAGE: line 28: securitypolicyviolation event fired.\n+CONSOLE MESSAGE: line 29: securitypolicyviolation_event.documentURI=http://127.0.0.1:8000/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window.html\n+CONSOLE MESSAGE: line 30: securitypolicyviolation_event.blockedURI=http://127.0.0.1:8000/navigation/resources/form-target.pl\n+CONSOLE MESSAGE: line 31: securitypolicyviolation_event.violatedDirective=form-action\n+  \n+Tests that blocking form actions works correctly. If this test passes, you will see a console error, and will not see a page indicating a form was POSTed.""}<_**next**_>{""sha"": ""1b2dfe864fc8a1e7c62859fbeb70e6abed963f9e"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window.html"", ""status"": ""added"", ""additions"": 47, ""deletions"": 0, ""changes"": 47, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window.html"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window.html"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-blocked-when-target-cross-site-window.html?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -0,0 +1,47 @@\n+<!DOCTYPE html>\n+<html>\n+<head>\n+<meta http-equiv=\""Content-Security-Policy\"" content=\""form-action 'none'\"">\n+<script>\n+    if (window.testRunner) {\n+        testRunner.dumpAsText();\n+        testRunner.waitUntilDone();\n+        testRunner.setCanOpenWindows();\n+    }\n+\n+    // Open a new window with the name matching form.target attribute below.\n+    window.open(\n+        'http://localhost:8080/security/resources/empty.html',\n+        'namedCrossSiteWindow')\n+\n+    window.addEventListener('load', function() {\n+        document.getElementById('theform').addEventListener('submit', function(e) {\n+            console.log('submit event fired.');\n+        });\n+\n+        setTimeout(function() {\n+            document.getElementById('submit').click();\n+        }, 0);\n+    });\n+\n+    document.addEventListener('securitypolicyviolation', function(e) {\n+        console.log('securitypolicyviolation event fired.');\n+        console.log('securitypolicyviolation_event.documentURI=' + e.documentURI);\n+        console.log('securitypolicyviolation_event.blockedURI=' + e.blockedURI);\n+        console.log('securitypolicyviolation_event.violatedDirective=' + e.violatedDirective);\n+        setTimeout(function() {\n+            testRunner.notifyDone();\n+        }, 0);\n+    });\n+</script>\n+</head>\n+<body>\n+    <form action='/navigation/resources/form-target.pl' id='theform'\n+          method='post' target=\""namedCrossSiteWindow\"">\n+        <input type='text' name='fieldname' value='fieldvalue'>\n+        <input type='submit' id='submit' value='submit'>\n+    </form>\n+\n+    <p>Tests that blocking form actions works correctly. If this test passes, you will see a console error, and will not see a page indicating a form was POSTed.</p>\n+</body>\n+</html>""}<_**next**_>{""sha"": ""9e95b5d927f352e51d6925bc3620a776f35d3787"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked-expected.txt"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 1, ""changes"": 7, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked-expected.txt"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked-expected.txt"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked-expected.txt?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -1,5 +1,10 @@\n-CONSOLE ERROR: Refused to send form data to 'http://127.0.0.1:8000/navigation/resources/form-target.pl' because it violates the following Content Security Policy directive: \""form-action 'none'\"".\n+CONSOLE MESSAGE: line 15: submit event fired.\n+CONSOLE ERROR: line 19: Refused to send form data to 'http://127.0.0.1:8000/navigation/resources/form-target.pl' because it violates the following Content Security Policy directive: \""form-action 'none'\"".\n \n+CONSOLE MESSAGE: line 24: securitypolicyviolation event fired.\n+CONSOLE MESSAGE: line 25: securitypolicyviolation_event.documentURI=http://127.0.0.1:8000/security/contentSecurityPolicy/1.1/form-action-src-blocked.html\n+CONSOLE MESSAGE: line 26: securitypolicyviolation_event.blockedURI=http://127.0.0.1:8000/navigation/resources/form-target.pl\n+CONSOLE MESSAGE: line 27: securitypolicyviolation_event.violatedDirective=form-action\n   \n Tests that blocking form actions works correctly. If this test passes, you will see a console error, and will not see a page indicating a form was POSTed.\n ""}<_**next**_>{""sha"": ""b5bc0a3f413e1e946148975be530dccdfaf946d0"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked.html"", ""status"": ""modified"", ""additions"": 15, ""deletions"": 3, ""changes"": 18, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked.html"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked.html"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-blocked.html?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -9,14 +9,26 @@\n         testRunner.clearBackForwardList();\n         testRunner.dumpBackForwardList();\n     }\n+\n     window.addEventListener('load', function() {\n+        document.getElementById('theform').addEventListener('submit', function(e) {\n+            console.log('submit event fired.');\n+        });\n+\n         setTimeout(function() {\n             document.getElementById('submit').click();\n         }, 0);\n     });\n-    setTimeout(function () {\n-        testRunner.notifyDone();\n-    }, 1000);\n+\n+    document.addEventListener('securitypolicyviolation', function(e) {\n+        console.log('securitypolicyviolation event fired.');\n+        console.log('securitypolicyviolation_event.documentURI=' + e.documentURI);\n+        console.log('securitypolicyviolation_event.blockedURI=' + e.blockedURI);\n+        console.log('securitypolicyviolation_event.violatedDirective=' + e.violatedDirective);\n+        setTimeout(function() {\n+            testRunner.notifyDone();\n+        }, 0);\n+    });\n </script>\n </head>\n <body>""}<_**next**_>{""sha"": ""5f482cf28e871163391b21a85761662b42fb5c6a"", ""filename"": ""third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-get-blocked-expected.txt"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-get-blocked-expected.txt"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-get-blocked-expected.txt"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/LayoutTests/http/tests/security/contentSecurityPolicy/1.1/form-action-src-get-blocked-expected.txt?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -1,4 +1,4 @@\n-CONSOLE ERROR: Refused to send form data to 'http://127.0.0.1:8000/navigation/resources/form-target.pl?fieldname=fieldvalue' because it violates the following Content Security Policy directive: \""form-action 'none'\"".\n+CONSOLE ERROR: line 16: Refused to send form data to 'http://127.0.0.1:8000/navigation/resources/form-target.pl' because it violates the following Content Security Policy directive: \""form-action 'none'\"".\n \n   \n Tests that blocking form actions works correctly. If this test passes, you will see a console error, and will not see a page indicating a form was POSTed.""}<_**next**_>{""sha"": ""746f318784c9fbb967c94848593369c6cba6ce64"", ""filename"": ""third_party/WebKit/Source/core/html/HTMLFormElement.cpp"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 3, ""changes"": 8, ""blob_url"": ""https://github.com/chromium/chromium/blob/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/Source/core/html/HTMLFormElement.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0/third_party/WebKit/Source/core/html/HTMLFormElement.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/HTMLFormElement.cpp?ref=4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0"", ""patch"": ""@@ -416,10 +416,12 @@ void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {\n     return;\n   }\n \n+  if (!document().contentSecurityPolicy()->allowFormAction(\n+          submission->action())) {\n+    return;\n+  }\n+\n   if (protocolIsJavaScript(submission->action())) {\n-    if (!document().contentSecurityPolicy()->allowFormAction(\n-            submission->action()))\n-      return;\n     document().frame()->script().executeScriptIfJavaScriptURL(\n         submission->action(), this);\n     return;""}","void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {
+  DCHECK(submission->method() == FormSubmission::PostMethod ||
+         submission->method() == FormSubmission::GetMethod);
+  DCHECK(submission->data());
+  DCHECK(submission->form());
+  if (submission->action().isEmpty())
+    return;
+  if (document().isSandboxed(SandboxForms)) {
+    document().addConsoleMessage(ConsoleMessage::create(
+        SecurityMessageSource, ErrorMessageLevel,
+        ""Blocked form submission to '"" + submission->action().elidedString() +
+            ""' because the form's frame is sandboxed and the 'allow-forms' ""
+            ""permission is not set.""));
+     return;
+   }
+ 
+  if (!document().contentSecurityPolicy()->allowFormAction(
+          submission->action())) {
+    return;
+  }
+
+   if (protocolIsJavaScript(submission->action())) {
+     document().frame()->script().executeScriptIfJavaScriptURL(
+         submission->action(), this);
+     return;
+  }
+
+  Frame* targetFrame = document().frame()->findFrameForNavigation(
+      submission->target(), *document().frame());
+  if (!targetFrame) {
+    if (!LocalDOMWindow::allowPopUp(*document().frame()) &&
+        !UserGestureIndicator::utilizeUserGesture())
+      return;
+    targetFrame = document().frame();
+  } else {
+    submission->clearTarget();
+  }
+  if (!targetFrame->host())
+    return;
+
+  UseCounter::count(document(), UseCounter::FormsSubmitted);
+  if (MixedContentChecker::isMixedFormAction(document().frame(),
+                                             submission->action()))
+    UseCounter::count(document().frame(),
+                      UseCounter::MixedContentFormsSubmitted);
+
+  if (targetFrame->isLocalFrame()) {
+    toLocalFrame(targetFrame)
+        ->navigationScheduler()
+        .scheduleFormSubmission(&document(), submission);
+  } else {
+    FrameLoadRequest frameLoadRequest =
+        submission->createFrameLoadRequest(&document());
+    toRemoteFrame(targetFrame)->navigate(frameLoadRequest);
+  }
+}
+","void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {
+  DCHECK(submission->method() == FormSubmission::PostMethod ||
+         submission->method() == FormSubmission::GetMethod);
+  DCHECK(submission->data());
+  DCHECK(submission->form());
+  if (submission->action().isEmpty())
+    return;
+  if (document().isSandboxed(SandboxForms)) {
+    document().addConsoleMessage(ConsoleMessage::create(
+        SecurityMessageSource, ErrorMessageLevel,
+        ""Blocked form submission to '"" + submission->action().elidedString() +
+            ""' because the form's frame is sandboxed and the 'allow-forms' ""
+            ""permission is not set.""));
+     return;
+   }
+ 
+   if (protocolIsJavaScript(submission->action())) {
+    if (!document().contentSecurityPolicy()->allowFormAction(
+            submission->action()))
+      return;
+     document().frame()->script().executeScriptIfJavaScriptURL(
+         submission->action(), this);
+     return;
+  }
+
+  Frame* targetFrame = document().frame()->findFrameForNavigation(
+      submission->target(), *document().frame());
+  if (!targetFrame) {
+    if (!LocalDOMWindow::allowPopUp(*document().frame()) &&
+        !UserGestureIndicator::utilizeUserGesture())
+      return;
+    targetFrame = document().frame();
+  } else {
+    submission->clearTarget();
+  }
+  if (!targetFrame->host())
+    return;
+
+  UseCounter::count(document(), UseCounter::FormsSubmitted);
+  if (MixedContentChecker::isMixedFormAction(document().frame(),
+                                             submission->action()))
+    UseCounter::count(document().frame(),
+                      UseCounter::MixedContentFormsSubmitted);
+
+  if (targetFrame->isLocalFrame()) {
+    toLocalFrame(targetFrame)
+        ->navigationScheduler()
+        .scheduleFormSubmission(&document(), submission);
+  } else {
+    FrameLoadRequest frameLoadRequest =
+        submission->createFrameLoadRequest(&document());
+    toRemoteFrame(targetFrame)->navigate(frameLoadRequest);
+  }
+}
+",C,"  if (!document().contentSecurityPolicy()->allowFormAction(
+          submission->action())) {
+    return;
+  }
+
+","    if (!document().contentSecurityPolicy()->allowFormAction(
+            submission->action()))
+      return;
+",,"@@ -416,10 +416,12 @@ void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {
+     return;
+   }
+ 
++  if (!document().contentSecurityPolicy()->allowFormAction(
++          submission->action())) {
++    return;
++  }
++
+   if (protocolIsJavaScript(submission->action())) {
+-    if (!document().contentSecurityPolicy()->allowFormAction(
+-            submission->action()))
+-      return;
+     document().frame()->script().executeScriptIfJavaScriptURL(
+         submission->action(), this);
+     return;",Chrome,4ac4aff49c4c539bce6d8a0d8800c01324bb6bc0,2ad79b35d6c1a054c1f38681deff659cd2f3b00d,1,"void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {
+  DCHECK(submission->method() == FormSubmission::PostMethod ||
+         submission->method() == FormSubmission::GetMethod);
+  DCHECK(submission->data());
+  DCHECK(submission->form());
+  if (submission->action().isEmpty())
+    return;
+  if (document().isSandboxed(SandboxForms)) {
+    // FIXME: This message should be moved off the console once a solution to
+    // https://bugs.webkit.org/show_bug.cgi?id=103274 exists.
+    document().addConsoleMessage(ConsoleMessage::create(
+        SecurityMessageSource, ErrorMessageLevel,
+        ""Blocked form submission to '"" + submission->action().elidedString() +
+            ""' because the form's frame is sandboxed and the 'allow-forms' ""
+            ""permission is not set.""));
+     return;
+   }
+ 
+//fix_flaw_line_below:
+//  if (!document().contentSecurityPolicy()->allowFormAction(
+//fix_flaw_line_below:
+//          submission->action())) {
+//fix_flaw_line_below:
+//    return;
+//fix_flaw_line_below:
+//  }
+//fix_flaw_line_below:
+//
+   if (protocolIsJavaScript(submission->action())) {
+//flaw_line_below:
+    if (!document().contentSecurityPolicy()->allowFormAction(
+//flaw_line_below:
+            submission->action()))
+//flaw_line_below:
+      return;
+     document().frame()->script().executeScriptIfJavaScriptURL(
+         submission->action(), this);
+     return;
+  }
+
+  Frame* targetFrame = document().frame()->findFrameForNavigation(
+      submission->target(), *document().frame());
+  if (!targetFrame) {
+    if (!LocalDOMWindow::allowPopUp(*document().frame()) &&
+        !UserGestureIndicator::utilizeUserGesture())
+      return;
+    targetFrame = document().frame();
+  } else {
+    submission->clearTarget();
+  }
+  if (!targetFrame->host())
+    return;
+
+  UseCounter::count(document(), UseCounter::FormsSubmitted);
+  if (MixedContentChecker::isMixedFormAction(document().frame(),
+                                             submission->action()))
+    UseCounter::count(document().frame(),
+                      UseCounter::MixedContentFormsSubmitted);
+
+  // TODO(lukasza): Investigate if the code below can uniformly handle remote
+  // and local frames (i.e. by calling virtual Frame::navigate from a timer).
+  // See also https://goo.gl/95d2KA.
+  if (targetFrame->isLocalFrame()) {
+    toLocalFrame(targetFrame)
+        ->navigationScheduler()
+        .scheduleFormSubmission(&document(), submission);
+  } else {
+    FrameLoadRequest frameLoadRequest =
+        submission->createFrameLoadRequest(&document());
+    toRemoteFrame(targetFrame)->navigate(frameLoadRequest);
+  }
+}
+",186514,"void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {
+  DCHECK(submission->method() == FormSubmission::PostMethod ||
+         submission->method() == FormSubmission::GetMethod);
+  DCHECK(submission->data());
+  DCHECK(submission->form());
+  if (submission->action().isEmpty())
+    return;
+  if (document().isSandboxed(SandboxForms)) {
+    document().addConsoleMessage(ConsoleMessage::create(
+        SecurityMessageSource, ErrorMessageLevel,
+        ""Blocked form submission to '"" + submission->action().elidedString() +
+            ""' because the form's frame is sandboxed and the 'allow-forms' ""
+            ""permission is not set.""));
+     return;
+   }
+ 
+   if (protocolIsJavaScript(submission->action())) {
+    if (!document().contentSecurityPolicy()->allowFormAction(
+            submission->action()))
+      return;
+     document().frame()->script().executeScriptIfJavaScriptURL(
+         submission->action(), this);
+     return;
+  }
+
+  Frame* targetFrame = document().frame()->findFrameForNavigation(
+      submission->target(), *document().frame());
+  if (!targetFrame) {
+    if (!LocalDOMWindow::allowPopUp(*document().frame()) &&
+        !UserGestureIndicator::utilizeUserGesture())
+      return;
+    targetFrame = document().frame();
+  } else {
+    submission->clearTarget();
+  }
+  if (!targetFrame->host())
+    return;
+
+  UseCounter::count(document(), UseCounter::FormsSubmitted);
+  if (MixedContentChecker::isMixedFormAction(document().frame(),
+                                             submission->action()))
+    UseCounter::count(document().frame(),
+                      UseCounter::MixedContentFormsSubmitted);
+
+  if (targetFrame->isLocalFrame()) {
+    toLocalFrame(targetFrame)
+        ->navigationScheduler()
+        .scheduleFormSubmission(&document(), submission);
+  } else {
+    FrameLoadRequest frameLoadRequest =
+        submission->createFrameLoadRequest(&document());
+    toRemoteFrame(targetFrame)->navigate(frameLoadRequest);
+  }
+}
+","void HTMLFormElement::scheduleFormSubmission(FormSubmission* submission) {
+  DCHECK(submission->method() == FormSubmission::PostMethod ||
+         submission->method() == FormSubmission::GetMethod);
+  DCHECK(submission->data());
+  DCHECK(submission->form());
+  if (submission->action().isEmpty())
+    return;
+  if (document().isSandboxed(SandboxForms)) {
+    document().addConsoleMessage(ConsoleMessage::create(
+        SecurityMessageSource, ErrorMessageLevel,
+        ""Blocked form submission to '"" + submission->action().elidedString() +
+            ""' because the form's frame is sandboxed and the 'allow-forms' ""
+            ""permission is not set.""));
+     return;
+   }
+ 
+  if (!document().contentSecurityPolicy()->allowFormAction(
+          submission->action())) {
+    return;
+  }
+
+   if (protocolIsJavaScript(submission->action())) {
+     document().frame()->script().executeScriptIfJavaScriptURL(
+         submission->action(), this);
+     return;
+  }
+
+  Frame* targetFrame = document().frame()->findFrameForNavigation(
+      submission->target(), *document().frame());
+  if (!targetFrame) {
+    if (!LocalDOMWindow::allowPopUp(*document().frame()) &&
+        !UserGestureIndicator::utilizeUserGesture())
+      return;
+    targetFrame = document().frame();
+  } else {
+    submission->clearTarget();
+  }
+  if (!targetFrame->host())
+    return;
+
+  UseCounter::count(document(), UseCounter::FormsSubmitted);
+  if (MixedContentChecker::isMixedFormAction(document().frame(),
+                                             submission->action()))
+    UseCounter::count(document().frame(),
+                      UseCounter::MixedContentFormsSubmitted);
+
+  if (targetFrame->isLocalFrame()) {
+    toLocalFrame(targetFrame)
+        ->navigationScheduler()
+        .scheduleFormSubmission(&document(), submission);
+  } else {
+    FrameLoadRequest frameLoadRequest =
+        submission->createFrameLoadRequest(&document());
+    toRemoteFrame(targetFrame)->navigate(frameLoadRequest);
+  }
+}
+","The `scheduleFormSubmission` function in the `HTMLFormElement` class manages the submission of a form, ensuring it adheres to security and navigation constraints. It first checks the submission method (GET or POST) and validates the presence of data and a form. If the form is sandboxed without the 'allow-forms' permission, it logs a security message and aborts. The function also handles JavaScript protocol submissions by executing scripts if allowed by the content security policy. It determines the target frame for navigation, counts form submissions for analytics, and schedules the submission accordingly, either for local or remote frames.","The provided code manages the submission of a web form while enforcing security and navigation rules. It verifies that the submission method is valid and that necessary data is present. If the form is restricted by sandboxing, it logs a security warning and halts the process. The code also checks for JavaScript-based submissions, executing scripts if permitted by security policies. It identifies the appropriate target for navigation, counts the submission for usage analytics, and schedules the submission for either local or remote processing, ensuring compliance with mixed content policies and user gesture requirements.","The vulnerability in the original code stemmed from insufficient checks on the form submission action, particularly when the form was sandboxed. The lack of a proper validation mechanism allowed potentially unsafe submissions to proceed, which could lead to security issues such as cross-site scripting or data leakage. The fixed code addresses this by adding a check to ensure that the action is allowed by the content security policy through the `allowFormAction` function. This additional validation step prevents unauthorized actions from being executed, thereby enhancing the overall security of form submissions.","The vulnerability in the original code arose from inadequate validation of form submission actions, particularly when forms were sandboxed. This oversight allowed potentially harmful submissions to bypass security checks, increasing the risk of cross-site scripting and data exposure. The fixed code rectifies this issue by introducing a validation mechanism that ensures only actions permitted by the content security policy are executed. This additional layer of scrutiny effectively prevents unauthorized or unsafe actions from being processed, thereby significantly enhancing the security of form submissions and protecting against potential exploitation.","The vulnerability was fixed by adding a crucial validation step that checks whether the form submission action is allowed by the content security policy. In the updated code, the `allowFormAction` function is called to verify the action before proceeding with the submission. This ensures that only actions deemed safe by the security policy are executed. Additionally, the code maintains the existing checks for sandboxing and empty actions, reinforcing the overall security framework. By implementing these checks, the code effectively mitigates the risk of unauthorized submissions and enhances the protection against potential security threats.","The vulnerability was fixed by introducing a validation mechanism that ensures form submission actions are permitted by the content security policy. This additional check prevents potentially unsafe actions from being executed, particularly in scenarios where forms are sandboxed. The updated code enforces stricter security measures by verifying that only actions deemed safe can proceed, thereby reducing the risk of cross-site scripting and data exposure. By implementing these safeguards, the code enhances the overall security of form submissions, ensuring that unauthorized or harmful submissions are effectively blocked.","CWE-346, CWE-1021, CWE-79, CWE-285, CWE-693, CWE-602, CWE-284, CWE-434, CWE-915, CWE-601",N,-1.0,"4,4","5,5","4,4","4,4"
+6,6,187987,187987,,Local,Not required,Complete,CVE-2016-0808,https://www.cvedetails.com/cve/CVE-2016-0808/,CWE-19,Low,,,,2016-02-06,4.9,"Integer overflow in the getCoverageFormat12 function in CmapCoverage.cpp in the Minikin library in Android 5.x before 5.1.1 LMY49G and 6.x before 2016-02-01 allows attackers to cause a denial of service (continuous rebooting) via an application that triggers loading of a crafted TTF font, aka internal bug 25645298.",2016-03-14,DoS Overflow ,3,https://android.googlesource.com/platform/frameworks/minikin/+/ed4c8d79153baab7f26562afb8930652dfbf853b,ed4c8d79153baab7f26562afb8930652dfbf853b,"Avoid integer overflows in parsing fonts
+
+A malformed TTF can cause size calculations to overflow. This patch
+checks the maximum reasonable value so that the total size fits in 32
+bits. It also adds some explicit casting to avoid possible technical
+undefined behavior when parsing sized unsigned values.
+
+Bug: 25645298
+Change-Id: Id4716132041a6f4f1fbb73ec4e445391cf7d9616
+(cherry picked from commit 183c9ec2800baa2ce099ee260c6cbc6121cf1274)
+",1,libs/minikin/CmapCoverage.cpp,"{""filename"": ""libs/minikin/CmapCoverage.cpp"", ""raw_url"": ""https://android.googlesource.com/platform/frameworks/minikin/+/ed4c8d79153baab7f26562afb8930652dfbf853b/libs/minikin/CmapCoverage.cpp"", ""patch"": ""@@ -29,11 +29,12 @@\n\n \n // These could perhaps be optimized to use __builtin_bswap16 and friends.\n static uint32_t readU16(const uint8_t* data, size_t offset) {\n-    return data[offset] << 8 | data[offset + 1];\n+    return ((uint32_t)data[offset]) << 8 | ((uint32_t)data[offset + 1]);\n }\n \n static uint32_t readU32(const uint8_t* data, size_t offset) {\n-    return data[offset] << 24 | data[offset + 1] << 16 | data[offset + 2] << 8 | data[offset + 3];\n+    return ((uint32_t)data[offset]) << 24 | ((uint32_t)data[offset + 1]) << 16 |\n+        ((uint32_t)data[offset + 2]) << 8 | ((uint32_t)data[offset + 3]);\n }\n \n static void addRange(vector<uint32_t> &coverage, uint32_t start, uint32_t end) {\n@@ -101,11 +102,13 @@\n\n     const size_t kGroupSize = 12;\n     const size_t kStartCharCodeOffset = 0;\n     const size_t kEndCharCodeOffset = 4;\n+    const size_t kMaxNGroups = 0xfffffff0 / kGroupSize;  // protection against overflow\n+    // For all values < kMaxNGroups, kFirstGroupOffset + nGroups * kGroupSize fits in 32 bits.\n     if (kFirstGroupOffset > size) {\n         return false;\n     }\n     uint32_t nGroups = readU32(data, kNGroupsOffset);\n-    if (kFirstGroupOffset + nGroups * kGroupSize > size) {\n+    if (nGroups >= kMaxNGroups || kFirstGroupOffset + nGroups * kGroupSize > size) {\n         return false;\n     }\n     for (uint32_t i = 0; i < nGroups; i++) {\n""}","static bool getCoverageFormat12(vector<uint32_t>& coverage, const uint8_t* data, size_t size) {
+ const size_t kNGroupsOffset = 12;
+ const size_t kFirstGroupOffset = 16;
+
+     const size_t kGroupSize = 12;
+     const size_t kStartCharCodeOffset = 0;
+     const size_t kEndCharCodeOffset = 4;
+    const size_t kMaxNGroups = 0xfffffff0 / kGroupSize;  // protection against overflow
+    // For all values < kMaxNGroups, kFirstGroupOffset + nGroups * kGroupSize fits in 32 bits.
+     if (kFirstGroupOffset > size) {
+         return false;
+     }
+     uint32_t nGroups = readU32(data, kNGroupsOffset);
+    if (nGroups >= kMaxNGroups || kFirstGroupOffset + nGroups * kGroupSize > size) {
+         return false;
+     }
+     for (uint32_t i = 0; i < nGroups; i++) {
+ uint32_t groupOffset = kFirstGroupOffset + i * kGroupSize;
+ uint32_t start = readU32(data, groupOffset + kStartCharCodeOffset);
+ uint32_t end = readU32(data, groupOffset + kEndCharCodeOffset);
+        addRange(coverage, start, end + 1); // file is inclusive, vector is exclusive
+ }
+ return true;
+}
+","static bool getCoverageFormat12(vector<uint32_t>& coverage, const uint8_t* data, size_t size) {
+ const size_t kNGroupsOffset = 12;
+ const size_t kFirstGroupOffset = 16;
+
+     const size_t kGroupSize = 12;
+     const size_t kStartCharCodeOffset = 0;
+     const size_t kEndCharCodeOffset = 4;
+     if (kFirstGroupOffset > size) {
+         return false;
+     }
+     uint32_t nGroups = readU32(data, kNGroupsOffset);
+    if (kFirstGroupOffset + nGroups * kGroupSize > size) {
+         return false;
+     }
+     for (uint32_t i = 0; i < nGroups; i++) {
+ uint32_t groupOffset = kFirstGroupOffset + i * kGroupSize;
+ uint32_t start = readU32(data, groupOffset + kStartCharCodeOffset);
+ uint32_t end = readU32(data, groupOffset + kEndCharCodeOffset);
+        addRange(coverage, start, end + 1); // file is inclusive, vector is exclusive
+ }
+ return true;
+}
+",C,"    const size_t kMaxNGroups = 0xfffffff0 / kGroupSize;  // protection against overflow
+    // For all values < kMaxNGroups, kFirstGroupOffset + nGroups * kGroupSize fits in 32 bits.
+    if (nGroups >= kMaxNGroups || kFirstGroupOffset + nGroups * kGroupSize > size) {
+","    if (kFirstGroupOffset + nGroups * kGroupSize > size) {
+",,"@@ -29,11 +29,12 @@
+
+ 
+ // These could perhaps be optimized to use __builtin_bswap16 and friends.
+ static uint32_t readU16(const uint8_t* data, size_t offset) {
+-    return data[offset] << 8 | data[offset + 1];
++    return ((uint32_t)data[offset]) << 8 | ((uint32_t)data[offset + 1]);
+ }
+ 
+ static uint32_t readU32(const uint8_t* data, size_t offset) {
+-    return data[offset] << 24 | data[offset + 1] << 16 | data[offset + 2] << 8 | data[offset + 3];
++    return ((uint32_t)data[offset]) << 24 | ((uint32_t)data[offset + 1]) << 16 |
++        ((uint32_t)data[offset + 2]) << 8 | ((uint32_t)data[offset + 3]);
+ }
+ 
+ static void addRange(vector<uint32_t> &coverage, uint32_t start, uint32_t end) {
+@@ -101,11 +102,13 @@
+
+     const size_t kGroupSize = 12;
+     const size_t kStartCharCodeOffset = 0;
+     const size_t kEndCharCodeOffset = 4;
++    const size_t kMaxNGroups = 0xfffffff0 / kGroupSize;  // protection against overflow
++    // For all values < kMaxNGroups, kFirstGroupOffset + nGroups * kGroupSize fits in 32 bits.
+     if (kFirstGroupOffset > size) {
+         return false;
+     }
+     uint32_t nGroups = readU32(data, kNGroupsOffset);
+-    if (kFirstGroupOffset + nGroups * kGroupSize > size) {
++    if (nGroups >= kMaxNGroups || kFirstGroupOffset + nGroups * kGroupSize > size) {
+         return false;
+     }
+     for (uint32_t i = 0; i < nGroups; i++) {
+",Android,https://android.googlesource.com/platform/frameworks/minikin/+/ed4c8d79153baab7f26562afb8930652dfbf853b/,https://android.googlesource.com/platform/frameworks/minikin/+/ed4c8d79153baab7f26562afb8930652dfbf853b%5E/,1,"static bool getCoverageFormat12(vector<uint32_t>& coverage, const uint8_t* data, size_t size) {
+ const size_t kNGroupsOffset = 12;
+ const size_t kFirstGroupOffset = 16;
+
+     const size_t kGroupSize = 12;
+     const size_t kStartCharCodeOffset = 0;
+     const size_t kEndCharCodeOffset = 4;
+//fix_flaw_line_below:
+//    const size_t kMaxNGroups = 0xfffffff0 / kGroupSize;  // protection against overflow
+//fix_flaw_line_below:
+//    // For all values < kMaxNGroups, kFirstGroupOffset + nGroups * kGroupSize fits in 32 bits.
+     if (kFirstGroupOffset > size) {
+         return false;
+     }
+     uint32_t nGroups = readU32(data, kNGroupsOffset);
+//flaw_line_below:
+    if (kFirstGroupOffset + nGroups * kGroupSize > size) {
+//fix_flaw_line_below:
+//    if (nGroups >= kMaxNGroups || kFirstGroupOffset + nGroups * kGroupSize > size) {
+         return false;
+     }
+     for (uint32_t i = 0; i < nGroups; i++) {
+ uint32_t groupOffset = kFirstGroupOffset + i * kGroupSize;
+ uint32_t start = readU32(data, groupOffset + kStartCharCodeOffset);
+ uint32_t end = readU32(data, groupOffset + kEndCharCodeOffset);
+        addRange(coverage, start, end + 1); // file is inclusive, vector is exclusive
+ }
+ return true;
+}
+",187987,"static bool getCoverageFormat12(vector<uint32_t>& coverage, const uint8_t* data, size_t size) {
+ const size_t kNGroupsOffset = 12;
+ const size_t kFirstGroupOffset = 16;
+
+     const size_t kGroupSize = 12;
+     const size_t kStartCharCodeOffset = 0;
+     const size_t kEndCharCodeOffset = 4;
+     if (kFirstGroupOffset > size) {
+         return false;
+     }
+     uint32_t nGroups = readU32(data, kNGroupsOffset);
+    if (kFirstGroupOffset + nGroups * kGroupSize > size) {
+         return false;
+     }
+     for (uint32_t i = 0; i < nGroups; i++) {
+ uint32_t groupOffset = kFirstGroupOffset + i * kGroupSize;
+ uint32_t start = readU32(data, groupOffset + kStartCharCodeOffset);
+ uint32_t end = readU32(data, groupOffset + kEndCharCodeOffset);
+        addRange(coverage, start, end + 1); // file is inclusive, vector is exclusive
+ }
+ return true;
+}
+","static bool getCoverageFormat12(vector<uint32_t>& coverage, const uint8_t* data, size_t size) {
+ const size_t kNGroupsOffset = 12;
+ const size_t kFirstGroupOffset = 16;
+
+     const size_t kGroupSize = 12;
+     const size_t kStartCharCodeOffset = 0;
+     const size_t kEndCharCodeOffset = 4;
+    const size_t kMaxNGroups = 0xfffffff0 / kGroupSize;  // protection against overflow
+    // For all values < kMaxNGroups, kFirstGroupOffset + nGroups * kGroupSize fits in 32 bits.
+     if (kFirstGroupOffset > size) {
+         return false;
+     }
+     uint32_t nGroups = readU32(data, kNGroupsOffset);
+    if (nGroups >= kMaxNGroups || kFirstGroupOffset + nGroups * kGroupSize > size) {
+         return false;
+     }
+     for (uint32_t i = 0; i < nGroups; i++) {
+ uint32_t groupOffset = kFirstGroupOffset + i * kGroupSize;
+ uint32_t start = readU32(data, groupOffset + kStartCharCodeOffset);
+ uint32_t end = readU32(data, groupOffset + kEndCharCodeOffset);
+        addRange(coverage, start, end + 1); // file is inclusive, vector is exclusive
+ }
+ return true;
+}
+","The provided code defines a function `getCoverageFormat12` that processes a binary data array to extract character coverage information for a specific format. It first checks if the data size is sufficient to read the number of groups and their respective offsets. If valid, it reads the number of groups and iterates through each group to retrieve the start and end character codes. These codes are then used to populate a vector, `coverage`, with ranges of characters, ensuring that the end character is exclusive in the vector. The function returns a boolean indicating success or failure based on the validity of the data.","The code defines a function that processes a binary data array to extract character coverage information from a specific format. It begins by verifying that the data size is adequate to read the necessary group information. If the data is valid, it retrieves the number of groups and iterates through each one to obtain the start and end character codes. These codes are then used to populate a collection with character ranges, ensuring that the end character is treated as exclusive. The function ultimately returns a boolean value indicating whether the operation was successful or not.","The vulnerability in the original code arises from the lack of checks on the number of groups, which could lead to an integer overflow when calculating the total size required for reading character ranges. Specifically, if the number of groups exceeds a certain threshold, the calculation of `kFirstGroupOffset + nGroups * kGroupSize` could exceed the maximum value representable in 32 bits, resulting in incorrect memory access and potential buffer overflows. The fixed code introduces a safeguard by defining a maximum allowable number of groups, `kMaxNGroups`, ensuring that the function validates both the number of groups and the calculated offset before proceeding, thus preventing overflow-related vulnerabilities.","The vulnerability in the original code stems from insufficient validation of the number of groups, which could lead to integer overflow during calculations involving offsets. This oversight could allow for excessive memory access, potentially resulting in buffer overflows and undefined behavior. The revised code addresses this issue by introducing a maximum limit on the number of groups that can be processed. It ensures that both the number of groups and the resulting memory offsets are checked against this limit before any further operations are performed, thereby preventing the risk of overflow and enhancing overall code safety.","The vulnerability was fixed by introducing a maximum allowable number of groups, defined as `kMaxNGroups`, which prevents integer overflow during calculations. In the revised code, a check is added to ensure that the number of groups, `nGroups`, does not exceed this maximum limit. Additionally, the condition `kFirstGroupOffset + nGroups * kGroupSize` is validated against the data size to ensure it remains within bounds. These changes ensure that both the number of groups and the calculated offsets are safe, effectively preventing potential buffer overflows and enhancing the robustness of the function.","The vulnerability was addressed by implementing a safeguard that limits the maximum number of groups that can be processed, thereby preventing potential integer overflow during offset calculations. The revised code includes checks to ensure that the number of groups does not exceed this predefined limit and that the resulting memory offsets remain within the valid data size. By validating both the group count and the calculated offsets before proceeding with any operations, the updated implementation effectively mitigates the risk of buffer overflows and enhances the overall safety and reliability of the function.","CWE-190,CWE-680,CWE-119,CWE-191,CWE-789,CWE-131,CWE-129,CWE-120,CWE-400,CWE-194",N,-1.0,"4,4","5,5","4,4","5,5"

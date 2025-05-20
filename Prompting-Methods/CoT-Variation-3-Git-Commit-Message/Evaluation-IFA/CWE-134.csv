@@ -1,0 +1,103 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,180703,180703,,Remote,Not required,Complete,CVE-2015-8617,https://www.cvedetails.com/cve/CVE-2015-8617/,CWE-134,Low,Complete,Complete,,2016-01-19,10.0,"Format string vulnerability in the zend_throw_or_error function in Zend/zend_execute_API.c in PHP 7.x before 7.0.1 allows remote attackers to execute arbitrary code via format string specifiers in a string that is misused as a class name, leading to incorrect error handling.",2017-09-09,Exec Code ,1,https://github.com/php/php-src/commit/b101a6bbd4f2181c360bd38e7683df4a03cba83e,b101a6bbd4f2181c360bd38e7683df4a03cba83e,Use format string,1,Zend/zend_execute_API.c,"{""sha"": ""fdffed34b275775084eeaf943a12c992edac2e0c"", ""filename"": ""Zend/zend_execute_API.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/php/php-src/blob/b101a6bbd4f2181c360bd38e7683df4a03cba83e/Zend/zend_execute_API.c"", ""raw_url"": ""https://github.com/php/php-src/raw/b101a6bbd4f2181c360bd38e7683df4a03cba83e/Zend/zend_execute_API.c"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/Zend/zend_execute_API.c?ref=b101a6bbd4f2181c360bd38e7683df4a03cba83e"", ""patch"": ""@@ -218,7 +218,7 @@ static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce,\n \tzend_vspprintf(&message, 0, format, va);\n \n \tif (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {\n-\t\tzend_throw_error(exception_ce, message);\n+\t\tzend_throw_error(exception_ce, \""%s\"", message);\n \t} else {\n \t\tzend_error(E_ERROR, \""%s\"", message);\n \t}""}","static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+","static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+",C,"		zend_throw_error(exception_ce, ""%s"", message);
+","		zend_throw_error(exception_ce, message);
+",,"@@ -218,7 +218,7 @@ static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce,
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+-		zend_throw_error(exception_ce, message);
++		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}",php-src,b101a6bbd4f2181c360bd38e7683df4a03cba83e,e0691d27d5b83122c78b9a3c4e2cd0aadf57fcb7,1,"static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+//flaw_line_below:
+		zend_throw_error(exception_ce, message);
+//fix_flaw_line_below:
+//		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+",180703,"static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+	zend_vspprintf(&message, 0, format, va);
+
+	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, message);
+	} else {
+		zend_error(E_ERROR, ""%s"", message);
+	}
+
+	efree(message);
+	va_end(va);
+}","static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+","The `zend_throw_or_error` function is designed to handle error reporting and exception throwing in a Zend-based environment. It takes a `fetch_type` to determine the action to perform, an `exception_ce` representing the class of the exception to throw, and a formatted string `format` with variable arguments for the error message. The function constructs the error message using `zend_vspprintf`, then checks the `fetch_type`: if it includes `ZEND_FETCH_CLASS_EXCEPTION`, it throws the specified exception; otherwise, it triggers a fatal error using `zend_error`. Finally, it frees the allocated message memory before ending the variable argument list.","The provided code defines a function that manages error handling by either throwing an exception or reporting a fatal error based on a specified condition. It begins by preparing a formatted error message using a variable argument list. Depending on the condition, it either throws an exception of a specified class or triggers a fatal error with the constructed message. After executing the appropriate action, the function ensures that any allocated memory for the message is properly released, maintaining efficient memory management. This approach allows for flexible error handling in a structured programming environment.","The vulnerability in the original code stemmed from directly passing a user-controlled message to the error handling functions, which could lead to format string vulnerabilities if the format string contained unexpected specifiers. This could allow an attacker to manipulate the output or even execute arbitrary code. The fix involved changing the call to `zend_throw_error` to use a format string (""%s"") explicitly, ensuring that the message is treated as a string rather than allowing any format specifiers to be interpreted. This change mitigates the risk of format string attacks by controlling how the message is processed.","The vulnerability in the original code arose from the potential for format string attacks, where user-controlled input could be passed directly to error handling functions without proper formatting controls. This could allow an attacker to exploit the system by injecting format specifiers, leading to unintended behavior or information disclosure. The fix addressed this issue by explicitly using a format string in the error handling calls, ensuring that the input is treated strictly as a string. This change effectively mitigates the risk by preventing any unintended interpretation of the input, thereby enhancing the security of the error handling process.","The vulnerability was fixed by modifying the call to `zend_throw_error` to include a specific format string (""%s"") when passing the message. In the original code, the message was passed directly, which could lead to format string vulnerabilities if the message contained format specifiers. By explicitly using the format string, the updated code ensures that the message is treated as a simple string, preventing any unintended interpretation of format specifiers. This change enhances security by controlling how the message is processed, thereby mitigating the risk of exploitation through format string attacks.","The vulnerability was fixed by ensuring that user-controlled input is handled safely when reporting errors. The updated code introduced a specific format string for the error handling function, which prevents any unintended interpretation of the input as format specifiers. This change ensures that the input is treated strictly as a string, eliminating the risk of format string attacks that could lead to information disclosure or arbitrary code execution. By controlling how the input is processed, the fix enhances the overall security of the error handling mechanism, safeguarding against potential exploitation.","4, 4","5,5","4,4","4,4","CWE-134, CWE-94, CWE-89, CWE-78, CWE-74, CWE-119, CWE-200, CWE-79, CWE-22, CWE-20",Y,1.0

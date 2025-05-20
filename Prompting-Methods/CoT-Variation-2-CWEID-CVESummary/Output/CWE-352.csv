@@ -1,0 +1,222 @@
+,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic
+0,182508,182508,,Remote,Not required,Complete,CVE-2018-6651,https://www.cvedetails.com/cve/CVE-2018-6651/,CWE-352,Medium,Complete,Complete,,2018-02-05,9.3,"In the uncurl_ws_accept function in uncurl.c in uncurl before 0.07, as used in Parsec before 140-3, insufficient Origin header validation (accepting an arbitrary substring match) for WebSocket API requests allows remote attackers to bypass intended access restrictions. In Parsec, this means full control over the victim's computer.",2019-10-09,Bypass ,5,https://github.com/chrisd1100/uncurl/commit/448cd13e7b18c83855d706c564341ddd1e38e769,448cd13e7b18c83855d706c564341ddd1e38e769,origin matching must come at str end,2,src/uncurl.c,"{""sha"": ""9ea8642b597f3d58f3c4a53dc4ca42f050a5a5a2"", ""filename"": ""src/uncurl.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 2, ""changes"": 7, ""blob_url"": ""https://github.com/chrisd1100/uncurl/blob/448cd13e7b18c83855d706c564341ddd1e38e769/src/uncurl.c"", ""raw_url"": ""https://github.com/chrisd1100/uncurl/raw/448cd13e7b18c83855d706c564341ddd1e38e769/src/uncurl.c"", ""contents_url"": ""https://api.github.com/repos/chrisd1100/uncurl/contents/src/uncurl.c?ref=448cd13e7b18c83855d706c564341ddd1e38e769"", ""patch"": ""@@ -536,9 +536,12 @@ UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins,\n \te = uncurl_get_header_str(ucc, \""Origin\"", &origin);\n \tif (e != UNCURL_OK) return e;\n \n+\t//the substring MUST came at the end of the origin header, thus a strstr AND a strcmp\n \tbool origin_ok = false;\n-\tfor (int32_t x = 0; x < n_origins; x++)\n-\t\tif (strstr(origin, origins[x])) {origin_ok = true; break;}\n+\tfor (int32_t x = 0; x < n_origins; x++) {\n+\t\tchar *match = strstr(origin, origins[x]);\n+\t\tif (match && !strcmp(match, origins[x])) {origin_ok = true; break;}\n+\t}\n \n \tif (!origin_ok) return UNCURL_WS_ERR_ORIGIN;\n ""}","UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins, int32_t n_origins)
+{
+	int32_t e;
+
+	e = uncurl_read_header(ucc);
+	if (e != UNCURL_OK) return e;
+
+	uncurl_set_header_str(ucc, ""Upgrade"", ""websocket"");
+	uncurl_set_header_str(ucc, ""Connection"", ""Upgrade"");
+
+	char *origin = NULL;
+ 	e = uncurl_get_header_str(ucc, ""Origin"", &origin);
+ 	if (e != UNCURL_OK) return e;
+ 
+	//the substring MUST came at the end of the origin header, thus a strstr AND a strcmp
+ 	bool origin_ok = false;
+	for (int32_t x = 0; x < n_origins; x++) {
+		char *match = strstr(origin, origins[x]);
+		if (match && !strcmp(match, origins[x])) {origin_ok = true; break;}
+	}
+ 
+ 	if (!origin_ok) return UNCURL_WS_ERR_ORIGIN;
+ 
+	char *sec_key = NULL;
+	e = uncurl_get_header_str(ucc, ""Sec-WebSocket-Key"", &sec_key);
+	if (e != UNCURL_OK) return e;
+
+	char *accept_key = ws_create_accept_key(sec_key);
+	uncurl_set_header_str(ucc, ""Sec-WebSocket-Accept"", accept_key);
+	free(accept_key);
+
+	e = uncurl_write_header(ucc, ""101"", ""Switching Protocols"", UNCURL_RESPONSE);
+	if (e != UNCURL_OK) return e;
+
+	ucc->ws_mask = 0;
+
+	return UNCURL_OK;
+}
+","UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins, int32_t n_origins)
+{
+	int32_t e;
+
+	e = uncurl_read_header(ucc);
+	if (e != UNCURL_OK) return e;
+
+	uncurl_set_header_str(ucc, ""Upgrade"", ""websocket"");
+	uncurl_set_header_str(ucc, ""Connection"", ""Upgrade"");
+
+	char *origin = NULL;
+ 	e = uncurl_get_header_str(ucc, ""Origin"", &origin);
+ 	if (e != UNCURL_OK) return e;
+ 
+ 	bool origin_ok = false;
+	for (int32_t x = 0; x < n_origins; x++)
+		if (strstr(origin, origins[x])) {origin_ok = true; break;}
+ 
+ 	if (!origin_ok) return UNCURL_WS_ERR_ORIGIN;
+ 
+	char *sec_key = NULL;
+	e = uncurl_get_header_str(ucc, ""Sec-WebSocket-Key"", &sec_key);
+	if (e != UNCURL_OK) return e;
+
+	char *accept_key = ws_create_accept_key(sec_key);
+	uncurl_set_header_str(ucc, ""Sec-WebSocket-Accept"", accept_key);
+	free(accept_key);
+
+	e = uncurl_write_header(ucc, ""101"", ""Switching Protocols"", UNCURL_RESPONSE);
+	if (e != UNCURL_OK) return e;
+
+	ucc->ws_mask = 0;
+
+	return UNCURL_OK;
+}
+",C,"	//the substring MUST came at the end of the origin header, thus a strstr AND a strcmp
+	for (int32_t x = 0; x < n_origins; x++) {
+		char *match = strstr(origin, origins[x]);
+		if (match && !strcmp(match, origins[x])) {origin_ok = true; break;}
+	}
+","	for (int32_t x = 0; x < n_origins; x++)
+		if (strstr(origin, origins[x])) {origin_ok = true; break;}
+",,"@@ -536,9 +536,12 @@ UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins,
+ 	e = uncurl_get_header_str(ucc, ""Origin"", &origin);
+ 	if (e != UNCURL_OK) return e;
+ 
++	//the substring MUST came at the end of the origin header, thus a strstr AND a strcmp
+ 	bool origin_ok = false;
+-	for (int32_t x = 0; x < n_origins; x++)
+-		if (strstr(origin, origins[x])) {origin_ok = true; break;}
++	for (int32_t x = 0; x < n_origins; x++) {
++		char *match = strstr(origin, origins[x]);
++		if (match && !strcmp(match, origins[x])) {origin_ok = true; break;}
++	}
+ 
+ 	if (!origin_ok) return UNCURL_WS_ERR_ORIGIN;
+ ",uncurl,448cd13e7b18c83855d706c564341ddd1e38e769,f97fdfc8ba7d23c6b8291890382f19c676c4b608,1,"UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins, int32_t n_origins)
+{
+	int32_t e;
+
+	//wait for the client's request header
+	e = uncurl_read_header(ucc);
+	if (e != UNCURL_OK) return e;
+
+	//set obligatory headers
+	uncurl_set_header_str(ucc, ""Upgrade"", ""websocket"");
+	uncurl_set_header_str(ucc, ""Connection"", ""Upgrade"");
+
+	//check the origin header against our whitelist
+	char *origin = NULL;
+ 	e = uncurl_get_header_str(ucc, ""Origin"", &origin);
+ 	if (e != UNCURL_OK) return e;
+ 
+//fix_flaw_line_below:
+//	//the substring MUST came at the end of the origin header, thus a strstr AND a strcmp
+ 	bool origin_ok = false;
+//flaw_line_below:
+	for (int32_t x = 0; x < n_origins; x++)
+//flaw_line_below:
+		if (strstr(origin, origins[x])) {origin_ok = true; break;}
+//fix_flaw_line_below:
+//	for (int32_t x = 0; x < n_origins; x++) {
+//fix_flaw_line_below:
+//		char *match = strstr(origin, origins[x]);
+//fix_flaw_line_below:
+//		if (match && !strcmp(match, origins[x])) {origin_ok = true; break;}
+//fix_flaw_line_below:
+//	}
+ 
+ 	if (!origin_ok) return UNCURL_WS_ERR_ORIGIN;
+ 
+	//read the key and set a compliant response header
+	char *sec_key = NULL;
+	e = uncurl_get_header_str(ucc, ""Sec-WebSocket-Key"", &sec_key);
+	if (e != UNCURL_OK) return e;
+
+	char *accept_key = ws_create_accept_key(sec_key);
+	uncurl_set_header_str(ucc, ""Sec-WebSocket-Accept"", accept_key);
+	free(accept_key);
+
+	//write the response header
+	e = uncurl_write_header(ucc, ""101"", ""Switching Protocols"", UNCURL_RESPONSE);
+	if (e != UNCURL_OK) return e;
+
+	//server does not send masked messages
+	ucc->ws_mask = 0;
+
+	return UNCURL_OK;
+}
+",182508,"UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins, int32_t n_origins)
+{
+	int32_t e;
+
+	e = uncurl_read_header(ucc);
+	if (e != UNCURL_OK) return e;
+
+	uncurl_set_header_str(ucc, ""Upgrade"", ""websocket"");
+	uncurl_set_header_str(ucc, ""Connection"", ""Upgrade"");
+
+	char *origin = NULL;
+ 	e = uncurl_get_header_str(ucc, ""Origin"", &origin);
+ 	if (e != UNCURL_OK) return e;
+ 
+ 	bool origin_ok = false;
+	for (int32_t x = 0; x < n_origins; x++)
+		if (strstr(origin, origins[x])) {origin_ok = true; break;}
+ 
+ 	if (!origin_ok) return UNCURL_WS_ERR_ORIGIN;
+ 
+	char *sec_key = NULL;
+	e = uncurl_get_header_str(ucc, ""Sec-WebSocket-Key"", &sec_key);
+	if (e != UNCURL_OK) return e;
+
+	char *accept_key = ws_create_accept_key(sec_key);
+	uncurl_set_header_str(ucc, ""Sec-WebSocket-Accept"", accept_key);
+	free(accept_key);
+
+	e = uncurl_write_header(ucc, ""101"", ""Switching Protocols"", UNCURL_RESPONSE);
+	if (e != UNCURL_OK) return e;
+
+	ucc->ws_mask = 0;
+
+	return UNCURL_OK;
+}
+","UNCURL_EXPORT int32_t uncurl_ws_accept(struct uncurl_conn *ucc, char **origins, int32_t n_origins)
+{
+	int32_t e;
+
+	e = uncurl_read_header(ucc);
+	if (e != UNCURL_OK) return e;
+
+	uncurl_set_header_str(ucc, ""Upgrade"", ""websocket"");
+	uncurl_set_header_str(ucc, ""Connection"", ""Upgrade"");
+
+	char *origin = NULL;
+ 	e = uncurl_get_header_str(ucc, ""Origin"", &origin);
+ 	if (e != UNCURL_OK) return e;
+ 
+	//the substring MUST came at the end of the origin header, thus a strstr AND a strcmp
+ 	bool origin_ok = false;
+	for (int32_t x = 0; x < n_origins; x++) {
+		char *match = strstr(origin, origins[x]);
+		if (match && !strcmp(match, origins[x])) {origin_ok = true; break;}
+	}
+ 
+ 	if (!origin_ok) return UNCURL_WS_ERR_ORIGIN;
+ 
+	char *sec_key = NULL;
+	e = uncurl_get_header_str(ucc, ""Sec-WebSocket-Key"", &sec_key);
+	if (e != UNCURL_OK) return e;
+
+	char *accept_key = ws_create_accept_key(sec_key);
+	uncurl_set_header_str(ucc, ""Sec-WebSocket-Accept"", accept_key);
+	free(accept_key);
+
+	e = uncurl_write_header(ucc, ""101"", ""Switching Protocols"", UNCURL_RESPONSE);
+	if (e != UNCURL_OK) return e;
+
+	ucc->ws_mask = 0;
+
+	return UNCURL_OK;
+}
+","The `uncurl_ws_accept` function facilitates the WebSocket handshake process by validating the client's request and preparing the server for a WebSocket connection. It begins by reading the incoming headers and setting the necessary ""Upgrade"" and ""Connection"" headers. The function checks the ""Origin"" header against a list of allowed origins to ensure the request is legitimate. If valid, it retrieves the ""Sec-WebSocket-Key"" header, generates a corresponding ""Sec-WebSocket-Accept"" key, and writes a ""101 Switching Protocols"" response to confirm the upgrade. Finally, it initializes the connection state and returns a success status.","The provided code implements the WebSocket handshake process, ensuring a secure connection between the client and server. It begins by reading the incoming headers and setting the necessary headers to indicate an upgrade to the WebSocket protocol. The code checks the origin of the request against a predefined list to validate its legitimacy. If the origin is acceptable, it retrieves a key from the request, generates a corresponding acceptance key, and sends a response to confirm the protocol switch. Finally, it initializes the connection state, indicating readiness for WebSocket communication.","The vulnerability in the original code stemmed from insufficient validation of the ""Origin"" header, allowing an attacker to exploit arbitrary substring matches, which could lead to unauthorized access. Specifically, the use of `strstr` alone permitted any substring of an allowed origin to be accepted, potentially bypassing security checks. The fixed code addresses this by ensuring that a match not only exists but also that it is an exact match at the end of the ""Origin"" header using both `strstr` and `strcmp`. This change effectively restricts valid origins, mitigating the risk of unauthorized access.","The vulnerability in the original code was due to inadequate validation of the ""Origin"" header, which allowed attackers to exploit arbitrary substring matches, potentially bypassing security measures and gaining unauthorized access. This weakness could lead to severe consequences, such as remote control over a victim's system. The fixed code rectifies this issue by implementing stricter validation, ensuring that any accepted origin must not only be present but also match exactly at the end of the header. This enhancement effectively tightens security, preventing unauthorized access and reinforcing the integrity of the WebSocket connection.","The vulnerability was fixed by enhancing the validation of the ""Origin"" header in the updated code. Instead of relying solely on `strstr` to check for substring matches, the new implementation uses both `strstr` and `strcmp` to ensure that a valid origin not only exists but also matches exactly at the end of the ""Origin"" header. This is achieved by checking if the result of `strstr` is not null and then confirming that the substring matches the expected origin using `strcmp`. This dual-check mechanism effectively prevents unauthorized access by ensuring only exact matches are accepted.","The vulnerability was fixed by implementing stricter validation for the ""Origin"" header to prevent arbitrary substring matches. The updated code ensures that any accepted origin not only exists within the header but also matches exactly at the end, thereby eliminating the risk of unauthorized access. This was achieved by combining two checks: one to confirm the presence of the origin and another to verify that it corresponds precisely to the expected value. This enhanced validation process effectively strengthens security, ensuring that only legitimate origins are accepted and reducing the potential for exploitation."

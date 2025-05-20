@@ -1,0 +1,354 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,177812,177812,,Remote,Not required,Partial,CVE-2017-15994,https://www.cvedetails.com/cve/CVE-2017-15994/,CWE-354,Low,Partial,Partial,,2017-10-29,7.5,"rsync 3.1.3-development before 2017-10-24 mishandles archaic checksums, which makes it easier for remote attackers to bypass intended access restrictions. NOTE: the rsync development branch has significant use beyond the rsync developers, e.g., the code has been copied for use in various GitHub projects.",2019-10-02,Bypass,1,https://git.samba.org/?p=rsync.git;a=commit;h=c252546ceeb0925eb8a4061315e3ff0a8c55b48b,c252546ceeb0925eb8a4061315e3ff0a8c55b48b,,0,,,"void sum_update(const char *p, int32 len)
+{
+	switch (cursum_type) {
+	  case CSUM_MD5:
+		md5_update(&md, (uchar *)p, len);
+		break;
+          case CSUM_MD4:
+          case CSUM_MD4_OLD:
+          case CSUM_MD4_BUSTED:
+         case CSUM_MD4_ARCHAIC:
+                if (len + sumresidue < CSUM_CHUNK) {
+                        memcpy(md.buffer + sumresidue, p, len);
+                        sumresidue += len;
+		}
+
+		if (sumresidue) {
+			int32 i = CSUM_CHUNK - sumresidue;
+			memcpy(md.buffer + sumresidue, p, i);
+			mdfour_update(&md, (uchar *)md.buffer, CSUM_CHUNK);
+			len -= i;
+			p += i;
+		}
+
+		while (len >= CSUM_CHUNK) {
+			mdfour_update(&md, (uchar *)p, CSUM_CHUNK);
+			len -= CSUM_CHUNK;
+			p += CSUM_CHUNK;
+		}
+
+		sumresidue = len;
+		if (sumresidue)
+			memcpy(md.buffer, p, sumresidue);
+		break;
+	  case CSUM_NONE:
+		break;
+	}
+}
+","void sum_update(const char *p, int32 len)
+{
+	switch (cursum_type) {
+	  case CSUM_MD5:
+		md5_update(&md, (uchar *)p, len);
+		break;
+          case CSUM_MD4:
+          case CSUM_MD4_OLD:
+          case CSUM_MD4_BUSTED:
+                if (len + sumresidue < CSUM_CHUNK) {
+                        memcpy(md.buffer + sumresidue, p, len);
+                        sumresidue += len;
+		}
+
+		if (sumresidue) {
+			int32 i = CSUM_CHUNK - sumresidue;
+			memcpy(md.buffer + sumresidue, p, i);
+			mdfour_update(&md, (uchar *)md.buffer, CSUM_CHUNK);
+			len -= i;
+			p += i;
+		}
+
+		while (len >= CSUM_CHUNK) {
+			mdfour_update(&md, (uchar *)p, CSUM_CHUNK);
+			len -= CSUM_CHUNK;
+			p += CSUM_CHUNK;
+		}
+
+		sumresidue = len;
+		if (sumresidue)
+			memcpy(md.buffer, p, sumresidue);
+		break;
+	  case CSUM_NONE:
+		break;
+	}
+}
+",C,"         case CSUM_MD4_ARCHAIC:
+",,7b8a4ecd6ff9cdf4e5d3850ebf822f1e989255b3,"@@ -295,6 +295,7 @@ void sum_update(const char *p, int32 len)
+          case CSUM_MD4:
+          case CSUM_MD4_OLD:
+          case CSUM_MD4_BUSTED:
++         case CSUM_MD4_ARCHAIC:
+                if (len + sumresidue < CSUM_CHUNK) {
+                        memcpy(md.buffer + sumresidue, p, len);
+                        sumresidue += len;",samba,https://git.samba.org/?p=rsync.git;a=blob;f=checksum.c;h=c119f972525341c2165c4b5bcb42612c8c983333;hb=c119f972525341c2165c4b5bcb42612c8c983333,https://git.samba.org/?p=rsync.git;a=blob;f=checksum.c;h=93826944034f5967b7c3b727994d3b54361854b0;hb=93826944034f5967b7c3b727994d3b54361854b0,1,"void sum_update(const char *p, int32 len)
+{
+	switch (cursum_type) {
+	  case CSUM_MD5:
+		md5_update(&md, (uchar *)p, len);
+		break;
+          case CSUM_MD4:
+          case CSUM_MD4_OLD:
+          case CSUM_MD4_BUSTED:
+//fix_flaw_line_below:
+//         case CSUM_MD4_ARCHAIC:
+                if (len + sumresidue < CSUM_CHUNK) {
+                        memcpy(md.buffer + sumresidue, p, len);
+                        sumresidue += len;
+		}
+
+		if (sumresidue) {
+			int32 i = CSUM_CHUNK - sumresidue;
+			memcpy(md.buffer + sumresidue, p, i);
+			mdfour_update(&md, (uchar *)md.buffer, CSUM_CHUNK);
+			len -= i;
+			p += i;
+		}
+
+		while (len >= CSUM_CHUNK) {
+			mdfour_update(&md, (uchar *)p, CSUM_CHUNK);
+			len -= CSUM_CHUNK;
+			p += CSUM_CHUNK;
+		}
+
+		sumresidue = len;
+		if (sumresidue)
+			memcpy(md.buffer, p, sumresidue);
+		break;
+	  case CSUM_NONE:
+		break;
+	}
+}
+",177812,"void sum_update(const char *p, int32 len)
+{
+	switch (cursum_type) {
+	  case CSUM_MD5:
+		md5_update(&md, (uchar *)p, len);
+		break;
+          case CSUM_MD4:
+          case CSUM_MD4_OLD:
+          case CSUM_MD4_BUSTED:
+                if (len + sumresidue < CSUM_CHUNK) {
+                        memcpy(md.buffer + sumresidue, p, len);
+                        sumresidue += len;
+		}
+
+		if (sumresidue) {
+			int32 i = CSUM_CHUNK - sumresidue;
+			memcpy(md.buffer + sumresidue, p, i);
+			mdfour_update(&md, (uchar *)md.buffer, CSUM_CHUNK);
+			len -= i;
+			p += i;
+		}
+
+		while (len >= CSUM_CHUNK) {
+			mdfour_update(&md, (uchar *)p, CSUM_CHUNK);
+			len -= CSUM_CHUNK;
+			p += CSUM_CHUNK;
+		}
+
+		sumresidue = len;
+		if (sumresidue)
+			memcpy(md.buffer, p, sumresidue);
+		break;
+	  case CSUM_NONE:
+		break;
+	}
+}
+","void sum_update(const char *p, int32 len)
+{
+	switch (cursum_type) {
+	  case CSUM_MD5:
+		md5_update(&md, (uchar *)p, len);
+		break;
+          case CSUM_MD4:
+          case CSUM_MD4_OLD:
+          case CSUM_MD4_BUSTED:
+         case CSUM_MD4_ARCHAIC:
+                if (len + sumresidue < CSUM_CHUNK) {
+                        memcpy(md.buffer + sumresidue, p, len);
+                        sumresidue += len;
+		}
+
+		if (sumresidue) {
+			int32 i = CSUM_CHUNK - sumresidue;
+			memcpy(md.buffer + sumresidue, p, i);
+			mdfour_update(&md, (uchar *)md.buffer, CSUM_CHUNK);
+			len -= i;
+			p += i;
+		}
+
+		while (len >= CSUM_CHUNK) {
+			mdfour_update(&md, (uchar *)p, CSUM_CHUNK);
+			len -= CSUM_CHUNK;
+			p += CSUM_CHUNK;
+		}
+
+		sumresidue = len;
+		if (sumresidue)
+			memcpy(md.buffer, p, sumresidue);
+		break;
+	  case CSUM_NONE:
+		break;
+	}
+}
+","The `sum_update` function processes a data stream based on the specified checksum type, indicated by the global variable `cursum_type`. It handles three checksum types: MD5 and various versions of MD4. For MD5, it directly updates the checksum using the `md5_update` function. For MD4, it manages data in chunks, first checking if the remaining data can fit into a buffer; if not, it processes complete chunks and stores any leftover data for the next call. If no checksum is required, the function does nothing. This function is crucial for maintaining data integrity during streaming operations.","The provided code defines a function that updates a checksum based on the type specified by a global setting. It processes input data in chunks, handling different checksum algorithms accordingly. For one algorithm, it directly updates the checksum with the incoming data. For another, it manages data in a buffer, checking if the remaining data can fit before processing complete chunks and storing any leftover for future updates. If no checksum is required, the function simply exits without performing any operations. This functionality is essential for ensuring data integrity during the processing of streaming data.","The vulnerability in the original code stemmed from improper handling of checksum types, particularly the archaic checksum, which allowed attackers to bypass access restrictions. This was due to the lack of a dedicated case for the archaic checksum type, leading to potential misuse of the checksum logic. In the fixed code, a new case for the archaic checksum was added, ensuring that it is processed similarly to other checksum types. This change enhances the integrity of the checksum update process by explicitly managing all checksum types, thereby preventing unauthorized access and ensuring that all data is validated correctly.","The vulnerability in the original code arose from inadequate handling of archaic checksums, which allowed attackers to exploit this oversight and bypass access restrictions. This was primarily due to the absence of specific logic to manage the archaic checksum type, leading to potential misuse. In the revised code, a dedicated case for the archaic checksum was introduced, ensuring that it is processed with the same rigor as other checksum types. This enhancement effectively mitigates the risk of unauthorized access by ensuring that all checksum types are properly validated, thereby reinforcing the overall security of the system.","The vulnerability was fixed by adding a new case for the archaic checksum type in the switch statement of the updated code. This ensures that the archaic checksum is processed similarly to other checksum types, such as MD4 and MD5. By including the case for `CSUM_MD4_ARCHAIC`, the code now properly handles the checksum update logic, preventing potential bypass of access restrictions. This addition allows the function to manage the checksum buffer and residue correctly, ensuring that all data is validated and processed securely, thereby closing the loophole that could be exploited by attackers.","The vulnerability was addressed by explicitly adding handling for the archaic checksum type within the code's logic. This change ensures that the archaic checksum is processed with the same level of scrutiny as other checksum types, thereby preventing potential exploitation that could allow unauthorized access. By incorporating this additional case, the code now properly manages the checksum update process, ensuring that all data is validated and processed securely. This enhancement effectively mitigates the risk of bypassing intended access restrictions, reinforcing the overall integrity and security of the system.","CWE-345, CWE-354, CWE-754, CWE-287, CWE-697, CWE-707, CWE-347, CWE-294, CWE-290, CWE-326",N,-1
+1,1,177813,177813,,Remote,Not required,Partial,CVE-2017-15994,https://www.cvedetails.com/cve/CVE-2017-15994/,CWE-354,Low,Partial,Partial,,2017-10-29,7.5,"rsync 3.1.3-development before 2017-10-24 mishandles archaic checksums, which makes it easier for remote attackers to bypass intended access restrictions. NOTE: the rsync development branch has significant use beyond the rsync developers, e.g., the code has been copied for use in various GitHub projects.",2019-10-02,Bypass,5,https://git.samba.org/?p=rsync.git;a=commit;h=9a480deec4d20277d8e20bc55515ef0640ca1e55 ,9a480deec4d20277d8e20bc55515ef0640ca1e55,,0,,,"char *auth_server(int f_in, int f_out, int module, const char *host,
+		  const char *addr, const char *leader)
+{
+	char *users = lp_auth_users(module);
+	char challenge[MAX_DIGEST_LEN*2];
+	char line[BIGPATHBUFLEN];
+	char **auth_uid_groups = NULL;
+	int auth_uid_groups_cnt = -1;
+	const char *err = NULL;
+	int group_match = -1;
+	char *tok, *pass;
+	char opt_ch = '\0';
+
+	/* if no auth list then allow anyone in! */
+	if (!users || !*users)
+        if (!users || !*users)
+                return """";
+ 
+       if (protocol_version < 21) { /* Don't allow a weak checksum for the password. */
+               rprintf(FERROR, ""ERROR: protocol version is too old!\n"");
+               exit_cleanup(RERR_PROTOCOL);
+       }
+
+        gen_challenge(addr, challenge);
+ 
+        io_printf(f_out, ""%s%s\n"", leader, challenge);
+		return NULL;
+	}
+","char *auth_server(int f_in, int f_out, int module, const char *host,
+		  const char *addr, const char *leader)
+{
+	char *users = lp_auth_users(module);
+	char challenge[MAX_DIGEST_LEN*2];
+	char line[BIGPATHBUFLEN];
+	char **auth_uid_groups = NULL;
+	int auth_uid_groups_cnt = -1;
+	const char *err = NULL;
+	int group_match = -1;
+	char *tok, *pass;
+	char opt_ch = '\0';
+
+	/* if no auth list then allow anyone in! */
+	if (!users || !*users)
+        if (!users || !*users)
+                return """";
+ 
+        gen_challenge(addr, challenge);
+ 
+        io_printf(f_out, ""%s%s\n"", leader, challenge);
+		return NULL;
+	}
+",C,"       if (protocol_version < 21) { /* Don't allow a weak checksum for the password. */
+               rprintf(FERROR, ""ERROR: protocol version is too old!\n"");
+               exit_cleanup(RERR_PROTOCOL);
+       }
+
+",,c252546ceeb0925eb8a4061315e3ff0a8c55b48b,"@@ -22,6 +22,7 @@
+ #include ""itypes.h""
+ 
+ extern int read_only;
++extern int protocol_version;
+ extern char *password_file;
+ 
+ /***************************************************************************
+@@ -237,6 +238,11 @@ char *auth_server(int f_in, int f_out, int module, const char *host,
+        if (!users || !*users)
+                return """";
+ 
++       if (protocol_version < 21) { /* Don't allow a weak checksum for the password. */
++               rprintf(FERROR, ""ERROR: protocol version is too old!\n"");
++               exit_cleanup(RERR_PROTOCOL);
++       }
++
+        gen_challenge(addr, challenge);
+ 
+        io_printf(f_out, ""%s%s\n"", leader, challenge);",samba,https://git.samba.org/?p=rsync.git;a=blob;f=authenticate.c;h=a106b0f60a8cb88e37080bc5e2a58ce28c66f379;hb=a106b0f60a8cb88e37080bc5e2a58ce28c66f379,https://git.samba.org/?p=rsync.git;a=blob;f=authenticate.c;h=d60ee20b6b53a9351efbdf175f36525ead220de6;hb=d60ee20b6b53a9351efbdf175f36525ead220de6,1,"char *auth_server(int f_in, int f_out, int module, const char *host,
+		  const char *addr, const char *leader)
+{
+	char *users = lp_auth_users(module);
+	char challenge[MAX_DIGEST_LEN*2];
+	char line[BIGPATHBUFLEN];
+	char **auth_uid_groups = NULL;
+	int auth_uid_groups_cnt = -1;
+	const char *err = NULL;
+	int group_match = -1;
+	char *tok, *pass;
+	char opt_ch = '\0';
+
+	/* if no auth list then allow anyone in! */
+	if (!users || !*users)
+        if (!users || !*users)
+                return """";
+ 
+//fix_flaw_line_below:
+//       if (protocol_version < 21) { /* Don't allow a weak checksum for the password. */
+//fix_flaw_line_below:
+//               rprintf(FERROR, ""ERROR: protocol version is too old!\n"");
+//fix_flaw_line_below:
+//               exit_cleanup(RERR_PROTOCOL);
+//fix_flaw_line_below:
+//       }
+//fix_flaw_line_below:
+//
+        gen_challenge(addr, challenge);
+ 
+        io_printf(f_out, ""%s%s\n"", leader, challenge);
+		return NULL;
+	}
+",177813,"char *auth_server(int f_in, int f_out, int module, const char *host,
+		  const char *addr, const char *leader)
+{
+	char *users = lp_auth_users(module);
+	char challenge[MAX_DIGEST_LEN*2];
+	char line[BIGPATHBUFLEN];
+	char **auth_uid_groups = NULL;
+	int auth_uid_groups_cnt = -1;
+	const char *err = NULL;
+	int group_match = -1;
+	char *tok, *pass;
+	char opt_ch = '\0';
+
+	/* if no auth list then allow anyone in! */
+	if (!users || !*users)
+        if (!users || !*users)
+                return """";
+ 
+        gen_challenge(addr, challenge);
+ 
+        io_printf(f_out, ""%s%s\n"", leader, challenge);
+		return NULL;
+	}
+","char *auth_server(int f_in, int f_out, int module, const char *host,
+		  const char *addr, const char *leader)
+{
+	char *users = lp_auth_users(module);
+	char challenge[MAX_DIGEST_LEN*2];
+	char line[BIGPATHBUFLEN];
+	char **auth_uid_groups = NULL;
+	int auth_uid_groups_cnt = -1;
+	const char *err = NULL;
+	int group_match = -1;
+	char *tok, *pass;
+	char opt_ch = '\0';
+
+	/* if no auth list then allow anyone in! */
+	if (!users || !*users)
+        if (!users || !*users)
+                return """";
+ 
+       if (protocol_version < 21) { /* Don't allow a weak checksum for the password. */
+               rprintf(FERROR, ""ERROR: protocol version is too old!\n"");
+               exit_cleanup(RERR_PROTOCOL);
+       }
+
+        gen_challenge(addr, challenge);
+ 
+        io_printf(f_out, ""%s%s\n"", leader, challenge);
+		return NULL;
+	}
+","The `auth_server` function is designed to handle authentication for a server by generating a challenge string based on the provided address and sending it to a specified output file descriptor. It first retrieves a list of authorized users for a given module; if no users are found, it allows access to anyone. The function then generates a challenge using the `gen_challenge` function and formats it with a leader string before sending it to the output using `io_printf`. The function ultimately returns `NULL`, indicating that the authentication process is ongoing or has not yet completed.","The code defines a function that manages server authentication by checking for a list of authorized users associated with a specific module. If no users are found, it permits unrestricted access. The function generates a challenge string based on the provided address and formats it with a specified leader string. This challenge is then sent to an output stream for further processing. The function concludes by returning a null value, indicating that the authentication process is either still in progress or has not yet been finalized, allowing for subsequent steps in the authentication workflow.","The vulnerability in the original code arises from the lack of validation for the protocol version, allowing the use of weak checksums for password authentication. This oversight could enable remote attackers to bypass access restrictions by exploiting outdated checksum mechanisms. In the fixed code, a check for the protocol version was introduced, ensuring that if the version is below a specified threshold, an error message is printed, and the program exits. This change effectively mitigates the risk by preventing the use of weak checksums, thereby enhancing the security of the authentication process.","The vulnerability in the original code stems from the inadequate handling of outdated checksum mechanisms, which could allow remote attackers to exploit weak authentication methods and bypass access controls. This flaw arises from the absence of checks on the protocol version, enabling the use of insecure checksums. In the revised code, a validation step was added to ensure that only secure protocol versions are accepted. If an outdated version is detected, the program terminates with an error message, effectively preventing the use of weak checksums and thereby strengthening the overall security of the authentication process.","The vulnerability was fixed by introducing a check for the protocol version in the revised code. Specifically, the code now verifies if the `protocol_version` is below a specified threshold before proceeding with authentication. If the version is outdated, an error message is printed using `rprintf`, and the program exits with `exit_cleanup(RERR_PROTOCOL)`. This ensures that weak checksums are not utilized for password authentication, thereby preventing potential bypass of access restrictions. By enforcing this validation, the code enhances security and mitigates the risk of exploitation by remote attackers.","The vulnerability was addressed by implementing a validation mechanism that checks the protocol version before allowing the authentication process to proceed. This new check ensures that only secure and updated protocol versions are accepted, effectively preventing the use of outdated and weak checksum methods that could be exploited by attackers. If an unsupported version is detected, the program generates an error message and terminates, thereby blocking any attempts to bypass access restrictions. This enhancement significantly strengthens the security of the authentication process by ensuring that only robust checksums are utilized.","CWE-326, CWE-327, CWE-295, CWE-296, CWE-287, CWE-347, CWE-303, CWE-297, CWE-757, CWE-310",N,-1

@@ -1,0 +1,232 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,F1_Clarity_C5,F2_Relevance_C5,F3_Completeness_C5,F4_Actionability_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,178629,178629,,Local Network,Single system,Complete,CVE-2017-7471,https://www.cvedetails.com/cve/CVE-2017-7471/,CWE-732,Low,Complete,Complete,,2018-07-09,7.7,"Quick Emulator (Qemu) built with the VirtFS, host directory sharing via Plan 9 File System (9pfs) support, is vulnerable to an improper access control issue. It could occur while accessing files on a shared host directory. A privileged user inside guest could use this flaw to access host file system beyond the shared folder and potentially escalating their privileges on a host.",2019-10-02,,6,https://git.qemu.org/?p=qemu.git;a=commitdiff;h=9c6b899f7a46893ab3b671e341a2234e9c0c060e,9c6b899f7a46893ab3b671e341a2234e9c0c060e,,1,,,"static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
+                              const char *name, V9fsPath *target)
+ {
+     if (dir_path) {
+         v9fs_path_sprintf(target, ""%s/%s"", dir_path->data, name);
+    } else if (strcmp(name, ""/"")) {
+         v9fs_path_sprintf(target, ""%s"", name);
+    } else {
+        /* We want the path of the export root to be relative, otherwise
+         * ""*at()"" syscalls would treat it as ""/"" in the host.
+         */
+        v9fs_path_sprintf(target, ""%s"", ""."");
+     }
+     return 0;
+ }
+","static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
+                              const char *name, V9fsPath *target)
+ {
+     if (dir_path) {
+         v9fs_path_sprintf(target, ""%s/%s"", dir_path->data, name);
+    } else {
+         v9fs_path_sprintf(target, ""%s"", name);
+     }
+     return 0;
+ }
+",C,"    } else if (strcmp(name, ""/"")) {
+    } else {
+        /* We want the path of the export root to be relative, otherwise
+         * ""*at()"" syscalls would treat it as ""/"" in the host.
+         */
+        v9fs_path_sprintf(target, ""%s"", ""."");
+","    } else {
+",372b3fe0b2ecdd39ba850e31c0c6686315c507af,"@@ -1098,8 +1098,13 @@ static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
+ {
+     if (dir_path) {
+         v9fs_path_sprintf(target, ""%s/%s"", dir_path->data, name);
+-    } else {
++    } else if (strcmp(name, ""/"")) {
+         v9fs_path_sprintf(target, ""%s"", name);
++    } else {
++        /* We want the path of the export root to be relative, otherwise
++         * ""*at()"" syscalls would treat it as ""/"" in the host.
++         */
++        v9fs_path_sprintf(target, ""%s"", ""."");
+     }
+     return 0;
+ }",qemu,https://git.qemu.org/?p=qemu.git;a=blob;f=hw/9pfs/9p-local.c;h=f3ebca4f7a564c291745f81404ef48c36a872ad4;hb=9c6b899f7a46893ab3b671e341a2234e9c0c060e,https://git.qemu.org/?p=qemu.git;a=blob;f=hw/9pfs/9p-local.c;h=45e9a1f9b0caccfe5525f1c0127371e473d0bf7b,1,"static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
+                              const char *name, V9fsPath *target)
+ {
+     if (dir_path) {
+         v9fs_path_sprintf(target, ""%s/%s"", dir_path->data, name);
+//flaw_line_below:
+    } else {
+//fix_flaw_line_below:
+//    } else if (strcmp(name, ""/"")) {
+         v9fs_path_sprintf(target, ""%s"", name);
+//fix_flaw_line_below:
+//    } else {
+//fix_flaw_line_below:
+//        /* We want the path of the export root to be relative, otherwise
+//fix_flaw_line_below:
+//         * ""*at()"" syscalls would treat it as ""/"" in the host.
+//fix_flaw_line_below:
+//         */
+//fix_flaw_line_below:
+//        v9fs_path_sprintf(target, ""%s"", ""."");
+     }
+     return 0;
+ }
+",178629,"static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
+                              const char *name, V9fsPath *target)
+ {
+     if (dir_path) {
+         v9fs_path_sprintf(target, ""%s/%s"", dir_path->data, name);
+    } else {
+         v9fs_path_sprintf(target, ""%s"", name);
+     }
+     return 0;
+ }
+","static int local_name_to_path(FsContext *ctx, V9fsPath *dir_path,
+                              const char *name, V9fsPath *target)
+ {
+     if (dir_path) {
+         v9fs_path_sprintf(target, ""%s/%s"", dir_path->data, name);
+    } else if (strcmp(name, ""/"")) {
+         v9fs_path_sprintf(target, ""%s"", name);
+    } else {
+        /* We want the path of the export root to be relative, otherwise
+         * ""*at()"" syscalls would treat it as ""/"" in the host.
+         */
+        v9fs_path_sprintf(target, ""%s"", ""."");
+     }
+     return 0;
+ }
+","The vulnerability in the original code arises from the lack of validation for the `name` variable, allowing it to be set to a root path (""/""). This could lead to unintended behavior where the path is treated as an absolute path, potentially exposing sensitive data or allowing unauthorized access. In the fixed code, an additional check using `strcmp(name, ""/"")` ensures that if `name` is the root path, the function instead sets `target` to the current directory ("".""), thus preventing the misuse of the root path and ensuring that the path remains relative, enhancing security against path traversal attacks.","The vulnerability in the original code stems from the lack of validation for input, specifically allowing a root path to be processed without restriction. This oversight could lead to security issues, such as unauthorized access to sensitive data or unintended behavior in the system. The fixed code addresses this vulnerability by introducing a conditional check that prevents the root path from being treated as a valid input. Instead, it ensures that if the root path is provided, a relative path is used, thereby mitigating the risk of path traversal attacks and enhancing overall security.",4,5,0,1,"CWE-22,CWE-23,CWE-35,CWE-36,CWE-73,CWE-99,CWE-641,CWE-200,CWE-552,CWE-441",N,-1
+1,1,1,186591,186591,,Remote,Not required,,CVE-2018-18349,https://www.cvedetails.com/cve/CVE-2018-18349/,CWE-732,Medium,Partial,,,2018-12-11,4.3,Remote frame navigations was incorrectly permitted to local resources in Blink in Google Chrome prior to 71.0.3578.80 allowed an attacker who convinced a user to install a malicious extension to access files on the local file system via a crafted Chrome Extension.,2019-10-02,,7,https://github.com/chromium/chromium/commit/5f8671e7667b8b133bd3664100012a3906e92d65,5f8671e7667b8b133bd3664100012a3906e92d65,"Add a check for disallowing remote frame navigations to local resources.
+
+Previously, RemoteFrame navigations did not perform any renderer-side
+checks and relied solely on the browser-side logic to block disallowed
+navigations via mechanisms like FilterURL.  This means that blocked
+remote frame navigations were silently navigated to about:blank
+without any console error message.
+
+This CL adds a CanDisplay check to the remote navigation path to match
+an equivalent check done for local frame navigations.  This way, the
+renderer can consistently block disallowed navigations in both cases
+and output an error message.
+
+Bug: 894399
+Change-Id: I172f68f77c1676f6ca0172d2a6c78f7edc0e3b7a
+Reviewed-on: https://chromium-review.googlesource.com/c/1282390
+Reviewed-by: Charlie Reis <creis@chromium.org>
+Reviewed-by: Nate Chapin <japhet@chromium.org>
+Commit-Queue: Alex Moshchuk <alexmos@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#601022}",0,third_party/blink/renderer/core/frame/remote_frame.cc,"{""sha"": ""82af60872317fdaf16561c9f9adecb79ce82f610"", ""filename"": ""content/browser/security_exploit_browsertest.cc"", ""status"": ""modified"", ""additions"": 69, ""deletions"": 0, ""changes"": 69, ""blob_url"": ""https://github.com/chromium/chromium/blob/5f8671e7667b8b133bd3664100012a3906e92d65/content/browser/security_exploit_browsertest.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/5f8671e7667b8b133bd3664100012a3906e92d65/content/browser/security_exploit_browsertest.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/browser/security_exploit_browsertest.cc?ref=5f8671e7667b8b133bd3664100012a3906e92d65"", ""patch"": ""@@ -17,6 +17,7 @@\n #include \""content/browser/dom_storage/session_storage_namespace_impl.h\""\n #include \""content/browser/frame_host/navigator.h\""\n #include \""content/browser/frame_host/render_frame_host_impl.h\""\n+#include \""content/browser/frame_host/render_frame_proxy_host.h\""\n #include \""content/browser/renderer_host/render_process_host_impl.h\""\n #include \""content/browser/renderer_host/render_view_host_factory.h\""\n #include \""content/browser/renderer_host/render_view_host_impl.h\""\n@@ -983,4 +984,72 @@ IN_PROC_BROWSER_TEST_F(SecurityExploitBrowserTest,\n       << \"" body=\"" << body;\n }\n \n+// Verify that when a compromised renderer tries to navigate a remote frame to\n+// a disallowed URL (e.g., file URL), that navigation is blocked.\n+IN_PROC_BROWSER_TEST_F(SecurityExploitBrowserTest,\n+                       BlockIllegalOpenURLFromRemoteFrame) {\n+  // This test is only valid in site-per-process mode, where a cross-site\n+  // iframe will have a proxy in the main frame's process.\n+  if (!AreAllSitesIsolatedForTesting())\n+    return;\n+\n+  GURL main_url(embedded_test_server()->GetURL(\n+      \""a.com\"", \""/cross_site_iframe_factory.html?a(b)\""));\n+  EXPECT_TRUE(NavigateToURL(shell(), main_url));\n+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())\n+                            ->GetFrameTree()\n+                            ->root();\n+  FrameTreeNode* child = root->child_at(0);\n+\n+  // Simulate an IPC message where the top frame asks the remote subframe to\n+  // navigate to a file: URL.\n+  GURL file_url(\""file:///\"");\n+  FrameHostMsg_OpenURL_Params params;\n+  params.url = file_url;\n+  params.uses_post = false;\n+  params.disposition = WindowOpenDisposition::CURRENT_TAB;\n+  params.should_replace_current_entry = false;\n+  params.user_gesture = true;\n+  params.is_history_navigation_in_new_child = false;\n+\n+  SiteInstance* a_com_instance = root->current_frame_host()->GetSiteInstance();\n+  RenderFrameProxyHost* proxy =\n+      child->render_manager()->GetRenderFrameProxyHost(a_com_instance);\n+  EXPECT_TRUE(proxy);\n+\n+  {\n+    FrameHostMsg_OpenURL msg(proxy->GetRoutingID(), params);\n+    IPC::IpcSecurityTestUtil::PwnMessageReceived(\n+        proxy->GetProcess()->GetChannel(), msg);\n+  }\n+\n+  // Verify that the malicious navigation was blocked.  Currently, this happens\n+  // by rewriting the target URL to about:blank.\n+  //\n+  // TODO(alexmos): Consider killing the renderer process in this case, since\n+  // this security check is already enforced in the renderer process.\n+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));\n+  EXPECT_EQ(GURL(url::kAboutBlankURL),\n+            child->current_frame_host()->GetLastCommittedURL());\n+\n+  // Navigate to the starting page again to recreate the proxy, then try the\n+  // same malicious navigation with a chrome:// URL.\n+  EXPECT_TRUE(NavigateToURL(shell(), main_url));\n+  child = root->child_at(0);\n+  proxy = child->render_manager()->GetRenderFrameProxyHost(a_com_instance);\n+  EXPECT_TRUE(proxy);\n+\n+  GURL chrome_url(std::string(kChromeUIScheme) + \""://\"" +\n+                  std::string(kChromeUIGpuHost));\n+  params.url = chrome_url;\n+  {\n+    FrameHostMsg_OpenURL msg(proxy->GetRoutingID(), params);\n+    IPC::IpcSecurityTestUtil::PwnMessageReceived(\n+        proxy->GetProcess()->GetChannel(), msg);\n+  }\n+  EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));\n+  EXPECT_EQ(GURL(url::kAboutBlankURL),\n+            child->current_frame_host()->GetLastCommittedURL());\n+}\n+\n }  // namespace content""}<_**next**_>{""sha"": ""c6aeda6823abeec3c633913d406db6b5437983df"", ""filename"": ""content/browser/site_per_process_browsertest.cc"", ""status"": ""modified"", ""additions"": 41, ""deletions"": 11, ""changes"": 52, ""blob_url"": ""https://github.com/chromium/chromium/blob/5f8671e7667b8b133bd3664100012a3906e92d65/content/browser/site_per_process_browsertest.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/5f8671e7667b8b133bd3664100012a3906e92d65/content/browser/site_per_process_browsertest.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/content/browser/site_per_process_browsertest.cc?ref=5f8671e7667b8b133bd3664100012a3906e92d65"", ""patch"": ""@@ -5036,26 +5036,28 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, NavigatePopupToIllegalURL) {\n   EXPECT_NE(popup->web_contents()->GetSiteInstance(),\n             shell()->web_contents()->GetSiteInstance());\n \n-  // From the opener, navigate the popup to a file:/// URL.  This should be\n-  // disallowed and result in an about:blank navigation.\n+  ConsoleObserverDelegate console_delegate(\n+      web_contents(), \""Not allowed to load local resource:*\"");\n+  web_contents()->SetDelegate(&console_delegate);\n+\n+  // From the opener, navigate the popup to a file:/// URL.  This should result\n+  // in a console error and stay on the old page.\n   GURL file_url(\""file:///\"");\n   NavigateNamedFrame(shell(), file_url, \""foo\"");\n   EXPECT_TRUE(WaitForLoadStop(popup->web_contents()));\n-  EXPECT_EQ(GURL(url::kAboutBlankURL),\n-            popup->web_contents()->GetLastCommittedURL());\n-\n-  // Navigate popup back to a cross-site URL.\n-  EXPECT_TRUE(NavigateToURLFromRenderer(popup, popup_url));\n-  EXPECT_NE(popup->web_contents()->GetSiteInstance(),\n-            shell()->web_contents()->GetSiteInstance());\n+  EXPECT_EQ(popup_url, popup->web_contents()->GetLastCommittedURL());\n+  EXPECT_TRUE(base::MatchPattern(console_delegate.message(),\n+                                 \""Not allowed to load local resource: file:*\""));\n \n   // Now try the same test with a chrome:// URL.\n   GURL chrome_url(std::string(kChromeUIScheme) + \""://\"" +\n                   std::string(kChromeUIGpuHost));\n   NavigateNamedFrame(shell(), chrome_url, \""foo\"");\n   EXPECT_TRUE(WaitForLoadStop(popup->web_contents()));\n-  EXPECT_EQ(GURL(url::kAboutBlankURL),\n-            popup->web_contents()->GetLastCommittedURL());\n+  EXPECT_EQ(popup_url, popup->web_contents()->GetLastCommittedURL());\n+  EXPECT_TRUE(\n+      base::MatchPattern(console_delegate.message(),\n+                         \""Not allowed to load local resource: chrome:*\""));\n }\n \n // Verify that named frames are discoverable from their opener's ancestors.\n@@ -13519,4 +13521,32 @@ IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest, ProcessSwapOnInnerContents) {\n   EXPECT_NE(a_view, b_view);\n }\n \n+// Check that a web frame can't navigate a remote subframe to a file: URL.  The\n+// frame should stay at the old URL, and the navigation attempt should produce\n+// a console error message.  See https://crbug.com/894399.\n+IN_PROC_BROWSER_TEST_F(SitePerProcessBrowserTest,\n+                       FileURLBlockedWithConsoleErrorInRemoteFrameNavigation) {\n+  GURL main_url(embedded_test_server()->GetURL(\n+      \""a.com\"", \""/cross_site_iframe_factory.html?a(b)\""));\n+  EXPECT_TRUE(NavigateToURL(shell(), main_url));\n+\n+  FrameTreeNode* child = web_contents()->GetFrameTree()->root()->child_at(0);\n+  GURL original_frame_url(child->current_frame_host()->GetLastCommittedURL());\n+  EXPECT_EQ(\""b.com\"", original_frame_url.host());\n+\n+  ConsoleObserverDelegate console_delegate(\n+      web_contents(), \""Not allowed to load local resource: file:*\"");\n+  web_contents()->SetDelegate(&console_delegate);\n+\n+  GURL file_url(\""file:///\"");\n+  EXPECT_TRUE(\n+      ExecJs(web_contents(),\n+             JsReplace(\""document.querySelector('iframe').src = $1\"", file_url)));\n+  console_delegate.Wait();\n+\n+  // The iframe should've stayed at the original URL.\n+  EXPECT_EQ(original_frame_url,\n+            child->current_frame_host()->GetLastCommittedURL());\n+}\n+\n }  // namespace content""}<_**next**_>{""sha"": ""d0f8b72a47f5fda0874c59088644738158f3a185"", ""filename"": ""third_party/blink/renderer/core/frame/remote_frame.cc"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 0, ""changes"": 8, ""blob_url"": ""https://github.com/chromium/chromium/blob/5f8671e7667b8b133bd3664100012a3906e92d65/third_party/blink/renderer/core/frame/remote_frame.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/5f8671e7667b8b133bd3664100012a3906e92d65/third_party/blink/renderer/core/frame/remote_frame.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/blink/renderer/core/frame/remote_frame.cc?ref=5f8671e7667b8b133bd3664100012a3906e92d65"", ""patch"": ""@@ -13,6 +13,7 @@\n #include \""third_party/blink/renderer/core/frame/remote_frame_client.h\""\n #include \""third_party/blink/renderer/core/frame/remote_frame_view.h\""\n #include \""third_party/blink/renderer/core/html/html_frame_owner_element.h\""\n+#include \""third_party/blink/renderer/core/inspector/console_message.h\""\n #include \""third_party/blink/renderer/core/layout/layout_embedded_content.h\""\n #include \""third_party/blink/renderer/core/loader/frame_load_request.h\""\n #include \""third_party/blink/renderer/core/loader/frame_loader.h\""\n@@ -60,6 +61,13 @@ void RemoteFrame::ScheduleNavigation(Document& origin_document,\n                                      const KURL& url,\n                                      WebFrameLoadType frame_load_type,\n                                      UserGestureStatus user_gesture_status) {\n+  if (!origin_document.GetSecurityOrigin()->CanDisplay(url)) {\n+    origin_document.AddConsoleMessage(ConsoleMessage::Create(\n+        kSecurityMessageSource, kErrorMessageLevel,\n+        \""Not allowed to load local resource: \"" + url.ElidedString()));\n+    return;\n+  }\n+\n   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));\n   frame_request.GetResourceRequest().SetHasUserGesture(\n       user_gesture_status == UserGestureStatus::kActive);""}","void RemoteFrame::ScheduleNavigation(Document& origin_document,
+                                      const KURL& url,
+                                      WebFrameLoadType frame_load_type,
+                                      UserGestureStatus user_gesture_status) {
+  if (!origin_document.GetSecurityOrigin()->CanDisplay(url)) {
+    origin_document.AddConsoleMessage(ConsoleMessage::Create(
+        kSecurityMessageSource, kErrorMessageLevel,
+        ""Not allowed to load local resource: "" + url.ElidedString()));
+    return;
+  }
+
+   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));
+   frame_request.GetResourceRequest().SetHasUserGesture(
+       user_gesture_status == UserGestureStatus::kActive);
+  frame_request.GetResourceRequest().SetFrameType(
+      IsMainFrame() ? network::mojom::RequestContextFrameType::kTopLevel
+                    : network::mojom::RequestContextFrameType::kNested);
+  Navigate(frame_request, frame_load_type);
+}
+","void RemoteFrame::ScheduleNavigation(Document& origin_document,
+                                      const KURL& url,
+                                      WebFrameLoadType frame_load_type,
+                                      UserGestureStatus user_gesture_status) {
+   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));
+   frame_request.GetResourceRequest().SetHasUserGesture(
+       user_gesture_status == UserGestureStatus::kActive);
+  frame_request.GetResourceRequest().SetFrameType(
+      IsMainFrame() ? network::mojom::RequestContextFrameType::kTopLevel
+                    : network::mojom::RequestContextFrameType::kNested);
+  Navigate(frame_request, frame_load_type);
+}
+",C,"  if (!origin_document.GetSecurityOrigin()->CanDisplay(url)) {
+    origin_document.AddConsoleMessage(ConsoleMessage::Create(
+        kSecurityMessageSource, kErrorMessageLevel,
+        ""Not allowed to load local resource: "" + url.ElidedString()));
+    return;
+  }
+
+",,,"@@ -13,6 +13,7 @@
+ #include ""third_party/blink/renderer/core/frame/remote_frame_client.h""
+ #include ""third_party/blink/renderer/core/frame/remote_frame_view.h""
+ #include ""third_party/blink/renderer/core/html/html_frame_owner_element.h""
++#include ""third_party/blink/renderer/core/inspector/console_message.h""
+ #include ""third_party/blink/renderer/core/layout/layout_embedded_content.h""
+ #include ""third_party/blink/renderer/core/loader/frame_load_request.h""
+ #include ""third_party/blink/renderer/core/loader/frame_loader.h""
+@@ -60,6 +61,13 @@ void RemoteFrame::ScheduleNavigation(Document& origin_document,
+                                      const KURL& url,
+                                      WebFrameLoadType frame_load_type,
+                                      UserGestureStatus user_gesture_status) {
++  if (!origin_document.GetSecurityOrigin()->CanDisplay(url)) {
++    origin_document.AddConsoleMessage(ConsoleMessage::Create(
++        kSecurityMessageSource, kErrorMessageLevel,
++        ""Not allowed to load local resource: "" + url.ElidedString()));
++    return;
++  }
++
+   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));
+   frame_request.GetResourceRequest().SetHasUserGesture(
+       user_gesture_status == UserGestureStatus::kActive);",Chrome,5f8671e7667b8b133bd3664100012a3906e92d65,f6ac318a5b317fc5dc4d6f98b900ddbc72ade4e3,1,"void RemoteFrame::ScheduleNavigation(Document& origin_document,
+                                      const KURL& url,
+                                      WebFrameLoadType frame_load_type,
+                                      UserGestureStatus user_gesture_status) {
+//fix_flaw_line_below:
+//  if (!origin_document.GetSecurityOrigin()->CanDisplay(url)) {
+//fix_flaw_line_below:
+//    origin_document.AddConsoleMessage(ConsoleMessage::Create(
+//fix_flaw_line_below:
+//        kSecurityMessageSource, kErrorMessageLevel,
+//fix_flaw_line_below:
+//        ""Not allowed to load local resource: "" + url.ElidedString()));
+//fix_flaw_line_below:
+//    return;
+//fix_flaw_line_below:
+//  }
+//fix_flaw_line_below:
+//
+   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));
+   frame_request.GetResourceRequest().SetHasUserGesture(
+       user_gesture_status == UserGestureStatus::kActive);
+  frame_request.GetResourceRequest().SetFrameType(
+      IsMainFrame() ? network::mojom::RequestContextFrameType::kTopLevel
+                    : network::mojom::RequestContextFrameType::kNested);
+  Navigate(frame_request, frame_load_type);
+}
+",186591,"void RemoteFrame::ScheduleNavigation(Document& origin_document,
+                                      const KURL& url,
+                                      WebFrameLoadType frame_load_type,
+                                      UserGestureStatus user_gesture_status) {
+   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));
+   frame_request.GetResourceRequest().SetHasUserGesture(
+       user_gesture_status == UserGestureStatus::kActive);
+  frame_request.GetResourceRequest().SetFrameType(
+      IsMainFrame() ? network::mojom::RequestContextFrameType::kTopLevel
+                    : network::mojom::RequestContextFrameType::kNested);
+  Navigate(frame_request, frame_load_type);
+}
+","void RemoteFrame::ScheduleNavigation(Document& origin_document,
+                                      const KURL& url,
+                                      WebFrameLoadType frame_load_type,
+                                      UserGestureStatus user_gesture_status) {
+  if (!origin_document.GetSecurityOrigin()->CanDisplay(url)) {
+    origin_document.AddConsoleMessage(ConsoleMessage::Create(
+        kSecurityMessageSource, kErrorMessageLevel,
+        ""Not allowed to load local resource: "" + url.ElidedString()));
+    return;
+  }
+
+   FrameLoadRequest frame_request(&origin_document, ResourceRequest(url));
+   frame_request.GetResourceRequest().SetHasUserGesture(
+       user_gesture_status == UserGestureStatus::kActive);
+  frame_request.GetResourceRequest().SetFrameType(
+      IsMainFrame() ? network::mojom::RequestContextFrameType::kTopLevel
+                    : network::mojom::RequestContextFrameType::kNested);
+  Navigate(frame_request, frame_load_type);
+}
+","The vulnerability in the original code lies in the lack of security checks before navigating to a URL, which could allow unauthorized access to local resources. Specifically, the absence of a validation step means that any URL could be loaded, potentially leading to security risks such as cross-origin attacks. The fixed code addresses this vulnerability by introducing a conditional check using `origin_document.GetSecurityOrigin()->CanDisplay(url)`. If the URL is not permitted, it logs a security message and exits the function, thereby preventing unauthorized navigation and enhancing the overall security of the application.","The vulnerability in the original code stems from the absence of security checks before allowing navigation to a specified URL, which could lead to unauthorized access to sensitive resources or cross-origin attacks. This oversight permits any URL to be loaded without validation, posing significant security risks. The revised code rectifies this issue by implementing a security check that verifies whether the URL can be displayed based on the document's security origin. If the URL is deemed unsafe, the code logs a security message and halts further execution, thereby preventing unauthorized navigation and enhancing the application's security posture.",3,4,4,2,"CWE-346,CWE-345,CWE-611,CWE-16,CWE-287,CWE-601,CWE-200,CWE-358,CWE-20,CWE-732",Y,10

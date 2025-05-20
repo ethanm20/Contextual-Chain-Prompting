@@ -1,0 +1,835 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,182309,182309,,Remote,Not required,Partial,CVE-2018-14354,https://www.cvedetails.com/cve/CVE-2018-14354/,CWE-77,Low,Partial,Partial,,2018-07-17,7.5,"An issue was discovered in Mutt before 1.10.1 and NeoMutt before 2018-07-16. They allow remote IMAP servers to execute arbitrary commands via backquote characters, related to the mailboxes command associated with a manual subscription or unsubscription.",2019-10-02,Exec Code ,3,https://github.com/neomutt/neomutt/commit/95e80bf9ff10f68cb6443f760b85df4117cb15eb,95e80bf9ff10f68cb6443f760b85df4117cb15eb,Quote path in imap_subscribe,1,imap/imap.c,"{""sha"": ""f1706885620c7afd61bdc5bd03593557980bd0ab"", ""filename"": ""imap/imap.c"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 1, ""changes"": 4, ""blob_url"": ""https://github.com/neomutt/neomutt/blob/95e80bf9ff10f68cb6443f760b85df4117cb15eb/imap/imap.c"", ""raw_url"": ""https://github.com/neomutt/neomutt/raw/95e80bf9ff10f68cb6443f760b85df4117cb15eb/imap/imap.c"", ""contents_url"": ""https://api.github.com/repos/neomutt/neomutt/contents/imap/imap.c?ref=95e80bf9ff10f68cb6443f760b85df4117cb15eb"", ""patch"": ""@@ -1709,6 +1709,7 @@ int imap_subscribe(char *path, bool subscribe)\n   char errstr[STRING];\n   struct Buffer err, token;\n   struct ImapMbox mx;\n+  size_t len = 0;\n \n   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)\n   {\n@@ -1729,7 +1730,8 @@ int imap_subscribe(char *path, bool subscribe)\n     mutt_buffer_init(&err);\n     err.data = errstr;\n     err.dsize = sizeof(errstr);\n-    snprintf(mbox, sizeof(mbox), \""%smailboxes \\\""%s\\\""\"", subscribe ? \""\"" : \""un\"", path);\n+\tlen = snprintf(mbox, sizeof(mbox), \""%smailboxes \"", subscribe ? \""\"" : \""un\"");\n+\timap_quote_string(mbox + len, sizeof(mbox) - len, path, true);\n     if (mutt_parse_rc_line(mbox, &token, &err))\n       mutt_debug(1, \""Error adding subscribed mailbox: %s\\n\"", errstr);\n     FREE(&token.data);""}","int imap_subscribe(char *path, bool subscribe)
+{
+  struct ImapData *idata = NULL;
+  char buf[LONG_STRING];
+  char mbox[LONG_STRING];
+   char errstr[STRING];
+   struct Buffer err, token;
+   struct ImapMbox mx;
+  size_t len = 0;
+ 
+   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)
+   {
+    mutt_error(_(""Bad mailbox name""));
+    return -1;
+  }
+  idata = imap_conn_find(&(mx.account), 0);
+  if (!idata)
+    goto fail;
+
+  imap_fix_path(idata, mx.mbox, buf, sizeof(buf));
+  if (!*buf)
+    mutt_str_strfcpy(buf, ""INBOX"", sizeof(buf));
+
+  if (ImapCheckSubscribed)
+  {
+    mutt_buffer_init(&token);
+     mutt_buffer_init(&err);
+     err.data = errstr;
+     err.dsize = sizeof(errstr);
+	len = snprintf(mbox, sizeof(mbox), ""%smailboxes "", subscribe ? """" : ""un"");
+	imap_quote_string(mbox + len, sizeof(mbox) - len, path, true);
+     if (mutt_parse_rc_line(mbox, &token, &err))
+       mutt_debug(1, ""Error adding subscribed mailbox: %s\n"", errstr);
+     FREE(&token.data);
+  }
+
+  if (subscribe)
+    mutt_message(_(""Subscribing to %s...""), buf);
+  else
+    mutt_message(_(""Unsubscribing from %s...""), buf);
+  imap_munge_mbox_name(idata, mbox, sizeof(mbox), buf);
+
+  snprintf(buf, sizeof(buf), ""%sSUBSCRIBE %s"", subscribe ? """" : ""UN"", mbox);
+
+  if (imap_exec(idata, buf, 0) < 0)
+    goto fail;
+
+  imap_unmunge_mbox_name(idata, mx.mbox);
+  if (subscribe)
+    mutt_message(_(""Subscribed to %s""), mx.mbox);
+  else
+    mutt_message(_(""Unsubscribed from %s""), mx.mbox);
+  FREE(&mx.mbox);
+  return 0;
+
+fail:
+  FREE(&mx.mbox);
+  return -1;
+}
+","int imap_subscribe(char *path, bool subscribe)
+{
+  struct ImapData *idata = NULL;
+  char buf[LONG_STRING];
+  char mbox[LONG_STRING];
+   char errstr[STRING];
+   struct Buffer err, token;
+   struct ImapMbox mx;
+ 
+   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)
+   {
+    mutt_error(_(""Bad mailbox name""));
+    return -1;
+  }
+  idata = imap_conn_find(&(mx.account), 0);
+  if (!idata)
+    goto fail;
+
+  imap_fix_path(idata, mx.mbox, buf, sizeof(buf));
+  if (!*buf)
+    mutt_str_strfcpy(buf, ""INBOX"", sizeof(buf));
+
+  if (ImapCheckSubscribed)
+  {
+    mutt_buffer_init(&token);
+     mutt_buffer_init(&err);
+     err.data = errstr;
+     err.dsize = sizeof(errstr);
+    snprintf(mbox, sizeof(mbox), ""%smailboxes \""%s\"""", subscribe ? """" : ""un"", path);
+     if (mutt_parse_rc_line(mbox, &token, &err))
+       mutt_debug(1, ""Error adding subscribed mailbox: %s\n"", errstr);
+     FREE(&token.data);
+  }
+
+  if (subscribe)
+    mutt_message(_(""Subscribing to %s...""), buf);
+  else
+    mutt_message(_(""Unsubscribing from %s...""), buf);
+  imap_munge_mbox_name(idata, mbox, sizeof(mbox), buf);
+
+  snprintf(buf, sizeof(buf), ""%sSUBSCRIBE %s"", subscribe ? """" : ""UN"", mbox);
+
+  if (imap_exec(idata, buf, 0) < 0)
+    goto fail;
+
+  imap_unmunge_mbox_name(idata, mx.mbox);
+  if (subscribe)
+    mutt_message(_(""Subscribed to %s""), mx.mbox);
+  else
+    mutt_message(_(""Unsubscribed from %s""), mx.mbox);
+  FREE(&mx.mbox);
+  return 0;
+
+fail:
+  FREE(&mx.mbox);
+  return -1;
+}
+",C,"  size_t len = 0;
+	len = snprintf(mbox, sizeof(mbox), ""%smailboxes "", subscribe ? """" : ""un"");
+	imap_quote_string(mbox + len, sizeof(mbox) - len, path, true);
+","    snprintf(mbox, sizeof(mbox), ""%smailboxes \""%s\"""", subscribe ? """" : ""un"", path);
+",,"@@ -1709,6 +1709,7 @@ int imap_subscribe(char *path, bool subscribe)
+   char errstr[STRING];
+   struct Buffer err, token;
+   struct ImapMbox mx;
++  size_t len = 0;
+ 
+   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)
+   {
+@@ -1729,7 +1730,8 @@ int imap_subscribe(char *path, bool subscribe)
+     mutt_buffer_init(&err);
+     err.data = errstr;
+     err.dsize = sizeof(errstr);
+-    snprintf(mbox, sizeof(mbox), ""%smailboxes \""%s\"""", subscribe ? """" : ""un"", path);
++	len = snprintf(mbox, sizeof(mbox), ""%smailboxes "", subscribe ? """" : ""un"");
++	imap_quote_string(mbox + len, sizeof(mbox) - len, path, true);
+     if (mutt_parse_rc_line(mbox, &token, &err))
+       mutt_debug(1, ""Error adding subscribed mailbox: %s\n"", errstr);
+     FREE(&token.data);",neomutt,95e80bf9ff10f68cb6443f760b85df4117cb15eb,51c4efb8ccae3dab550fe8909fc76fb2462f0a89,1,"int imap_subscribe(char *path, bool subscribe)
+{
+  struct ImapData *idata = NULL;
+  char buf[LONG_STRING];
+  char mbox[LONG_STRING];
+   char errstr[STRING];
+   struct Buffer err, token;
+   struct ImapMbox mx;
+//fix_flaw_line_below:
+//  size_t len = 0;
+ 
+   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)
+   {
+    mutt_error(_(""Bad mailbox name""));
+    return -1;
+  }
+  idata = imap_conn_find(&(mx.account), 0);
+  if (!idata)
+    goto fail;
+
+  imap_fix_path(idata, mx.mbox, buf, sizeof(buf));
+  if (!*buf)
+    mutt_str_strfcpy(buf, ""INBOX"", sizeof(buf));
+
+  if (ImapCheckSubscribed)
+  {
+    mutt_buffer_init(&token);
+     mutt_buffer_init(&err);
+     err.data = errstr;
+     err.dsize = sizeof(errstr);
+//flaw_line_below:
+    snprintf(mbox, sizeof(mbox), ""%smailboxes \""%s\"""", subscribe ? """" : ""un"", path);
+//fix_flaw_line_below:
+//	len = snprintf(mbox, sizeof(mbox), ""%smailboxes "", subscribe ? """" : ""un"");
+//fix_flaw_line_below:
+//	imap_quote_string(mbox + len, sizeof(mbox) - len, path, true);
+     if (mutt_parse_rc_line(mbox, &token, &err))
+       mutt_debug(1, ""Error adding subscribed mailbox: %s\n"", errstr);
+     FREE(&token.data);
+  }
+
+  if (subscribe)
+    mutt_message(_(""Subscribing to %s...""), buf);
+  else
+    mutt_message(_(""Unsubscribing from %s...""), buf);
+  imap_munge_mbox_name(idata, mbox, sizeof(mbox), buf);
+
+  snprintf(buf, sizeof(buf), ""%sSUBSCRIBE %s"", subscribe ? """" : ""UN"", mbox);
+
+  if (imap_exec(idata, buf, 0) < 0)
+    goto fail;
+
+  imap_unmunge_mbox_name(idata, mx.mbox);
+  if (subscribe)
+    mutt_message(_(""Subscribed to %s""), mx.mbox);
+  else
+    mutt_message(_(""Unsubscribed from %s""), mx.mbox);
+  FREE(&mx.mbox);
+  return 0;
+
+fail:
+  FREE(&mx.mbox);
+  return -1;
+}
+",182309,"int imap_subscribe(char *path, bool subscribe)
+{
+  struct ImapData *idata = NULL;
+  char buf[LONG_STRING];
+  char mbox[LONG_STRING];
+   char errstr[STRING];
+   struct Buffer err, token;
+   struct ImapMbox mx;
+ 
+   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)
+   {
+    mutt_error(_(""Bad mailbox name""));
+    return -1;
+  }
+  idata = imap_conn_find(&(mx.account), 0);
+  if (!idata)
+    goto fail;
+
+  imap_fix_path(idata, mx.mbox, buf, sizeof(buf));
+  if (!*buf)
+    mutt_str_strfcpy(buf, ""INBOX"", sizeof(buf));
+
+  if (ImapCheckSubscribed)
+  {
+    mutt_buffer_init(&token);
+     mutt_buffer_init(&err);
+     err.data = errstr;
+     err.dsize = sizeof(errstr);
+    snprintf(mbox, sizeof(mbox), ""%smailboxes \""%s\"""", subscribe ? """" : ""un"", path);
+     if (mutt_parse_rc_line(mbox, &token, &err))
+       mutt_debug(1, ""Error adding subscribed mailbox: %s\n"", errstr);
+     FREE(&token.data);
+  }
+
+  if (subscribe)
+    mutt_message(_(""Subscribing to %s...""), buf);
+  else
+    mutt_message(_(""Unsubscribing from %s...""), buf);
+  imap_munge_mbox_name(idata, mbox, sizeof(mbox), buf);
+
+  snprintf(buf, sizeof(buf), ""%sSUBSCRIBE %s"", subscribe ? """" : ""UN"", mbox);
+
+  if (imap_exec(idata, buf, 0) < 0)
+    goto fail;
+
+  imap_unmunge_mbox_name(idata, mx.mbox);
+  if (subscribe)
+    mutt_message(_(""Subscribed to %s""), mx.mbox);
+  else
+    mutt_message(_(""Unsubscribed from %s""), mx.mbox);
+  FREE(&mx.mbox);
+  return 0;
+
+fail:
+  FREE(&mx.mbox);
+  return -1;
+}
+","int imap_subscribe(char *path, bool subscribe)
+{
+  struct ImapData *idata = NULL;
+  char buf[LONG_STRING];
+  char mbox[LONG_STRING];
+   char errstr[STRING];
+   struct Buffer err, token;
+   struct ImapMbox mx;
+  size_t len = 0;
+ 
+   if (!mx_is_imap(path) || imap_parse_path(path, &mx) || !mx.mbox)
+   {
+    mutt_error(_(""Bad mailbox name""));
+    return -1;
+  }
+  idata = imap_conn_find(&(mx.account), 0);
+  if (!idata)
+    goto fail;
+
+  imap_fix_path(idata, mx.mbox, buf, sizeof(buf));
+  if (!*buf)
+    mutt_str_strfcpy(buf, ""INBOX"", sizeof(buf));
+
+  if (ImapCheckSubscribed)
+  {
+    mutt_buffer_init(&token);
+     mutt_buffer_init(&err);
+     err.data = errstr;
+     err.dsize = sizeof(errstr);
+	len = snprintf(mbox, sizeof(mbox), ""%smailboxes "", subscribe ? """" : ""un"");
+	imap_quote_string(mbox + len, sizeof(mbox) - len, path, true);
+     if (mutt_parse_rc_line(mbox, &token, &err))
+       mutt_debug(1, ""Error adding subscribed mailbox: %s\n"", errstr);
+     FREE(&token.data);
+  }
+
+  if (subscribe)
+    mutt_message(_(""Subscribing to %s...""), buf);
+  else
+    mutt_message(_(""Unsubscribing from %s...""), buf);
+  imap_munge_mbox_name(idata, mbox, sizeof(mbox), buf);
+
+  snprintf(buf, sizeof(buf), ""%sSUBSCRIBE %s"", subscribe ? """" : ""UN"", mbox);
+
+  if (imap_exec(idata, buf, 0) < 0)
+    goto fail;
+
+  imap_unmunge_mbox_name(idata, mx.mbox);
+  if (subscribe)
+    mutt_message(_(""Subscribed to %s""), mx.mbox);
+  else
+    mutt_message(_(""Unsubscribed from %s""), mx.mbox);
+  FREE(&mx.mbox);
+  return 0;
+
+fail:
+  FREE(&mx.mbox);
+  return -1;
+}
+","The `imap_subscribe` function manages the subscription status of an IMAP mailbox, allowing users to either subscribe to or unsubscribe from a specified mailbox path. It first validates the mailbox path and retrieves the associated IMAP connection data. If the mailbox is valid, it constructs a command string for subscribing or unsubscribing and executes it via the IMAP protocol. The function also handles error messages and provides user feedback on the subscription status. If any step fails, it cleans up allocated resources and returns an error code, ensuring proper memory management throughout the process.","The code defines a function that manages the subscription status of a mailbox in an email client using the IMAP protocol. It begins by validating the provided mailbox path and retrieving the necessary connection data. If the mailbox is valid, it constructs a command to either subscribe to or unsubscribe from the mailbox and executes this command. The function also handles potential errors and provides feedback to the user regarding the subscription status. In case of any failure during the process, it ensures proper cleanup of resources and returns an error code to indicate the issue.","The vulnerability in the original code stemmed from the potential for command injection due to improper handling of the mailbox path when constructing the command string. Specifically, the code directly concatenated the user-provided path into the command without sanitization, allowing an attacker to manipulate the command by injecting malicious input. The fix introduced a new function, `imap_quote_string`, which properly escapes the mailbox path before appending it to the command string. This change mitigates the risk of command injection by ensuring that any special characters in the user input are safely handled, thus enhancing the overall security of the function.","The vulnerability in the original code was due to inadequate sanitization of user input, specifically the mailbox path, which could lead to command injection attacks. By directly incorporating the user-provided path into the command string without proper escaping, an attacker could manipulate the command to execute arbitrary actions on the server. The fix addressed this issue by implementing a mechanism to escape special characters in the user input before it was included in the command. This enhancement effectively mitigated the risk of command injection, ensuring that user input is safely handled and preventing potential exploitation.","The vulnerability was fixed by introducing the `imap_quote_string` function, which sanitizes the user-provided mailbox path before it is concatenated into the command string. In the updated code, the length of the initial command is calculated using `snprintf`, and the sanitized path is appended safely to the command string. This ensures that any special characters in the user input are properly escaped, preventing command injection. By replacing the direct concatenation of the mailbox path with a secure quoting mechanism, the code now effectively mitigates the risk of malicious input affecting the execution of commands on the server.","The vulnerability was addressed by implementing a mechanism to sanitize user input before it was included in the command string. This involved introducing a function that properly escapes any special characters in the user-provided mailbox path, ensuring that it cannot be manipulated to execute unintended commands. The updated code calculates the length of the initial command and appends the sanitized input securely, thereby preventing command injection. This enhancement effectively protects the system from potential exploitation by ensuring that user input is handled safely and does not compromise the integrity of command execution.","CWE-78, CWE-77, CWE-88, CWE-116, CWE-74, CWE-89, CWE-647, CWE-838, CWE-564, CWE-20",N,-1
+1,1,182848,182848,,Local,Not required,,CVE-2019-11884,https://www.cvedetails.com/cve/CVE-2019-11884/,CWE-77,Low,Partial,,,2019-05-10,2.1,"The do_hidp_sock_ioctl function in net/bluetooth/hidp/sock.c in the Linux kernel before 5.0.15 allows a local user to obtain potentially sensitive information from kernel stack memory via a HIDPCONNADD command, because a name field may not end with a '0' character.",2019-05-31,+Info ,1,https://github.com/torvalds/linux/commit/a1616a5ac99ede5d605047a9012481ce7ff18b16,a1616a5ac99ede5d605047a9012481ce7ff18b16,"Bluetooth: hidp: fix buffer overflow
+
+Struct ca is copied from userspace. It is not checked whether the ""name""
+field is NULL terminated, which allows local users to obtain potentially
+sensitive information from kernel stack memory, via a HIDPCONNADD command.
+
+This vulnerability is similar to CVE-2011-1079.
+
+Signed-off-by: Young Xiao <YangX92@hotmail.com>
+Signed-off-by: Marcel Holtmann <marcel@holtmann.org>
+Cc: stable@vger.kernel.org",0,net/bluetooth/hidp/sock.c,"{""sha"": ""2151913892ce8705d093a96fa65c3888e8a6dbb1"", ""filename"": ""net/bluetooth/hidp/sock.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/torvalds/linux/blob/a1616a5ac99ede5d605047a9012481ce7ff18b16/net/bluetooth/hidp/sock.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/a1616a5ac99ede5d605047a9012481ce7ff18b16/net/bluetooth/hidp/sock.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/net/bluetooth/hidp/sock.c?ref=a1616a5ac99ede5d605047a9012481ce7ff18b16"", ""patch"": ""@@ -75,6 +75,7 @@ static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user\n \t\t\tsockfd_put(csock);\n \t\t\treturn err;\n \t\t}\n+\t\tca.name[sizeof(ca.name)-1] = 0;\n \n \t\terr = hidp_connection_add(&ca, csock, isock);\n \t\tif (!err && copy_to_user(argp, &ca, sizeof(ca)))""}","static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user *argp)
+{
+	struct hidp_connadd_req ca;
+	struct hidp_conndel_req cd;
+	struct hidp_connlist_req cl;
+	struct hidp_conninfo ci;
+	struct socket *csock;
+	struct socket *isock;
+	int err;
+
+	BT_DBG(""cmd %x arg %p"", cmd, argp);
+
+	switch (cmd) {
+	case HIDPCONNADD:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&ca, argp, sizeof(ca)))
+			return -EFAULT;
+
+		csock = sockfd_lookup(ca.ctrl_sock, &err);
+		if (!csock)
+			return err;
+
+		isock = sockfd_lookup(ca.intr_sock, &err);
+		if (!isock) {
+ 			sockfd_put(csock);
+ 			return err;
+ 		}
+		ca.name[sizeof(ca.name)-1] = 0;
+ 
+ 		err = hidp_connection_add(&ca, csock, isock);
+ 		if (!err && copy_to_user(argp, &ca, sizeof(ca)))
+			err = -EFAULT;
+
+		sockfd_put(csock);
+		sockfd_put(isock);
+
+		return err;
+
+	case HIDPCONNDEL:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&cd, argp, sizeof(cd)))
+			return -EFAULT;
+
+		return hidp_connection_del(&cd);
+
+	case HIDPGETCONNLIST:
+		if (copy_from_user(&cl, argp, sizeof(cl)))
+			return -EFAULT;
+
+		if (cl.cnum <= 0)
+			return -EINVAL;
+
+		err = hidp_get_connlist(&cl);
+		if (!err && copy_to_user(argp, &cl, sizeof(cl)))
+			return -EFAULT;
+
+		return err;
+
+	case HIDPGETCONNINFO:
+		if (copy_from_user(&ci, argp, sizeof(ci)))
+			return -EFAULT;
+
+		err = hidp_get_conninfo(&ci);
+		if (!err && copy_to_user(argp, &ci, sizeof(ci)))
+			return -EFAULT;
+
+		return err;
+	}
+
+	return -EINVAL;
+}
+","static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user *argp)
+{
+	struct hidp_connadd_req ca;
+	struct hidp_conndel_req cd;
+	struct hidp_connlist_req cl;
+	struct hidp_conninfo ci;
+	struct socket *csock;
+	struct socket *isock;
+	int err;
+
+	BT_DBG(""cmd %x arg %p"", cmd, argp);
+
+	switch (cmd) {
+	case HIDPCONNADD:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&ca, argp, sizeof(ca)))
+			return -EFAULT;
+
+		csock = sockfd_lookup(ca.ctrl_sock, &err);
+		if (!csock)
+			return err;
+
+		isock = sockfd_lookup(ca.intr_sock, &err);
+		if (!isock) {
+ 			sockfd_put(csock);
+ 			return err;
+ 		}
+ 
+ 		err = hidp_connection_add(&ca, csock, isock);
+ 		if (!err && copy_to_user(argp, &ca, sizeof(ca)))
+			err = -EFAULT;
+
+		sockfd_put(csock);
+		sockfd_put(isock);
+
+		return err;
+
+	case HIDPCONNDEL:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&cd, argp, sizeof(cd)))
+			return -EFAULT;
+
+		return hidp_connection_del(&cd);
+
+	case HIDPGETCONNLIST:
+		if (copy_from_user(&cl, argp, sizeof(cl)))
+			return -EFAULT;
+
+		if (cl.cnum <= 0)
+			return -EINVAL;
+
+		err = hidp_get_connlist(&cl);
+		if (!err && copy_to_user(argp, &cl, sizeof(cl)))
+			return -EFAULT;
+
+		return err;
+
+	case HIDPGETCONNINFO:
+		if (copy_from_user(&ci, argp, sizeof(ci)))
+			return -EFAULT;
+
+		err = hidp_get_conninfo(&ci);
+		if (!err && copy_to_user(argp, &ci, sizeof(ci)))
+			return -EFAULT;
+
+		return err;
+	}
+
+	return -EINVAL;
+}
+",C,"		ca.name[sizeof(ca.name)-1] = 0;
+",,,"@@ -75,6 +75,7 @@ static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user
+ 			sockfd_put(csock);
+ 			return err;
+ 		}
++		ca.name[sizeof(ca.name)-1] = 0;
+ 
+ 		err = hidp_connection_add(&ca, csock, isock);
+ 		if (!err && copy_to_user(argp, &ca, sizeof(ca)))",linux,a1616a5ac99ede5d605047a9012481ce7ff18b16,73623340546cceff421c95b53abd8140d1f2b2a2,1,"static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user *argp)
+{
+	struct hidp_connadd_req ca;
+	struct hidp_conndel_req cd;
+	struct hidp_connlist_req cl;
+	struct hidp_conninfo ci;
+	struct socket *csock;
+	struct socket *isock;
+	int err;
+
+	BT_DBG(""cmd %x arg %p"", cmd, argp);
+
+	switch (cmd) {
+	case HIDPCONNADD:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&ca, argp, sizeof(ca)))
+			return -EFAULT;
+
+		csock = sockfd_lookup(ca.ctrl_sock, &err);
+		if (!csock)
+			return err;
+
+		isock = sockfd_lookup(ca.intr_sock, &err);
+		if (!isock) {
+ 			sockfd_put(csock);
+ 			return err;
+ 		}
+//fix_flaw_line_below:
+//		ca.name[sizeof(ca.name)-1] = 0;
+ 
+ 		err = hidp_connection_add(&ca, csock, isock);
+ 		if (!err && copy_to_user(argp, &ca, sizeof(ca)))
+			err = -EFAULT;
+
+		sockfd_put(csock);
+		sockfd_put(isock);
+
+		return err;
+
+	case HIDPCONNDEL:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&cd, argp, sizeof(cd)))
+			return -EFAULT;
+
+		return hidp_connection_del(&cd);
+
+	case HIDPGETCONNLIST:
+		if (copy_from_user(&cl, argp, sizeof(cl)))
+			return -EFAULT;
+
+		if (cl.cnum <= 0)
+			return -EINVAL;
+
+		err = hidp_get_connlist(&cl);
+		if (!err && copy_to_user(argp, &cl, sizeof(cl)))
+			return -EFAULT;
+
+		return err;
+
+	case HIDPGETCONNINFO:
+		if (copy_from_user(&ci, argp, sizeof(ci)))
+			return -EFAULT;
+
+		err = hidp_get_conninfo(&ci);
+		if (!err && copy_to_user(argp, &ci, sizeof(ci)))
+			return -EFAULT;
+
+		return err;
+	}
+
+	return -EINVAL;
+}
+",182848,"static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user *argp)
+{
+	struct hidp_connadd_req ca;
+	struct hidp_conndel_req cd;
+	struct hidp_connlist_req cl;
+	struct hidp_conninfo ci;
+	struct socket *csock;
+	struct socket *isock;
+	int err;
+
+	BT_DBG(""cmd %x arg %p"", cmd, argp);
+
+	switch (cmd) {
+	case HIDPCONNADD:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&ca, argp, sizeof(ca)))
+			return -EFAULT;
+
+		csock = sockfd_lookup(ca.ctrl_sock, &err);
+		if (!csock)
+			return err;
+
+		isock = sockfd_lookup(ca.intr_sock, &err);
+		if (!isock) {
+ 			sockfd_put(csock);
+ 			return err;
+ 		}
+ 
+ 		err = hidp_connection_add(&ca, csock, isock);
+ 		if (!err && copy_to_user(argp, &ca, sizeof(ca)))
+			err = -EFAULT;
+
+		sockfd_put(csock);
+		sockfd_put(isock);
+
+		return err;
+
+	case HIDPCONNDEL:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&cd, argp, sizeof(cd)))
+			return -EFAULT;
+
+		return hidp_connection_del(&cd);
+
+	case HIDPGETCONNLIST:
+		if (copy_from_user(&cl, argp, sizeof(cl)))
+			return -EFAULT;
+
+		if (cl.cnum <= 0)
+			return -EINVAL;
+
+		err = hidp_get_connlist(&cl);
+		if (!err && copy_to_user(argp, &cl, sizeof(cl)))
+			return -EFAULT;
+
+		return err;
+
+	case HIDPGETCONNINFO:
+		if (copy_from_user(&ci, argp, sizeof(ci)))
+			return -EFAULT;
+
+		err = hidp_get_conninfo(&ci);
+		if (!err && copy_to_user(argp, &ci, sizeof(ci)))
+			return -EFAULT;
+
+		return err;
+	}
+
+	return -EINVAL;
+}
+","static int do_hidp_sock_ioctl(struct socket *sock, unsigned int cmd, void __user *argp)
+{
+	struct hidp_connadd_req ca;
+	struct hidp_conndel_req cd;
+	struct hidp_connlist_req cl;
+	struct hidp_conninfo ci;
+	struct socket *csock;
+	struct socket *isock;
+	int err;
+
+	BT_DBG(""cmd %x arg %p"", cmd, argp);
+
+	switch (cmd) {
+	case HIDPCONNADD:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&ca, argp, sizeof(ca)))
+			return -EFAULT;
+
+		csock = sockfd_lookup(ca.ctrl_sock, &err);
+		if (!csock)
+			return err;
+
+		isock = sockfd_lookup(ca.intr_sock, &err);
+		if (!isock) {
+ 			sockfd_put(csock);
+ 			return err;
+ 		}
+		ca.name[sizeof(ca.name)-1] = 0;
+ 
+ 		err = hidp_connection_add(&ca, csock, isock);
+ 		if (!err && copy_to_user(argp, &ca, sizeof(ca)))
+			err = -EFAULT;
+
+		sockfd_put(csock);
+		sockfd_put(isock);
+
+		return err;
+
+	case HIDPCONNDEL:
+		if (!capable(CAP_NET_ADMIN))
+			return -EPERM;
+
+		if (copy_from_user(&cd, argp, sizeof(cd)))
+			return -EFAULT;
+
+		return hidp_connection_del(&cd);
+
+	case HIDPGETCONNLIST:
+		if (copy_from_user(&cl, argp, sizeof(cl)))
+			return -EFAULT;
+
+		if (cl.cnum <= 0)
+			return -EINVAL;
+
+		err = hidp_get_connlist(&cl);
+		if (!err && copy_to_user(argp, &cl, sizeof(cl)))
+			return -EFAULT;
+
+		return err;
+
+	case HIDPGETCONNINFO:
+		if (copy_from_user(&ci, argp, sizeof(ci)))
+			return -EFAULT;
+
+		err = hidp_get_conninfo(&ci);
+		if (!err && copy_to_user(argp, &ci, sizeof(ci)))
+			return -EFAULT;
+
+		return err;
+	}
+
+	return -EINVAL;
+}
+","The provided code implements a function `do_hidp_sock_ioctl` that handles various IOCTL commands related to Bluetooth HID (Human Interface Device) connections. It processes commands such as adding a connection (`HIDPCONNADD`), deleting a connection (`HIDPCONNDEL`), retrieving a list of connections (`HIDPGETCONNLIST`), and fetching connection information (`HIDPGETCONNINFO`). The function checks for administrative privileges, copies data between user and kernel space, and manages socket references. It returns appropriate error codes for permission issues, memory access faults, or invalid parameters, ensuring robust interaction with HIDP socket operations.","The code defines a function that manages various operations related to Bluetooth HID connections through specific commands. It allows for adding and deleting connections, as well as retrieving lists and details of existing connections. The function ensures that only users with the appropriate administrative privileges can perform certain actions. It handles data transfer between user space and kernel space, checking for errors during these operations. Additionally, it maintains proper resource management by managing socket references and returning relevant error codes for issues such as permission denial, memory access faults, or invalid input parameters.","The vulnerability in the original code stemmed from a potential buffer overflow when handling the connection addition command. Specifically, the code did not ensure that the name field in the connection request structure was properly null-terminated, which could lead to writing beyond the allocated memory if the input exceeded the expected size. The fix introduced a line that explicitly sets the last character of the name array to zero, ensuring it is always null-terminated. This change mitigates the risk of buffer overflow, enhancing the security and stability of the function when processing user input.","The vulnerability in the original code was related to a potential buffer overflow due to inadequate handling of user input, specifically concerning the termination of a string. Without ensuring that the string was properly null-terminated, there was a risk of writing beyond the allocated memory, which could lead to memory corruption or exploitation. The fix addressed this issue by explicitly setting the last character of the string to zero, guaranteeing that it would always be treated as a properly terminated string. This change significantly improved the security of the code by preventing unintended memory access and ensuring safer handling of user data.","The vulnerability was fixed by adding a line of code that explicitly sets the last character of the name field in the connection request structure to zero. This change ensures that the name string is always null-terminated, preventing potential buffer overflow issues when the input exceeds the expected size. By including the line `ca.name[sizeof(ca.name)-1] = 0;`, the code guarantees that any string manipulation involving this field will not read beyond its allocated memory. This enhancement improves the overall security and stability of the function when processing user input, mitigating risks associated with improper string handling.","The vulnerability was fixed by implementing a safeguard that ensures a string is properly null-terminated, thereby preventing potential buffer overflow issues. This was achieved by explicitly setting the last character of the string to zero after copying user input. By ensuring that the string is always treated as properly terminated, the fix mitigates the risk of reading or writing beyond the allocated memory, which could lead to memory corruption or exploitation. This enhancement significantly improves the security and stability of the code when handling user data, ensuring safer interactions with input.","CWE-120, CWE-119, CWE-121, CWE-122, CWE-170, CWE-125, CWE-126, CWE-20, CWE-785, CWE-789",N,-1
+2,2,187046,187046,,Local,Not required,,CVE-2019-5804,https://www.cvedetails.com/cve/CVE-2019-5804/,CWE-77,Low,,Partial,,2019-05-23,2.1,Incorrect command line processing in Chrome in Google Chrome prior to 73.0.3683.75 allowed a local attacker to perform domain spoofing via a crafted domain name.,2019-06-28,,4,https://github.com/chromium/chromium/commit/08965161257ab9aeef9a3548c1cd1a44525dc562,08965161257ab9aeef9a3548c1cd1a44525dc562,"Ignore switches following ""--"" when parsing a command line.
+
+BUG=933004
+R=wfh@chromium.org
+
+Change-Id: I911be4cbfc38a4d41dec85d85f7fe0f50ddca392
+Reviewed-on: https://chromium-review.googlesource.com/c/1481210
+Auto-Submit: Greg Thompson <grt@chromium.org>
+Commit-Queue: Julian Pastarmov <pastarmovj@chromium.org>
+Reviewed-by: Julian Pastarmov <pastarmovj@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#634604}",2,chrome/install_static/install_util.cc,"{""sha"": ""7c7b6c5343bb05ebea63212a0c00fdfbd675efc7"", ""filename"": ""chrome/install_static/install_util.cc"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 2, ""changes"": 6, ""blob_url"": ""https://github.com/chromium/chromium/blob/08965161257ab9aeef9a3548c1cd1a44525dc562/chrome/install_static/install_util.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/08965161257ab9aeef9a3548c1cd1a44525dc562/chrome/install_static/install_util.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/install_static/install_util.cc?ref=08965161257ab9aeef9a3548c1cd1a44525dc562"", ""patch"": ""@@ -847,13 +847,15 @@ std::vector<std::wstring> TokenizeCommandLineToArray(\n \n std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,\n                                            const std::wstring& switch_name) {\n+  static constexpr wchar_t kSwitchTerminator[] = L\""--\"";\n   assert(!command_line.empty());\n   assert(!switch_name.empty());\n \n   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);\n   std::wstring switch_with_equal = L\""--\"" + switch_name + L\""=\"";\n-  for (size_t i = 1; i < as_array.size(); ++i) {\n-    const std::wstring& arg = as_array[i];\n+  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);\n+  for (auto scan = as_array.cbegin(); scan != end; ++scan) {\n+    const std::wstring& arg = *scan;\n     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)\n       return arg.substr(switch_with_equal.size());\n   }""}<_**next**_>{""sha"": ""27a55e3bd94ca5a377ca300fe5240874f4efdcf5"", ""filename"": ""chrome/install_static/install_util.h"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 3, ""changes"": 7, ""blob_url"": ""https://github.com/chromium/chromium/blob/08965161257ab9aeef9a3548c1cd1a44525dc562/chrome/install_static/install_util.h"", ""raw_url"": ""https://github.com/chromium/chromium/raw/08965161257ab9aeef9a3548c1cd1a44525dc562/chrome/install_static/install_util.h"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/install_static/install_util.h?ref=08965161257ab9aeef9a3548c1cd1a44525dc562"", ""patch"": ""@@ -275,9 +275,10 @@ std::vector<std::wstring> TokenizeString16(const std::wstring& str,\n std::vector<std::wstring> TokenizeCommandLineToArray(\n     const std::wstring& command_line);\n \n-// We assume that the command line |command_line| contains multiple switches\n-// with the format --<switch name>=<switch value>. This function returns the\n-// value of the |switch_name| passed in.\n+// Returns the value of a switch of the form \""--<switch name>=<switch value>\"" in\n+// |command_line|. An empty switch in |command_line| (\""--\"") denotes the end of\n+// switches and the beginning of args. Anything of the form --<switch\n+// name>=<switch value> following \""--\"" is ignored.\n std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,\n                                            const std::wstring& switch_name);\n ""}<_**next**_>{""sha"": ""a05794655ddd653123941c14ce20076e5c07c79d"", ""filename"": ""chrome/install_static/install_util_unittest.cc"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/chromium/chromium/blob/08965161257ab9aeef9a3548c1cd1a44525dc562/chrome/install_static/install_util_unittest.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/08965161257ab9aeef9a3548c1cd1a44525dc562/chrome/install_static/install_util_unittest.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/chrome/install_static/install_util_unittest.cc?ref=08965161257ab9aeef9a3548c1cd1a44525dc562"", ""patch"": ""@@ -96,6 +96,10 @@ TEST(InstallStaticTest, GetSwitchValueFromCommandLineTest) {\n   // Bad command line without closing quotes. Should not crash.\n   value = GetSwitchValueFromCommandLine(L\""\\\""blah --type=\\t\\t\\t\"", L\""type\"");\n   EXPECT_TRUE(value.empty());\n+\n+  // Anything following \""--\"" should be considered args and therfore ignored.\n+  value = GetSwitchValueFromCommandLine(L\""blah -- --type=bleh\"", L\""type\"");\n+  EXPECT_TRUE(value.empty());\n }\n \n TEST(InstallStaticTest, SpacesAndQuotesInCommandLineArguments) {""}"," std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
+                                            const std::wstring& switch_name) {
+  static constexpr wchar_t kSwitchTerminator[] = L""--"";
+   assert(!command_line.empty());
+   assert(!switch_name.empty());
+ 
+   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
+   std::wstring switch_with_equal = L""--"" + switch_name + L""="";
+  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);
+  for (auto scan = as_array.cbegin(); scan != end; ++scan) {
+    const std::wstring& arg = *scan;
+     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
+       return arg.substr(switch_with_equal.size());
+   }
+
+  return std::wstring();
+}
+"," std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
+                                            const std::wstring& switch_name) {
+   assert(!command_line.empty());
+   assert(!switch_name.empty());
+ 
+   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
+   std::wstring switch_with_equal = L""--"" + switch_name + L""="";
+  for (size_t i = 1; i < as_array.size(); ++i) {
+    const std::wstring& arg = as_array[i];
+     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
+       return arg.substr(switch_with_equal.size());
+   }
+
+  return std::wstring();
+}
+",C,"  static constexpr wchar_t kSwitchTerminator[] = L""--"";
+  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);
+  for (auto scan = as_array.cbegin(); scan != end; ++scan) {
+    const std::wstring& arg = *scan;
+","  for (size_t i = 1; i < as_array.size(); ++i) {
+    const std::wstring& arg = as_array[i];
+",,"@@ -847,13 +847,15 @@ std::vector<std::wstring> TokenizeCommandLineToArray(
+ 
+ std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
+                                            const std::wstring& switch_name) {
++  static constexpr wchar_t kSwitchTerminator[] = L""--"";
+   assert(!command_line.empty());
+   assert(!switch_name.empty());
+ 
+   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
+   std::wstring switch_with_equal = L""--"" + switch_name + L""="";
+-  for (size_t i = 1; i < as_array.size(); ++i) {
+-    const std::wstring& arg = as_array[i];
++  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);
++  for (auto scan = as_array.cbegin(); scan != end; ++scan) {
++    const std::wstring& arg = *scan;
+     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
+       return arg.substr(switch_with_equal.size());
+   }",Chrome,08965161257ab9aeef9a3548c1cd1a44525dc562,fba5eff0d4a6451e2d4a925c4f47973fbf10bb91,1," std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
+                                            const std::wstring& switch_name) {
+//fix_flaw_line_below:
+//  static constexpr wchar_t kSwitchTerminator[] = L""--"";
+   assert(!command_line.empty());
+   assert(!switch_name.empty());
+ 
+   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
+   std::wstring switch_with_equal = L""--"" + switch_name + L""="";
+//flaw_line_below:
+  for (size_t i = 1; i < as_array.size(); ++i) {
+//flaw_line_below:
+    const std::wstring& arg = as_array[i];
+//fix_flaw_line_below:
+//  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);
+//fix_flaw_line_below:
+//  for (auto scan = as_array.cbegin(); scan != end; ++scan) {
+//fix_flaw_line_below:
+//    const std::wstring& arg = *scan;
+     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
+       return arg.substr(switch_with_equal.size());
+   }
+
+  return std::wstring();
+}
+",187046," std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
+                                            const std::wstring& switch_name) {
+   assert(!command_line.empty());
+   assert(!switch_name.empty());
+ 
+   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
+   std::wstring switch_with_equal = L""--"" + switch_name + L""="";
+  for (size_t i = 1; i < as_array.size(); ++i) {
+    const std::wstring& arg = as_array[i];
+     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
+       return arg.substr(switch_with_equal.size());
+   }
+
+  return std::wstring();
+}
+"," std::wstring GetSwitchValueFromCommandLine(const std::wstring& command_line,
+                                            const std::wstring& switch_name) {
+  static constexpr wchar_t kSwitchTerminator[] = L""--"";
+   assert(!command_line.empty());
+   assert(!switch_name.empty());
+ 
+   std::vector<std::wstring> as_array = TokenizeCommandLineToArray(command_line);
+   std::wstring switch_with_equal = L""--"" + switch_name + L""="";
+  auto end = std::find(as_array.cbegin(), as_array.cend(), kSwitchTerminator);
+  for (auto scan = as_array.cbegin(); scan != end; ++scan) {
+    const std::wstring& arg = *scan;
+     if (arg.compare(0, switch_with_equal.size(), switch_with_equal) == 0)
+       return arg.substr(switch_with_equal.size());
+   }
+
+  return std::wstring();
+}
+","The provided code defines a function `GetSwitchValueFromCommandLine` that extracts the value associated with a specified command-line switch from a given command line string. It first checks that both the command line and switch name are not empty. The command line is tokenized into an array of strings, and a specific format for the switch (e.g., `--switch_name=value`) is constructed. The function then iterates through the tokenized arguments, comparing each to the constructed switch format. If a match is found, it returns the value portion of the switch; otherwise, it returns an empty string.","The code defines a function that retrieves the value associated with a specific command-line option from a provided command line string. It begins by ensuring that both the command line and the option name are not empty. The command line is then split into individual components, and a specific format for the option is created. The function iterates through the components, checking for a match with the constructed option format. If a match is found, it extracts and returns the value linked to that option; if no match is found, it returns an empty string.","The vulnerability in the original code arises from the lack of bounds checking when iterating through the tokenized command line arguments, which could lead to accessing out-of-bounds elements if the command line does not contain the expected format. In the fixed code, a terminator is introduced, and the iteration is limited to the range before this terminator using `std::find`. This ensures that the loop only processes valid arguments, preventing potential out-of-bounds access and enhancing the overall safety of the function by ensuring it does not process unintended or malformed input.","The vulnerability in the original code stems from the potential for out-of-bounds access when iterating through the command line arguments, as there was no mechanism to limit the range of processed elements. This could lead to accessing invalid memory if the command line did not conform to the expected format. The fixed code addresses this issue by introducing a terminator that defines a clear endpoint for the iteration, ensuring that only valid arguments are examined. This change effectively prevents the function from processing beyond the intended range, thereby enhancing its safety and robustness against malformed input.","The vulnerability was fixed by introducing a static constant terminator that defines a clear endpoint for the iteration through the command line arguments. In the updated code, `std::find` is used to locate this terminator within the tokenized array, allowing the loop to iterate only from the beginning of the array to the position of the terminator. This ensures that the function processes only valid arguments, preventing out-of-bounds access. By limiting the range of the loop to valid elements, the code enhances its safety and robustness against malformed input, effectively mitigating the risk of accessing invalid memory.","The vulnerability was fixed by implementing a mechanism to define a clear endpoint for the iteration through the command line arguments. This was achieved by introducing a terminator that marks where valid arguments end, ensuring that the loop only processes elements up to this point. By doing so, the code prevents any potential out-of-bounds access that could occur if the command line did not conform to the expected format. This change enhances the overall safety and robustness of the function, effectively mitigating the risk associated with processing invalid or malformed input.","CWE-125, CWE-788, CWE-119, CWE-787, CWE-123, CWE-124, CWE-126, CWE-129, CWE-805, CWE-823",N,-1

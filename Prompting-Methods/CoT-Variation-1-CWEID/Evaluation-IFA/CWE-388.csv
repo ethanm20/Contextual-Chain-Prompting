@@ -1,0 +1,3017 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,177866,177866,,Remote,Not required,Partial,CVE-2018-16542,https://www.cvedetails.com/cve/CVE-2018-16542/,CWE-388,Medium,,,,2018-09-05,4.3,"In Artifex Ghostscript before 9.24, attackers able to supply crafted PostScript files could use insufficient interpreter stack-size checking during error handling to crash the interpreter.",2018-11-25,,6,http://git.ghostscript.com/?p=ghostpdl.git;a=commit;h=b575e1ec42cc86f6a58c603f2a88fcc2af699cc8,b575e1ec42cc86f6a58c603f2a88fcc2af699cc8,,1,,,"gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+        osp++;
+        if (osp >= ostop) {
+            *pexit_code = gs_error_Fatal;
+            return_error(gs_error_Fatal);
+        }
+        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+","gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+        *++osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+",C,"        osp++;
+        if (osp >= ostop) {
+            *pexit_code = gs_error_Fatal;
+            return_error(gs_error_Fatal);
+        }
+        *osp = *perror_object;
+","        *++osp = *perror_object;
+",d224b4abec1d0bd991028b7e38e95d47b7a834f4,"@@ -676,7 +676,12 @@ again:
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+-        *++osp = *perror_object;
++        osp++;
++        if (osp >= ostop) {
++            *pexit_code = gs_error_Fatal;
++            return_error(gs_error_Fatal);
++        }
++        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;",ghostscript,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=psi/interp.c;h=615083867e0725abb15bded4519a6b37873903e2;hb=615083867e0725abb15bded4519a6b37873903e2,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=psi/interp.c;h=8b495569304883537de3fc1c4df91a28f9ad55da;hb=8b495569304883537de3fc1c4df91a28f9ad55da,1,"gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+//flaw_line_below:
+        *++osp = *perror_object;
+//fix_flaw_line_below:
+//        osp++;
+//fix_flaw_line_below:
+//        if (osp >= ostop) {
+//fix_flaw_line_below:
+//            *pexit_code = gs_error_Fatal;
+//fix_flaw_line_below:
+//            return_error(gs_error_Fatal);
+//fix_flaw_line_below:
+//        }
+//fix_flaw_line_below:
+//        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+",177866,"gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+        *++osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+","gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+        osp++;
+        if (osp >= ostop) {
+            *pexit_code = gs_error_Fatal;
+            return_error(gs_error_Fatal);
+        }
+        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+","The `gs_call_interp` function is designed to interpret a PostScript command while managing memory and error handling. It initializes context variables, checks for garbage collection signals, and processes the command using the `interp` function. If errors occur, such as stack overflows or underflows, it attempts to recover by adjusting the operand and execution stacks. The function also handles specific error codes, updating the exit code and error object as necessary. Additionally, it ensures that error names are retrieved from the appropriate dictionaries, pushing error objects onto the operand stack when required, thus maintaining the integrity of the interpreter's state.","The provided code implements a function that interprets a command in a scripting environment while managing memory and error handling. It initializes necessary context and checks for memory collection signals, ensuring that resources are properly managed during execution. The function processes the command and handles various error scenarios, including stack overflows and underflows, by attempting to recover and adjust the execution state. It retrieves error names from predefined dictionaries and updates the error object accordingly, ensuring that any errors encountered are appropriately reported and that the interpreter's state remains consistent throughout the process.","The vulnerability identified in the original code, classified under CWE-388, arises from improper handling of error conditions, particularly when managing the operand stack. In the vulnerable version, the code could lead to a dangling reference to an error object, which might be accessed after it has been invalidated, potentially causing undefined behavior or crashes. The fix addresses this by ensuring that the error object is explicitly set to a null state before any garbage collection occurs, preventing any future references to it. Additionally, the updated code checks the operand stack's bounds before pushing the error object, thereby enhancing stability and security.","The vulnerability identified under CWE-388 in the original code stems from inadequate management of error conditions, particularly regarding the handling of error objects and stack references. This could lead to situations where a reference to an invalidated error object remains accessible, resulting in undefined behavior or crashes. The fix addresses this issue by ensuring that error objects are explicitly nullified before any garbage collection occurs, thereby preventing dangling references. Additionally, the updated code includes checks to ensure that the stack's bounds are respected before pushing any error objects, enhancing the overall stability and security of the execution environment.","The vulnerability was fixed by implementing a more robust error handling mechanism within the code. Specifically, the function now calls `make_null(perror_object)` to explicitly nullify the error object before any garbage collection occurs, preventing dangling references. Additionally, the code checks the bounds of the operand stack before pushing the error object, ensuring that `osp` does not exceed `ostop`. This is achieved by verifying `if (osp >= ostop)` and returning a fatal error if the condition is met. These changes collectively enhance the stability and security of the interpreter by properly managing error states and stack integrity.","The vulnerability was addressed by enhancing the error handling process to prevent the use of invalidated references. The fix involved explicitly nullifying the error object before any garbage collection operations, which eliminates the risk of dangling references. Additionally, the updated code includes checks to ensure that the stack's boundaries are respected before adding any error objects, thereby preventing potential overflows. These improvements collectively ensure that error states are managed more effectively, enhancing the overall stability and security of the execution environment by safeguarding against undefined behavior and crashes.","4,5","4,4","4,4","4,5","CWE-416, CWE-665, CWE-824, CWE-415, CWE-401, CWE-404, CWE-119, CWE-787, CWE-476, CWE-825",N,-1
+1,1,1,181379,181379,,Local,Not required,Complete,CVE-2017-8072,https://www.cvedetails.com/cve/CVE-2017-8072/,CWE-388,Low,Complete,Complete,,2017-04-23,7.2,"The cp2112_gpio_direction_input function in drivers/hid/hid-cp2112.c in the Linux kernel 4.9.x before 4.9.9 does not have the expected EIO error status for a zero-length report, which allows local users to have an unspecified impact via unknown vectors.",2017-04-27,,1,https://github.com/torvalds/linux/commit/8e9faa15469ed7c7467423db4c62aeed3ff4cae3,8e9faa15469ed7c7467423db4c62aeed3ff4cae3,"HID: cp2112: fix gpio-callback error handling
+
+In case of a zero-length report, the gpio direction_input callback would
+currently return success instead of an errno.
+
+Fixes: 1ffb3c40ffb5 (""HID: cp2112: make transfer buffers DMA capable"")
+Cc: stable <stable@vger.kernel.org>     # 4.9
+Signed-off-by: Johan Hovold <johan@kernel.org>
+Reviewed-by: Benjamin Tissoires <benjamin.tissoires@redhat.com>
+Signed-off-by: Jiri Kosina <jkosina@suse.cz>",1,drivers/hid/hid-cp2112.c,"{""sha"": ""b22d0f83f8e38a9ee0d0eb7381e95d6b90442b61"", ""filename"": ""drivers/hid/hid-cp2112.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/torvalds/linux/blob/8e9faa15469ed7c7467423db4c62aeed3ff4cae3/drivers/hid/hid-cp2112.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/8e9faa15469ed7c7467423db4c62aeed3ff4cae3/drivers/hid/hid-cp2112.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/hid/hid-cp2112.c?ref=8e9faa15469ed7c7467423db4c62aeed3ff4cae3"", ""patch"": ""@@ -213,7 +213,7 @@ static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)\n \n exit:\n \tmutex_unlock(&dev->lock);\n-\treturn ret <= 0 ? ret : -EIO;\n+\treturn ret < 0 ? ret : -EIO;\n }\n \n static void cp2112_gpio_set(struct gpio_chip *chip, unsigned offset, int value)""}","static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+	return ret < 0 ? ret : -EIO;
+ }
+","static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+	return ret <= 0 ? ret : -EIO;
+ }
+",C,"	return ret < 0 ? ret : -EIO;
+","	return ret <= 0 ? ret : -EIO;
+",,"@@ -213,7 +213,7 @@ static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+-	return ret <= 0 ? ret : -EIO;
++	return ret < 0 ? ret : -EIO;
+ }
+ 
+ static void cp2112_gpio_set(struct gpio_chip *chip, unsigned offset, int value)",linux,8e9faa15469ed7c7467423db4c62aeed3ff4cae3,7a7b5df84b6b4e5d599c7289526eed96541a0654,1,"static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+//flaw_line_below:
+	return ret <= 0 ? ret : -EIO;
+//fix_flaw_line_below:
+//	return ret < 0 ? ret : -EIO;
+ }
+",181379,"static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+	return ret <= 0 ? ret : -EIO;
+ }
+","static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+	return ret < 0 ? ret : -EIO;
+ }
+","The `cp2112_gpio_direction_input` function configures a specified GPIO pin as an input for a CP2112 device. It begins by acquiring a mutex lock to ensure thread safety while accessing shared resources. The function retrieves the current GPIO configuration using a raw HID request and checks for errors. It then modifies the configuration buffer to set the specified pin (indicated by `offset`) as an input by clearing the corresponding bit and setting the pin to push-pull mode. After updating the configuration with another HID request, it releases the mutex and returns the result, indicating success or failure.","The provided code defines a function that configures a specific GPIO pin as an input for a device. It begins by ensuring exclusive access to shared resources to prevent concurrent modifications. The function retrieves the current configuration of the GPIO pins and checks for any errors during this process. It then updates the configuration to set the targeted pin as an input by modifying the appropriate settings. After applying the new configuration, it releases the exclusive access and returns a status indicating whether the operation was successful or if an error occurred.","The vulnerability in the original code, identified as CWE-388, arises from improper handling of return values, which could lead to unintended behavior or resource leaks. Specifically, the code did not adequately check the return value of the second HID request, potentially allowing the function to proceed without confirming that the GPIO configuration was successfully set. In the fixed code, the return value is now checked against a negative condition before returning, ensuring that any error during the configuration process is properly handled and communicated, thus enhancing the robustness and reliability of the function.","The vulnerability identified as CWE-388 in the original code stems from inadequate handling of return values, which could lead to incorrect assumptions about the success of operations. Specifically, the code failed to properly check the outcome of a critical operation that configures a GPIO pin, allowing the function to proceed without confirming whether the configuration was successful. In the revised version, the return value is now explicitly checked against a negative condition before concluding the function, ensuring that any errors encountered during the configuration process are appropriately addressed, thereby improving the overall reliability and safety of the code.","The vulnerability was fixed by enhancing the error handling related to the return values of critical operations. In the original code, the return value from the second HID request was not adequately checked, which could lead to incorrect assumptions about the success of the GPIO configuration. In the revised code, the return value of the second HID request is now explicitly checked, and the function returns an error if the value is negative. This change ensures that any failure in setting the GPIO configuration is properly captured and communicated, thereby improving the robustness of the function.","The vulnerability was addressed by implementing a more rigorous error handling mechanism for critical operations. The revised code now includes explicit checks for the return values of key function calls, ensuring that any failures during the configuration process are properly identified and managed. By verifying the success of these operations before proceeding, the updated implementation prevents the function from making incorrect assumptions about the state of the system. This enhancement not only improves the reliability of the code but also ensures that errors are communicated effectively, thereby reducing the risk of unintended behavior.","5,5","5,5","5,5","4,4","CWE-391, CWE-754, CWE-252, CWE-248, CWE-703, CWE-755, CWE-460, CWE-756, CWE-253, CWE-390",N,-1
+2,2,2,181556,181556,,Local,Not required,Complete,CVE-2017-5577,https://www.cvedetails.com/cve/CVE-2017-5577/,CWE-388,Low,,,,2017-02-06,4.9,"The vc4_get_bcl function in drivers/gpu/drm/vc4/vc4_gem.c in the VideoCore DRM driver in the Linux kernel before 4.9.7 does not set an errno value upon certain overflow detections, which allows local users to cause a denial of service (incorrect pointer dereference and OOPS) via inconsistent size values in a VC4_SUBMIT_CL ioctl call.",2017-02-08,DoS Overflow ,1,https://github.com/torvalds/linux/commit/6b8ac63847bc2f958dd93c09edc941a0118992d9,6b8ac63847bc2f958dd93c09edc941a0118992d9,"drm/vc4: Return -EINVAL on the overflow checks failing.
+
+By failing to set the errno, we'd continue on to trying to set up the
+RCL, and then oops on trying to dereference the tile_bo that binning
+validation should have set up.
+
+Reported-by: Ingo Molnar <mingo@kernel.org>
+Signed-off-by: Eric Anholt <eric@anholt.net>
+Fixes: d5b1a78a772f (""drm/vc4: Add support for drawing 3D frames."")",0,drivers/gpu/drm/vc4/vc4_gem.c,"{""sha"": ""ab3016982466c3ca35ba479050ee107d26eb50ac"", ""filename"": ""drivers/gpu/drm/vc4/vc4_gem.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/torvalds/linux/blob/6b8ac63847bc2f958dd93c09edc941a0118992d9/drivers/gpu/drm/vc4/vc4_gem.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/6b8ac63847bc2f958dd93c09edc941a0118992d9/drivers/gpu/drm/vc4/vc4_gem.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/gpu/drm/vc4/vc4_gem.c?ref=6b8ac63847bc2f958dd93c09edc941a0118992d9"", ""patch"": ""@@ -601,6 +601,7 @@ vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)\n \t\t\t\t\t  sizeof(struct vc4_shader_state)) ||\n \t    temp_size < exec_size) {\n \t\tDRM_ERROR(\""overflow in exec arguments\\n\"");\n+\t\tret = -EINVAL;\n \t\tgoto fail;\n \t}\n ""}","vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+","vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+",C,"		ret = -EINVAL;
+",,,"@@ -601,6 +601,7 @@ vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
++		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ ",linux,6b8ac63847bc2f958dd93c09edc941a0118992d9,0f2ff82e11c86c05d051cae32b58226392d33bbf,1,"vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+//fix_flaw_line_below:
+//		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+",181556,"vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+","vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+","The `vc4_get_bcl` function is responsible for preparing and validating command lists and shader records for execution in a graphics processing context. It begins by calculating various offsets for binary command lists, shader records, and uniforms, ensuring that these calculations do not lead to overflow errors. The function allocates temporary memory to store user-provided command lists and shader data, copying them from user space. It then creates a buffer object (BO) for execution, validates the command lists and shader records, and ensures that previous rendering operations are completed before proceeding. If any step fails, it cleans up and returns an error code.","The function prepares and validates command lists and shader records for execution in a graphics processing environment. It calculates necessary memory offsets to ensure that data structures do not overflow, then allocates temporary memory to store user-provided command lists and shader data. After copying this data from user space, it creates a buffer object for execution and validates the command lists and shader records. Additionally, it ensures that any previous rendering operations are completed before proceeding. If any step encounters an error, the function cleans up allocated resources and returns an appropriate error code.","The vulnerability identified as CWE-388 arises from improper handling of user input, specifically in the calculation of memory offsets and sizes, which could lead to buffer overflows. In the vulnerable code, the function did not adequately validate the sizes of command lists and shader records, allowing for potential exploitation through crafted user input. The fix introduced additional checks to ensure that calculated offsets, such as `shader_rec_offset` and `exec_size`, do not exceed their respective limits, and it now returns an error code if any overflow condition is detected, thereby preventing unsafe memory access and enhancing overall security.","The vulnerability identified as CWE-388 stems from inadequate validation of user input, which could lead to buffer overflows due to improper calculations of memory offsets and sizes. In the original code, the lack of sufficient checks allowed for the possibility of exceeding allocated memory limits, making it susceptible to exploitation through crafted input. The fix implemented additional validation checks to ensure that all calculated offsets and sizes remain within safe bounds, returning an error if any overflow conditions are detected. This enhancement effectively mitigates the risk of unsafe memory access and improves the overall security of the code.","The vulnerability was fixed by introducing comprehensive validation checks for various calculated offsets and sizes within the function. Specifically, conditions were added to verify that `shader_rec_offset` is not less than the size of the binary command list, that `uniforms_offset` is valid, and that `exec_size` does not exceed its limits. Additionally, the code now checks that the count of shader records does not exceed a safe maximum. If any of these conditions fail, the function logs an error and returns an appropriate error code, thereby preventing potential buffer overflows and enhancing the security of memory handling.","The vulnerability was addressed by implementing additional validation checks to ensure that all calculated memory offsets and sizes remain within safe limits. The code now verifies that the offsets do not exceed the sizes of the respective data structures, preventing potential buffer overflows. Furthermore, it checks that the count of records does not surpass a predefined maximum to avoid excessive memory allocation. If any of these conditions are violated, the function logs an error and returns an appropriate error code, effectively mitigating the risk of unsafe memory access and enhancing the overall security of the implementation.","4,4","5,5","4,5","4,4","CWE-119,CWE-120,CWE-131,CWE-789,CWE-823,CWE-129,CWE-400,CWE-190,CWE-122,CWE-788",N,-1
+3,3,3,182015,182015,,Local,Not required,Partial,CVE-2016-3179,https://www.cvedetails.com/cve/CVE-2016-3179/,CWE-388,Low,,,,2017-03-24,2.1,The processRequest function in minissdpd.c in MiniSSDPd 1.2.20130907-3 allows local users to cause a denial of service (invalid free and daemon crash) via vectors related to error handling.,2017-03-27,DoS ,1,https://github.com/miniupnp/miniupnp/commit/140ee8d2204b383279f854802b27bdb41c1d5d1a,140ee8d2204b383279f854802b27bdb41c1d5d1a,minissdpd.c: Initialize pointers to NULL (fix),0,minissdpd/minissdpd.c,"{""sha"": ""5e79293e015c46bddd3fcf3247db9ec4214d78c7"", ""filename"": ""minissdpd/minissdpd.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/miniupnp/miniupnp/blob/140ee8d2204b383279f854802b27bdb41c1d5d1a/minissdpd/minissdpd.c"", ""raw_url"": ""https://github.com/miniupnp/miniupnp/raw/140ee8d2204b383279f854802b27bdb41c1d5d1a/minissdpd/minissdpd.c"", ""contents_url"": ""https://api.github.com/repos/miniupnp/miniupnp/contents/minissdpd/minissdpd.c?ref=140ee8d2204b383279f854802b27bdb41c1d5d1a"", ""patch"": ""@@ -658,6 +658,7 @@ void processRequest(struct reqelem * req)\n \t\t\tsyslog(LOG_ERR, \""cannot allocate memory\"");\n \t\t\tgoto error;\n \t\t}\n+\t\tmemset(newserv, 0, sizeof(struct service));\t/* set pointers to NULL */\n \t\tif(containsForbiddenChars(p, l)) {\n \t\t\tsyslog(LOG_ERR, \""bad request (st contains forbidden chars)\"");\n \t\t\tgoto error;""}","void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+","void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+",C,"		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+",,,"@@ -658,6 +658,7 @@ void processRequest(struct reqelem * req)
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
++		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;",miniupnp,140ee8d2204b383279f854802b27bdb41c1d5d1a,4f230c809b3b66fafa34d387eead32fe242c49ee,1,"void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+//fix_flaw_line_below:
+//		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+",182015,"void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+","void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+","The `processRequest` function handles incoming requests from a socket, reading data into a buffer and processing it based on the request type. It first reads data and checks for errors or connection closures. Depending on the request type (1-4), it either retrieves device or service information, constructs a response, or submits a new service. The function validates input lengths, checks for forbidden characters, and manages memory for new services. It logs various events and errors, and if any issues arise, it cleans up allocated memory and closes the socket, ensuring robust error handling throughout the process.","The function processes incoming requests from a socket by reading data and determining the type of request. It handles various request types, including retrieving device or service information and submitting new services. The function validates the input for length and forbidden characters, constructs appropriate responses, and manages memory for new services. It logs relevant events and errors throughout the process. In case of any issues, it ensures proper cleanup of allocated resources and closes the socket, maintaining robust error handling and resource management to ensure stability and reliability in processing requests.","The vulnerability identified as CWE-388, which pertains to the use of uninitialized resources, was present in the original code due to the lack of proper initialization for newly allocated memory structures. Specifically, the `newserv` structure was allocated memory without initializing its pointers, potentially leading to undefined behavior if these pointers were accessed before being set. The fixed code addresses this issue by explicitly initializing the `newserv` structure with `memset(newserv, 0, sizeof(struct service));`, ensuring that all pointers within the structure are set to NULL. This prevents accidental dereferencing of uninitialized pointers, enhancing the code's stability and security.","The vulnerability identified as CWE-388 arises from the use of uninitialized resources, which can lead to undefined behavior when accessing memory that has not been properly set. In the original code, newly allocated structures were not initialized, leaving pointers in an indeterminate state. This could result in dereferencing invalid memory, causing crashes or security issues. The fixed code addresses this vulnerability by explicitly initializing the allocated structures to ensure that all pointers are set to a known state, thereby preventing accidental access to uninitialized memory and enhancing the overall stability and security of the application.","The vulnerability was fixed by adding a line of code that initializes the newly allocated structure for the service. Specifically, after allocating memory for `newserv` using `malloc`, the code now includes `memset(newserv, 0, sizeof(struct service));`, which sets all bytes of the structure to zero. This ensures that all pointers within the structure are initialized to NULL, preventing any accidental dereferencing of uninitialized memory. By implementing this change, the code mitigates the risk of undefined behavior and enhances the reliability and security of the application when handling service submissions.","The vulnerability was fixed by introducing an initialization step for the newly allocated structure, ensuring that all its pointers are set to a known state. After memory allocation, the code now explicitly sets all bytes of the structure to zero, which effectively initializes all pointers to NULL. This prevents any potential dereferencing of uninitialized memory, thereby eliminating the risk of undefined behavior. By implementing this change, the code enhances its stability and security, ensuring that any subsequent operations on the structure are performed safely and without the risk of accessing invalid memory.","5,5","5,5","4,4","5,5","CWE-457,CWE-824,CWE-476,CWE-908,CWE-119,CWE-788,CWE-665,CWE-754,CWE-758,CWE-415",N,-1

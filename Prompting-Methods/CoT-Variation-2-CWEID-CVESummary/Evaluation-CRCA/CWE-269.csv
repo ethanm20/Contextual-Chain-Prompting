@@ -1,0 +1,2183 @@
+,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5
+0,0,180887,180887,,Remote,Not required,,CVE-2017-15906,https://www.cvedetails.com/cve/CVE-2017-15906/,CWE-269,Low,,Partial,,2017-10-25,5.0,"The process_open function in sftp-server.c in OpenSSH before 7.6 does not properly prevent write operations in readonly mode, which allows attackers to create zero-length files.",2019-10-02,,2,https://github.com/openbsd/src/commit/a6981567e8e215acc1ef690c8dbb30f2d9b00a19,a6981567e8e215acc1ef690c8dbb30f2d9b00a19,"disallow creation (of empty files) in read-only mode; reported by
+Michal Zalewski, feedback & ok deraadt@",2,usr.bin/ssh/sftp-server.c,"{""sha"": ""42249ebd60d0f46a2219d61203a30e0da65d38ec"", ""filename"": ""usr.bin/ssh/sftp-server.c"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 3, ""changes"": 6, ""blob_url"": ""https://github.com/openbsd/src/blob/a6981567e8e215acc1ef690c8dbb30f2d9b00a19/usr.bin/ssh/sftp-server.c"", ""raw_url"": ""https://github.com/openbsd/src/raw/a6981567e8e215acc1ef690c8dbb30f2d9b00a19/usr.bin/ssh/sftp-server.c"", ""contents_url"": ""https://api.github.com/repos/openbsd/src/contents/usr.bin/ssh/sftp-server.c?ref=a6981567e8e215acc1ef690c8dbb30f2d9b00a19"", ""patch"": ""@@ -1,4 +1,4 @@\n-/* $OpenBSD: sftp-server.c,v 1.110 2016/09/12 01:22:38 deraadt Exp $ */\n+/* $OpenBSD: sftp-server.c,v 1.111 2017/04/04 00:24:56 djm Exp $ */\n /*\n  * Copyright (c) 2000-2004 Markus Friedl.  All rights reserved.\n  *\n@@ -683,8 +683,8 @@ process_open(u_int32_t id)\n \tlogit(\""open \\\""%s\\\"" flags %s mode 0%o\"",\n \t    name, string_from_portable(pflags), mode);\n \tif (readonly &&\n-\t    ((flags & O_ACCMODE) == O_WRONLY ||\n-\t    (flags & O_ACCMODE) == O_RDWR)) {\n+\t    ((flags & O_ACCMODE) != O_RDONLY ||\n+\t    (flags & (O_CREAT|O_TRUNC)) != 0)) {\n \t\tverbose(\""Refusing open request in read-only mode\"");\n \t\tstatus = SSH2_FX_PERMISSION_DENIED;\n \t} else {""}","process_open(u_int32_t id)
+{
+	u_int32_t pflags;
+	Attrib a;
+	char *name;
+	int r, handle, fd, flags, mode, status = SSH2_FX_FAILURE;
+
+	if ((r = sshbuf_get_cstring(iqueue, &name, NULL)) != 0 ||
+	    (r = sshbuf_get_u32(iqueue, &pflags)) != 0 || /* portable flags */
+	    (r = decode_attrib(iqueue, &a)) != 0)
+		fatal(""%s: buffer error: %s"", __func__, ssh_err(r));
+
+	debug3(""request %u: open flags %d"", id, pflags);
+	flags = flags_from_portable(pflags);
+	mode = (a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS) ? a.perm : 0666;
+ 	logit(""open \""%s\"" flags %s mode 0%o"",
+ 	    name, string_from_portable(pflags), mode);
+ 	if (readonly &&
+	    ((flags & O_ACCMODE) != O_RDONLY ||
+	    (flags & (O_CREAT|O_TRUNC)) != 0)) {
+ 		verbose(""Refusing open request in read-only mode"");
+ 		status = SSH2_FX_PERMISSION_DENIED;
+ 	} else {
+		fd = open(name, flags, mode);
+		if (fd < 0) {
+			status = errno_to_portable(errno);
+		} else {
+			handle = handle_new(HANDLE_FILE, name, fd, flags, NULL);
+			if (handle < 0) {
+				close(fd);
+			} else {
+				send_handle(id, handle);
+				status = SSH2_FX_OK;
+			}
+		}
+	}
+	if (status != SSH2_FX_OK)
+		send_status(id, status);
+	free(name);
+}
+","process_open(u_int32_t id)
+{
+	u_int32_t pflags;
+	Attrib a;
+	char *name;
+	int r, handle, fd, flags, mode, status = SSH2_FX_FAILURE;
+
+	if ((r = sshbuf_get_cstring(iqueue, &name, NULL)) != 0 ||
+	    (r = sshbuf_get_u32(iqueue, &pflags)) != 0 || /* portable flags */
+	    (r = decode_attrib(iqueue, &a)) != 0)
+		fatal(""%s: buffer error: %s"", __func__, ssh_err(r));
+
+	debug3(""request %u: open flags %d"", id, pflags);
+	flags = flags_from_portable(pflags);
+	mode = (a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS) ? a.perm : 0666;
+ 	logit(""open \""%s\"" flags %s mode 0%o"",
+ 	    name, string_from_portable(pflags), mode);
+ 	if (readonly &&
+	    ((flags & O_ACCMODE) == O_WRONLY ||
+	    (flags & O_ACCMODE) == O_RDWR)) {
+ 		verbose(""Refusing open request in read-only mode"");
+ 		status = SSH2_FX_PERMISSION_DENIED;
+ 	} else {
+		fd = open(name, flags, mode);
+		if (fd < 0) {
+			status = errno_to_portable(errno);
+		} else {
+			handle = handle_new(HANDLE_FILE, name, fd, flags, NULL);
+			if (handle < 0) {
+				close(fd);
+			} else {
+				send_handle(id, handle);
+				status = SSH2_FX_OK;
+			}
+		}
+	}
+	if (status != SSH2_FX_OK)
+		send_status(id, status);
+	free(name);
+}
+",C,"	    ((flags & O_ACCMODE) != O_RDONLY ||
+	    (flags & (O_CREAT|O_TRUNC)) != 0)) {
+","	    ((flags & O_ACCMODE) == O_WRONLY ||
+	    (flags & O_ACCMODE) == O_RDWR)) {
+",,"@@ -1,4 +1,4 @@
+-/* $OpenBSD: sftp-server.c,v 1.110 2016/09/12 01:22:38 deraadt Exp $ */
++/* $OpenBSD: sftp-server.c,v 1.111 2017/04/04 00:24:56 djm Exp $ */
+ /*
+  * Copyright (c) 2000-2004 Markus Friedl.  All rights reserved.
+  *
+@@ -683,8 +683,8 @@ process_open(u_int32_t id)
+ 	logit(""open \""%s\"" flags %s mode 0%o"",
+ 	    name, string_from_portable(pflags), mode);
+ 	if (readonly &&
+-	    ((flags & O_ACCMODE) == O_WRONLY ||
+-	    (flags & O_ACCMODE) == O_RDWR)) {
++	    ((flags & O_ACCMODE) != O_RDONLY ||
++	    (flags & (O_CREAT|O_TRUNC)) != 0)) {
+ 		verbose(""Refusing open request in read-only mode"");
+ 		status = SSH2_FX_PERMISSION_DENIED;
+ 	} else {",src,a6981567e8e215acc1ef690c8dbb30f2d9b00a19,f7bf1b90edbc30ad71b90a869e7a850ec6700918,1,"process_open(u_int32_t id)
+{
+	u_int32_t pflags;
+	Attrib a;
+	char *name;
+	int r, handle, fd, flags, mode, status = SSH2_FX_FAILURE;
+
+	if ((r = sshbuf_get_cstring(iqueue, &name, NULL)) != 0 ||
+	    (r = sshbuf_get_u32(iqueue, &pflags)) != 0 || /* portable flags */
+	    (r = decode_attrib(iqueue, &a)) != 0)
+		fatal(""%s: buffer error: %s"", __func__, ssh_err(r));
+
+	debug3(""request %u: open flags %d"", id, pflags);
+	flags = flags_from_portable(pflags);
+	mode = (a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS) ? a.perm : 0666;
+ 	logit(""open \""%s\"" flags %s mode 0%o"",
+ 	    name, string_from_portable(pflags), mode);
+ 	if (readonly &&
+//flaw_line_below:
+	    ((flags & O_ACCMODE) == O_WRONLY ||
+//flaw_line_below:
+	    (flags & O_ACCMODE) == O_RDWR)) {
+//fix_flaw_line_below:
+//	    ((flags & O_ACCMODE) != O_RDONLY ||
+//fix_flaw_line_below:
+//	    (flags & (O_CREAT|O_TRUNC)) != 0)) {
+ 		verbose(""Refusing open request in read-only mode"");
+ 		status = SSH2_FX_PERMISSION_DENIED;
+ 	} else {
+		fd = open(name, flags, mode);
+		if (fd < 0) {
+			status = errno_to_portable(errno);
+		} else {
+			handle = handle_new(HANDLE_FILE, name, fd, flags, NULL);
+			if (handle < 0) {
+				close(fd);
+			} else {
+				send_handle(id, handle);
+				status = SSH2_FX_OK;
+			}
+		}
+	}
+	if (status != SSH2_FX_OK)
+		send_status(id, status);
+	free(name);
+}
+",180887,"process_open(u_int32_t id)
+{
+	u_int32_t pflags;
+	Attrib a;
+	char *name;
+	int r, handle, fd, flags, mode, status = SSH2_FX_FAILURE;
+
+	if ((r = sshbuf_get_cstring(iqueue, &name, NULL)) != 0 ||
+	    (r = sshbuf_get_u32(iqueue, &pflags)) != 0 || /* portable flags */
+	    (r = decode_attrib(iqueue, &a)) != 0)
+		fatal(""%s: buffer error: %s"", __func__, ssh_err(r));
+
+	debug3(""request %u: open flags %d"", id, pflags);
+	flags = flags_from_portable(pflags);
+	mode = (a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS) ? a.perm : 0666;
+ 	logit(""open \""%s\"" flags %s mode 0%o"",
+ 	    name, string_from_portable(pflags), mode);
+ 	if (readonly &&
+	    ((flags & O_ACCMODE) == O_WRONLY ||
+	    (flags & O_ACCMODE) == O_RDWR)) {
+ 		verbose(""Refusing open request in read-only mode"");
+ 		status = SSH2_FX_PERMISSION_DENIED;
+ 	} else {
+		fd = open(name, flags, mode);
+		if (fd < 0) {
+			status = errno_to_portable(errno);
+		} else {
+			handle = handle_new(HANDLE_FILE, name, fd, flags, NULL);
+			if (handle < 0) {
+				close(fd);
+			} else {
+				send_handle(id, handle);
+				status = SSH2_FX_OK;
+			}
+		}
+	}
+	if (status != SSH2_FX_OK)
+		send_status(id, status);
+	free(name);
+}
+","process_open(u_int32_t id)
+{
+	u_int32_t pflags;
+	Attrib a;
+	char *name;
+	int r, handle, fd, flags, mode, status = SSH2_FX_FAILURE;
+
+	if ((r = sshbuf_get_cstring(iqueue, &name, NULL)) != 0 ||
+	    (r = sshbuf_get_u32(iqueue, &pflags)) != 0 || /* portable flags */
+	    (r = decode_attrib(iqueue, &a)) != 0)
+		fatal(""%s: buffer error: %s"", __func__, ssh_err(r));
+
+	debug3(""request %u: open flags %d"", id, pflags);
+	flags = flags_from_portable(pflags);
+	mode = (a.flags & SSH2_FILEXFER_ATTR_PERMISSIONS) ? a.perm : 0666;
+ 	logit(""open \""%s\"" flags %s mode 0%o"",
+ 	    name, string_from_portable(pflags), mode);
+ 	if (readonly &&
+	    ((flags & O_ACCMODE) != O_RDONLY ||
+	    (flags & (O_CREAT|O_TRUNC)) != 0)) {
+ 		verbose(""Refusing open request in read-only mode"");
+ 		status = SSH2_FX_PERMISSION_DENIED;
+ 	} else {
+		fd = open(name, flags, mode);
+		if (fd < 0) {
+			status = errno_to_portable(errno);
+		} else {
+			handle = handle_new(HANDLE_FILE, name, fd, flags, NULL);
+			if (handle < 0) {
+				close(fd);
+			} else {
+				send_handle(id, handle);
+				status = SSH2_FX_OK;
+			}
+		}
+	}
+	if (status != SSH2_FX_OK)
+		send_status(id, status);
+	free(name);
+}
+","The `process_open` function handles file opening requests in a secure file transfer context. It retrieves parameters such as the file name and flags from a buffer, checks for errors, and logs the request details. The function determines the appropriate file access mode based on permissions and checks if the operation is allowed in read-only mode. If the request is valid, it attempts to open the file with the specified flags and mode. Upon success, it creates a new handle for the file; otherwise, it returns an error status. Finally, it cleans up by freeing allocated memory.","The function processes file opening requests by retrieving necessary parameters from a buffer and checking for errors. It logs the request details and determines the appropriate access mode based on specified permissions. The function verifies if the operation can proceed in a read-only context, denying access if it cannot. If the request is valid, it attempts to open the file with the specified access settings. Upon successful opening, it creates a handle for the file; if unsuccessful, it returns an error status. Finally, it ensures proper memory management by freeing any allocated resources.","The vulnerability in the original code allowed write operations in read-only mode, enabling attackers to create zero-length files. This was due to insufficient checks on the access flags, specifically allowing modes like `O_WRONLY` and `O_RDWR` when the system was set to read-only. The fixed code addresses this by modifying the condition that checks for read-only mode, ensuring that any attempt to open a file for writing (i.e., when the flags include `O_ACCMODE` not equal to `O_RDONLY` or if `O_CREAT` or `O_TRUNC` flags are set) is denied, thus preventing unauthorized write operations.","The vulnerability in the original code stemmed from inadequate checks that allowed write operations even when the system was set to read-only mode, enabling attackers to create zero-length files. This oversight permitted unauthorized modifications to the file system, compromising its integrity. The fixed code rectifies this issue by implementing stricter conditions that explicitly deny any write attempts when the system is in read-only mode. By ensuring that only read operations are permitted and rejecting any flags associated with writing or creating files, the updated code effectively mitigates the risk of unauthorized file creation and maintains system security.","The vulnerability was fixed by modifying the condition that checks for read-only mode in the updated code. Specifically, the check now ensures that if the system is in read-only mode, any attempt to open a file with flags indicating write access, such as `O_WRONLY` or `O_RDWR`, is denied. The condition now includes a check for `O_ACCMODE` not being equal to `O_RDONLY` and also verifies that flags like `O_CREAT` or `O_TRUNC` are not set. This enhancement effectively prevents unauthorized write operations, thereby securing the system against the creation of zero-length files.","The vulnerability was fixed by implementing stricter checks to prevent write operations when the system is in read-only mode. The updated code now explicitly denies any file opening requests that attempt to use write access flags or create new files while in this mode. By ensuring that only read operations are allowed and rejecting any attempts to modify or create files, the fix effectively mitigates the risk of unauthorized file creation. This enhancement strengthens the overall security of the system by maintaining the integrity of the file operations in read-only contexts.","4, 4","5, 5","4,4","4, 4"
+1,1,181590,181590,,Local,Not required,Complete,CVE-2017-5207,https://www.cvedetails.com/cve/CVE-2017-5207/,CWE-269,Low,Complete,Complete,,2017-03-23,7.2,"Firejail before 0.9.44.4, when running a bandwidth command, allows local users to gain root privileges via the --shell argument.",2019-10-02,+Priv ,1,https://github.com/netblue30/firejail/commit/5d43fdcd215203868d440ffc42036f5f5ffc89fc,5d43fdcd215203868d440ffc42036f5f5ffc89fc,security fix,7,src/firejail/bandwidth.c,"{""sha"": ""b9a982d776a62e8200bbf0db7916d8ccece262a4"", ""filename"": ""RELNOTES"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/netblue30/firejail/blob/5d43fdcd215203868d440ffc42036f5f5ffc89fc/RELNOTES"", ""raw_url"": ""https://github.com/netblue30/firejail/raw/5d43fdcd215203868d440ffc42036f5f5ffc89fc/RELNOTES"", ""contents_url"": ""https://api.github.com/repos/netblue30/firejail/contents/RELNOTES?ref=5d43fdcd215203868d440ffc42036f5f5ffc89fc"", ""patch"": ""@@ -1,5 +1,6 @@\n firejail (0.9.45) baseline; urgency=low\n   * development version, work in progress\n+  * security: --bandwidth root shel found by Martin Carpenter\n   * security: disabled --allow-debuggers when running on kernel\n     versions prior to 4.8; a kernel bug in ptrace system call\n     allows a full bypass of seccomp filter; problem reported by Lizzie Dixon""}<_**next**_>{""sha"": ""84c9dc53a331e5787941bf31dd3b7ba5dbe77e2f"", ""filename"": ""src/firejail/bandwidth.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 8, ""changes"": 9, ""blob_url"": ""https://github.com/netblue30/firejail/blob/5d43fdcd215203868d440ffc42036f5f5ffc89fc/src/firejail/bandwidth.c"", ""raw_url"": ""https://github.com/netblue30/firejail/raw/5d43fdcd215203868d440ffc42036f5f5ffc89fc/src/firejail/bandwidth.c"", ""contents_url"": ""https://api.github.com/repos/netblue30/firejail/contents/src/firejail/bandwidth.c?ref=5d43fdcd215203868d440ffc42036f5f5ffc89fc"", ""patch"": ""@@ -435,15 +435,8 @@ void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, in\n \tif (setregid(0, 0))\n \t\terrExit(\""setregid\"");\n \n-\tif (!cfg.shell)\n-\t\tcfg.shell = guess_shell();\n-\tif (!cfg.shell) {\n-\t\tfprintf(stderr, \""Error: no POSIX shell found, please use --shell command line option\\n\"");\n-\t\texit(1);\n-\t}\n-\n \tchar *arg[4];\n-\targ[0] = cfg.shell;\n+\targ[0] = \""/bin/sh\"";\n \targ[1] = \""-c\"";\n \targ[2] = cmd;\n \targ[3] = NULL;""}","void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, int up) {
+	EUID_ASSERT();
+	EUID_ROOT();
+	char *comm = pid_proc_comm(pid);
+	EUID_USER();
+	if (!comm) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+
+	if (strcmp(comm, ""firejail"") != 0) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+	free(comm);
+	
+	char *name;
+	if (asprintf(&name, ""/run/firejail/network/%d-netmap"", pid) == -1)
+		errExit(""asprintf"");
+	struct stat s;
+	if (stat(name, &s) == -1) {
+		fprintf(stderr, ""Error: the sandbox doesn't use a new network namespace\n"");
+		exit(1);
+	}
+
+	pid_t child;
+	if (find_child(pid, &child) == -1) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	EUID_ROOT();
+	if (join_namespace(child, ""net"")) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	if (strcmp(command, ""set"") == 0)
+		bandwidth_set(pid, dev, down, up);
+	else if (strcmp(command, ""clear"") == 0)
+		bandwidth_remove(pid, dev);
+
+	char *devname = NULL;
+	if (dev) {
+		char *fname;
+		if (asprintf(&fname, ""%s/%d-netmap"", RUN_FIREJAIL_NETWORK_DIR, (int) pid) == -1)
+			errExit(""asprintf"");
+		FILE *fp = fopen(fname, ""r"");
+		if (!fp) {
+			fprintf(stderr, ""Error: cannot read network map file %s\n"", fname);
+			exit(1);
+		}
+		
+		char buf[1024];
+		int len = strlen(dev);
+		while (fgets(buf, 1024, fp)) {
+			char *ptr = strchr(buf, '\n');
+			if (ptr)
+				*ptr = '\0';
+			if (*buf == '\0')
+				break;
+
+			if (strncmp(buf, dev, len) == 0  && buf[len] == ':') {
+				devname = strdup(buf + len + 1);
+				if (!devname)
+					errExit(""strdup"");
+				if (if_nametoindex(devname) == 0) {
+					fprintf(stderr, ""Error: cannot find network device %s\n"", devname);
+					exit(1);
+				}
+				break;
+			}
+		}
+		free(fname);
+		fclose(fp);
+	}
+	
+	char *cmd = NULL;
+	if (devname) {
+		if (strcmp(command, ""set"") == 0) {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s %d %d"",
+				LIBDIR, command, devname, down, up) == -1)
+				errExit(""asprintf"");
+		}
+		else {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s"",
+				LIBDIR, command, devname) == -1)
+				errExit(""asprintf"");
+		}
+	}
+	else {
+		if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s"", LIBDIR, command) == -1)
+			errExit(""asprintf"");
+	}
+	assert(cmd);
+
+	environ = NULL;
+
+	if (setreuid(0, 0))
+		errExit(""setreuid"");
+ 	if (setregid(0, 0))
+ 		errExit(""setregid"");
+ 
+ 	char *arg[4];
+	arg[0] = ""/bin/sh"";
+ 	arg[1] = ""-c"";
+ 	arg[2] = cmd;
+ 	arg[3] = NULL;
+	clearenv();
+	execvp(arg[0], arg);
+	
+	errExit(""execvp"");
+}
+","void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, int up) {
+	EUID_ASSERT();
+	EUID_ROOT();
+	char *comm = pid_proc_comm(pid);
+	EUID_USER();
+	if (!comm) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+
+	if (strcmp(comm, ""firejail"") != 0) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+	free(comm);
+	
+	char *name;
+	if (asprintf(&name, ""/run/firejail/network/%d-netmap"", pid) == -1)
+		errExit(""asprintf"");
+	struct stat s;
+	if (stat(name, &s) == -1) {
+		fprintf(stderr, ""Error: the sandbox doesn't use a new network namespace\n"");
+		exit(1);
+	}
+
+	pid_t child;
+	if (find_child(pid, &child) == -1) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	EUID_ROOT();
+	if (join_namespace(child, ""net"")) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	if (strcmp(command, ""set"") == 0)
+		bandwidth_set(pid, dev, down, up);
+	else if (strcmp(command, ""clear"") == 0)
+		bandwidth_remove(pid, dev);
+
+	char *devname = NULL;
+	if (dev) {
+		char *fname;
+		if (asprintf(&fname, ""%s/%d-netmap"", RUN_FIREJAIL_NETWORK_DIR, (int) pid) == -1)
+			errExit(""asprintf"");
+		FILE *fp = fopen(fname, ""r"");
+		if (!fp) {
+			fprintf(stderr, ""Error: cannot read network map file %s\n"", fname);
+			exit(1);
+		}
+		
+		char buf[1024];
+		int len = strlen(dev);
+		while (fgets(buf, 1024, fp)) {
+			char *ptr = strchr(buf, '\n');
+			if (ptr)
+				*ptr = '\0';
+			if (*buf == '\0')
+				break;
+
+			if (strncmp(buf, dev, len) == 0  && buf[len] == ':') {
+				devname = strdup(buf + len + 1);
+				if (!devname)
+					errExit(""strdup"");
+				if (if_nametoindex(devname) == 0) {
+					fprintf(stderr, ""Error: cannot find network device %s\n"", devname);
+					exit(1);
+				}
+				break;
+			}
+		}
+		free(fname);
+		fclose(fp);
+	}
+	
+	char *cmd = NULL;
+	if (devname) {
+		if (strcmp(command, ""set"") == 0) {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s %d %d"",
+				LIBDIR, command, devname, down, up) == -1)
+				errExit(""asprintf"");
+		}
+		else {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s"",
+				LIBDIR, command, devname) == -1)
+				errExit(""asprintf"");
+		}
+	}
+	else {
+		if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s"", LIBDIR, command) == -1)
+			errExit(""asprintf"");
+	}
+	assert(cmd);
+
+	environ = NULL;
+
+	if (setreuid(0, 0))
+		errExit(""setreuid"");
+ 	if (setregid(0, 0))
+ 		errExit(""setregid"");
+ 
+	if (!cfg.shell)
+		cfg.shell = guess_shell();
+	if (!cfg.shell) {
+		fprintf(stderr, ""Error: no POSIX shell found, please use --shell command line option\n"");
+		exit(1);
+	}
+ 	char *arg[4];
+	arg[0] = cfg.shell;
+ 	arg[1] = ""-c"";
+ 	arg[2] = cmd;
+ 	arg[3] = NULL;
+	clearenv();
+	execvp(arg[0], arg);
+	
+	errExit(""execvp"");
+}
+",C,"	arg[0] = ""/bin/sh"";
+","	if (!cfg.shell)
+		cfg.shell = guess_shell();
+	if (!cfg.shell) {
+		fprintf(stderr, ""Error: no POSIX shell found, please use --shell command line option\n"");
+		exit(1);
+	}
+	arg[0] = cfg.shell;
+",,"@@ -435,15 +435,8 @@ void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, in
+ 	if (setregid(0, 0))
+ 		errExit(""setregid"");
+ 
+-	if (!cfg.shell)
+-		cfg.shell = guess_shell();
+-	if (!cfg.shell) {
+-		fprintf(stderr, ""Error: no POSIX shell found, please use --shell command line option\n"");
+-		exit(1);
+-	}
+-
+ 	char *arg[4];
+-	arg[0] = cfg.shell;
++	arg[0] = ""/bin/sh"";
+ 	arg[1] = ""-c"";
+ 	arg[2] = cmd;
+ 	arg[3] = NULL;",firejail,5d43fdcd215203868d440ffc42036f5f5ffc89fc,6435525696e8eda2d1bc0ef50488523422b9126d,1,"void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, int up) {
+	EUID_ASSERT();
+	//************************
+	// verify sandbox
+	//************************
+	EUID_ROOT();
+	char *comm = pid_proc_comm(pid);
+	EUID_USER();
+	if (!comm) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+
+	// check for firejail sandbox
+	if (strcmp(comm, ""firejail"") != 0) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+	free(comm);
+	
+	// check network namespace
+	char *name;
+	if (asprintf(&name, ""/run/firejail/network/%d-netmap"", pid) == -1)
+		errExit(""asprintf"");
+	struct stat s;
+	if (stat(name, &s) == -1) {
+		fprintf(stderr, ""Error: the sandbox doesn't use a new network namespace\n"");
+		exit(1);
+	}
+
+	//************************
+	// join the network namespace
+	//************************
+	pid_t child;
+	if (find_child(pid, &child) == -1) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	EUID_ROOT();
+	if (join_namespace(child, ""net"")) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	// set run file
+	if (strcmp(command, ""set"") == 0)
+		bandwidth_set(pid, dev, down, up);
+	else if (strcmp(command, ""clear"") == 0)
+		bandwidth_remove(pid, dev);
+
+	//************************
+	// build command
+	//************************
+	char *devname = NULL;
+	if (dev) {
+		// read network map file
+		char *fname;
+		if (asprintf(&fname, ""%s/%d-netmap"", RUN_FIREJAIL_NETWORK_DIR, (int) pid) == -1)
+			errExit(""asprintf"");
+		FILE *fp = fopen(fname, ""r"");
+		if (!fp) {
+			fprintf(stderr, ""Error: cannot read network map file %s\n"", fname);
+			exit(1);
+		}
+		
+		char buf[1024];
+		int len = strlen(dev);
+		while (fgets(buf, 1024, fp)) {
+			// remove '\n'
+			char *ptr = strchr(buf, '\n');
+			if (ptr)
+				*ptr = '\0';
+			if (*buf == '\0')
+				break;
+
+			if (strncmp(buf, dev, len) == 0  && buf[len] == ':') {
+				devname = strdup(buf + len + 1);
+				if (!devname)
+					errExit(""strdup"");
+				// check device in namespace
+				if (if_nametoindex(devname) == 0) {
+					fprintf(stderr, ""Error: cannot find network device %s\n"", devname);
+					exit(1);
+				}
+				break;
+			}
+		}
+		free(fname);
+		fclose(fp);
+	}
+	
+	// build fshaper.sh command
+	char *cmd = NULL;
+	if (devname) {
+		if (strcmp(command, ""set"") == 0) {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s %d %d"",
+				LIBDIR, command, devname, down, up) == -1)
+				errExit(""asprintf"");
+		}
+		else {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s"",
+				LIBDIR, command, devname) == -1)
+				errExit(""asprintf"");
+		}
+	}
+	else {
+		if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s"", LIBDIR, command) == -1)
+			errExit(""asprintf"");
+	}
+	assert(cmd);
+
+	// wipe out environment variables
+	environ = NULL;
+
+	//************************
+	// build command
+	//************************
+	// elevate privileges
+	if (setreuid(0, 0))
+		errExit(""setreuid"");
+ 	if (setregid(0, 0))
+ 		errExit(""setregid"");
+ 
+//flaw_line_below:
+	if (!cfg.shell)
+//flaw_line_below:
+		cfg.shell = guess_shell();
+//flaw_line_below:
+	if (!cfg.shell) {
+//flaw_line_below:
+		fprintf(stderr, ""Error: no POSIX shell found, please use --shell command line option\n"");
+//flaw_line_below:
+		exit(1);
+//flaw_line_below:
+	}
+//flaw_line_below:
+
+ 	char *arg[4];
+//flaw_line_below:
+	arg[0] = cfg.shell;
+//fix_flaw_line_below:
+//	arg[0] = ""/bin/sh"";
+ 	arg[1] = ""-c"";
+ 	arg[2] = cmd;
+ 	arg[3] = NULL;
+	clearenv();
+	execvp(arg[0], arg);
+	
+	// it will never get here
+	errExit(""execvp"");
+}
+",181590,"void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, int up) {
+	EUID_ASSERT();
+	EUID_ROOT();
+	char *comm = pid_proc_comm(pid);
+	EUID_USER();
+	if (!comm) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+
+	if (strcmp(comm, ""firejail"") != 0) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+	free(comm);
+	
+	char *name;
+	if (asprintf(&name, ""/run/firejail/network/%d-netmap"", pid) == -1)
+		errExit(""asprintf"");
+	struct stat s;
+	if (stat(name, &s) == -1) {
+		fprintf(stderr, ""Error: the sandbox doesn't use a new network namespace\n"");
+		exit(1);
+	}
+
+	pid_t child;
+	if (find_child(pid, &child) == -1) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	EUID_ROOT();
+	if (join_namespace(child, ""net"")) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	if (strcmp(command, ""set"") == 0)
+		bandwidth_set(pid, dev, down, up);
+	else if (strcmp(command, ""clear"") == 0)
+		bandwidth_remove(pid, dev);
+
+	char *devname = NULL;
+	if (dev) {
+		char *fname;
+		if (asprintf(&fname, ""%s/%d-netmap"", RUN_FIREJAIL_NETWORK_DIR, (int) pid) == -1)
+			errExit(""asprintf"");
+		FILE *fp = fopen(fname, ""r"");
+		if (!fp) {
+			fprintf(stderr, ""Error: cannot read network map file %s\n"", fname);
+			exit(1);
+		}
+		
+		char buf[1024];
+		int len = strlen(dev);
+		while (fgets(buf, 1024, fp)) {
+			char *ptr = strchr(buf, '\n');
+			if (ptr)
+				*ptr = '\0';
+			if (*buf == '\0')
+				break;
+
+			if (strncmp(buf, dev, len) == 0  && buf[len] == ':') {
+				devname = strdup(buf + len + 1);
+				if (!devname)
+					errExit(""strdup"");
+				if (if_nametoindex(devname) == 0) {
+					fprintf(stderr, ""Error: cannot find network device %s\n"", devname);
+					exit(1);
+				}
+				break;
+			}
+		}
+		free(fname);
+		fclose(fp);
+	}
+	
+	char *cmd = NULL;
+	if (devname) {
+		if (strcmp(command, ""set"") == 0) {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s %d %d"",
+				LIBDIR, command, devname, down, up) == -1)
+				errExit(""asprintf"");
+		}
+		else {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s"",
+				LIBDIR, command, devname) == -1)
+				errExit(""asprintf"");
+		}
+	}
+	else {
+		if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s"", LIBDIR, command) == -1)
+			errExit(""asprintf"");
+	}
+	assert(cmd);
+
+	environ = NULL;
+
+	if (setreuid(0, 0))
+		errExit(""setreuid"");
+ 	if (setregid(0, 0))
+ 		errExit(""setregid"");
+ 
+	if (!cfg.shell)
+		cfg.shell = guess_shell();
+	if (!cfg.shell) {
+		fprintf(stderr, ""Error: no POSIX shell found, please use --shell command line option\n"");
+		exit(1);
+	}
+ 	char *arg[4];
+	arg[0] = cfg.shell;
+ 	arg[1] = ""-c"";
+ 	arg[2] = cmd;
+ 	arg[3] = NULL;
+	clearenv();
+	execvp(arg[0], arg);
+	
+	errExit(""execvp"");
+}
+","void bandwidth_pid(pid_t pid, const char *command, const char *dev, int down, int up) {
+	EUID_ASSERT();
+	EUID_ROOT();
+	char *comm = pid_proc_comm(pid);
+	EUID_USER();
+	if (!comm) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+
+	if (strcmp(comm, ""firejail"") != 0) {
+		fprintf(stderr, ""Error: cannot find sandbox\n"");
+		exit(1);
+	}
+	free(comm);
+	
+	char *name;
+	if (asprintf(&name, ""/run/firejail/network/%d-netmap"", pid) == -1)
+		errExit(""asprintf"");
+	struct stat s;
+	if (stat(name, &s) == -1) {
+		fprintf(stderr, ""Error: the sandbox doesn't use a new network namespace\n"");
+		exit(1);
+	}
+
+	pid_t child;
+	if (find_child(pid, &child) == -1) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	EUID_ROOT();
+	if (join_namespace(child, ""net"")) {
+		fprintf(stderr, ""Error: cannot join the network namespace\n"");
+		exit(1);
+	}
+
+	if (strcmp(command, ""set"") == 0)
+		bandwidth_set(pid, dev, down, up);
+	else if (strcmp(command, ""clear"") == 0)
+		bandwidth_remove(pid, dev);
+
+	char *devname = NULL;
+	if (dev) {
+		char *fname;
+		if (asprintf(&fname, ""%s/%d-netmap"", RUN_FIREJAIL_NETWORK_DIR, (int) pid) == -1)
+			errExit(""asprintf"");
+		FILE *fp = fopen(fname, ""r"");
+		if (!fp) {
+			fprintf(stderr, ""Error: cannot read network map file %s\n"", fname);
+			exit(1);
+		}
+		
+		char buf[1024];
+		int len = strlen(dev);
+		while (fgets(buf, 1024, fp)) {
+			char *ptr = strchr(buf, '\n');
+			if (ptr)
+				*ptr = '\0';
+			if (*buf == '\0')
+				break;
+
+			if (strncmp(buf, dev, len) == 0  && buf[len] == ':') {
+				devname = strdup(buf + len + 1);
+				if (!devname)
+					errExit(""strdup"");
+				if (if_nametoindex(devname) == 0) {
+					fprintf(stderr, ""Error: cannot find network device %s\n"", devname);
+					exit(1);
+				}
+				break;
+			}
+		}
+		free(fname);
+		fclose(fp);
+	}
+	
+	char *cmd = NULL;
+	if (devname) {
+		if (strcmp(command, ""set"") == 0) {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s %d %d"",
+				LIBDIR, command, devname, down, up) == -1)
+				errExit(""asprintf"");
+		}
+		else {
+			if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s %s"",
+				LIBDIR, command, devname) == -1)
+				errExit(""asprintf"");
+		}
+	}
+	else {
+		if (asprintf(&cmd, ""%s/firejail/fshaper.sh --%s"", LIBDIR, command) == -1)
+			errExit(""asprintf"");
+	}
+	assert(cmd);
+
+	environ = NULL;
+
+	if (setreuid(0, 0))
+		errExit(""setreuid"");
+ 	if (setregid(0, 0))
+ 		errExit(""setregid"");
+ 
+ 	char *arg[4];
+	arg[0] = ""/bin/sh"";
+ 	arg[1] = ""-c"";
+ 	arg[2] = cmd;
+ 	arg[3] = NULL;
+	clearenv();
+	execvp(arg[0], arg);
+	
+	errExit(""execvp"");
+}
+","The `bandwidth_pid` function manages network bandwidth settings for a specified process identified by its PID, ensuring it operates within a Firejail sandbox. It first verifies that the process is running under Firejail and checks for a valid network namespace. Depending on the provided command (""set"" or ""clear""), it either applies bandwidth limits or removes them for a specified network device. The function constructs a command to execute a shell script for bandwidth shaping, sets the necessary user and group IDs to root, and executes the command in a new shell environment. Error handling is implemented throughout to manage potential issues.","The code manages network bandwidth settings for a specified process within a sandbox environment. It verifies that the process is running in the correct sandbox and checks for a valid network namespace. Based on the provided command, it either sets or clears bandwidth limits for a specified network device. The code constructs a command to execute a shell script responsible for bandwidth shaping, adjusts user and group permissions to root, and executes the command in a new shell environment. Throughout the process, it includes error handling to address potential issues that may arise.","The vulnerability in the original code arises from the use of an unvalidated command string to execute a shell script, which could allow local users to exploit the `--shell` argument to gain root privileges. Specifically, the code did not adequately restrict the shell used for executing commands, potentially allowing an attacker to manipulate the command execution context. In the fixed code, the shell is explicitly set to a known safe value (""/bin/sh"") instead of relying on user input, thereby mitigating the risk of privilege escalation by ensuring that only a trusted shell is used for command execution.","The vulnerability in the original code allows local users to escalate their privileges to root by manipulating the command execution through an unvalidated shell argument. This exploitation occurs because the code did not enforce strict controls over which shell could be used, enabling attackers to specify a malicious shell that could execute arbitrary commands with elevated privileges. In the revised code, the vulnerability is addressed by explicitly setting the shell to a known safe option, thereby preventing any user-supplied input from influencing the command execution context and significantly reducing the risk of privilege escalation.","The vulnerability was fixed by explicitly setting the shell to a known safe value, specifically ""/bin/sh"", instead of relying on user input for the shell variable. In the revised code, the line `arg[0] = ""/bin/sh"";` ensures that only this trusted shell is used for executing commands, eliminating the risk of an attacker specifying a malicious shell through the `--shell` argument. Additionally, the code clears the environment with `clearenv()` before executing the command, further reducing the potential for exploitation by ensuring that no unwanted environment variables are present during execution.","The vulnerability was fixed by explicitly defining a safe and trusted shell for executing commands, rather than allowing user input to dictate which shell would be used. This change prevents attackers from specifying a potentially malicious shell that could execute arbitrary commands with elevated privileges. Additionally, the code was modified to clear the environment before executing the command, which further mitigates the risk of exploitation by ensuring that no unintended environment variables could influence the command execution. These measures collectively enhance the security of the command execution process and protect against privilege escalation.","4,5","5,5","4,4","4,5"
+2,2,182325,182325,,Local,Not required,Partial,CVE-2018-13405,https://www.cvedetails.com/cve/CVE-2018-13405/,CWE-269,Low,Partial,Partial,,2018-07-06,4.6,"The inode_init_owner function in fs/inode.c in the Linux kernel through 4.17.4 allows local users to create files with an unintended group ownership, in a scenario where a directory is SGID to a certain group and is writable by a user who is not a member of that group. Here, the non-member can trigger creation of a plain file whose group ownership is that group. The intended behavior was that the non-member can trigger creation of a directory (but not a plain file) whose group ownership is that group. The non-member can escalate privileges by making the plain file executable and SGID.",2019-10-02,,6,https://github.com/torvalds/linux/commit/0fa3ecd87848c9c93c2c828ef4c3a8ca36ce46c7,0fa3ecd87848c9c93c2c828ef4c3a8ca36ce46c7,"Fix up non-directory creation in SGID directories
+
+sgid directories have special semantics, making newly created files in
+the directory belong to the group of the directory, and newly created
+subdirectories will also become sgid.  This is historically used for
+group-shared directories.
+
+But group directories writable by non-group members should not imply
+that such non-group members can magically join the group, so make sure
+to clear the sgid bit on non-directories for non-members (but remember
+that sgid without group execute means ""mandatory locking"", just to
+confuse things even more).
+
+Reported-by: Jann Horn <jannh@google.com>
+Cc: Andy Lutomirski <luto@kernel.org>
+Cc: Al Viro <viro@zeniv.linux.org.uk>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",0,fs/inode.c,"{""sha"": ""8c86c809ca17b30e003913e169626aa42df2e908"", ""filename"": ""fs/inode.c"", ""status"": ""modified"", ""additions"": 6, ""deletions"": 0, ""changes"": 6, ""blob_url"": ""https://github.com/torvalds/linux/blob/0fa3ecd87848c9c93c2c828ef4c3a8ca36ce46c7/fs/inode.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/0fa3ecd87848c9c93c2c828ef4c3a8ca36ce46c7/fs/inode.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/fs/inode.c?ref=0fa3ecd87848c9c93c2c828ef4c3a8ca36ce46c7"", ""patch"": ""@@ -1999,8 +1999,14 @@ void inode_init_owner(struct inode *inode, const struct inode *dir,\n \tinode->i_uid = current_fsuid();\n \tif (dir && dir->i_mode & S_ISGID) {\n \t\tinode->i_gid = dir->i_gid;\n+\n+\t\t/* Directories are special, and always inherit S_ISGID */\n \t\tif (S_ISDIR(mode))\n \t\t\tmode |= S_ISGID;\n+\t\telse if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&\n+\t\t\t !in_group_p(inode->i_gid) &&\n+\t\t\t !capable_wrt_inode_uidgid(dir, CAP_FSETID))\n+\t\t\tmode &= ~S_ISGID;\n \t} else\n \t\tinode->i_gid = current_fsgid();\n \tinode->i_mode = mode;""}","void inode_init_owner(struct inode *inode, const struct inode *dir,
+			umode_t mode)
+{
+ 	inode->i_uid = current_fsuid();
+ 	if (dir && dir->i_mode & S_ISGID) {
+ 		inode->i_gid = dir->i_gid;
+
+		/* Directories are special, and always inherit S_ISGID */
+ 		if (S_ISDIR(mode))
+ 			mode |= S_ISGID;
+		else if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
+			 !in_group_p(inode->i_gid) &&
+			 !capable_wrt_inode_uidgid(dir, CAP_FSETID))
+			mode &= ~S_ISGID;
+ 	} else
+ 		inode->i_gid = current_fsgid();
+ 	inode->i_mode = mode;
+}
+","void inode_init_owner(struct inode *inode, const struct inode *dir,
+			umode_t mode)
+{
+ 	inode->i_uid = current_fsuid();
+ 	if (dir && dir->i_mode & S_ISGID) {
+ 		inode->i_gid = dir->i_gid;
+ 		if (S_ISDIR(mode))
+ 			mode |= S_ISGID;
+ 	} else
+ 		inode->i_gid = current_fsgid();
+ 	inode->i_mode = mode;
+}
+",C,"
+		/* Directories are special, and always inherit S_ISGID */
+		else if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
+			 !in_group_p(inode->i_gid) &&
+			 !capable_wrt_inode_uidgid(dir, CAP_FSETID))
+			mode &= ~S_ISGID;
+",,,"@@ -1999,8 +1999,14 @@ void inode_init_owner(struct inode *inode, const struct inode *dir,
+ 	inode->i_uid = current_fsuid();
+ 	if (dir && dir->i_mode & S_ISGID) {
+ 		inode->i_gid = dir->i_gid;
++
++		/* Directories are special, and always inherit S_ISGID */
+ 		if (S_ISDIR(mode))
+ 			mode |= S_ISGID;
++		else if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
++			 !in_group_p(inode->i_gid) &&
++			 !capable_wrt_inode_uidgid(dir, CAP_FSETID))
++			mode &= ~S_ISGID;
+ 	} else
+ 		inode->i_gid = current_fsgid();
+ 	inode->i_mode = mode;",linux,0fa3ecd87848c9c93c2c828ef4c3a8ca36ce46c7,d02d21ea007b6b33cdaf15c2f84fb1fea996ecc2,1,"void inode_init_owner(struct inode *inode, const struct inode *dir,
+			umode_t mode)
+{
+ 	inode->i_uid = current_fsuid();
+ 	if (dir && dir->i_mode & S_ISGID) {
+ 		inode->i_gid = dir->i_gid;
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//		/* Directories are special, and always inherit S_ISGID */
+ 		if (S_ISDIR(mode))
+ 			mode |= S_ISGID;
+//fix_flaw_line_below:
+//		else if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
+//fix_flaw_line_below:
+//			 !in_group_p(inode->i_gid) &&
+//fix_flaw_line_below:
+//			 !capable_wrt_inode_uidgid(dir, CAP_FSETID))
+//fix_flaw_line_below:
+//			mode &= ~S_ISGID;
+ 	} else
+ 		inode->i_gid = current_fsgid();
+ 	inode->i_mode = mode;
+}
+",182325,"void inode_init_owner(struct inode *inode, const struct inode *dir,
+			umode_t mode)
+{
+ 	inode->i_uid = current_fsuid();
+ 	if (dir && dir->i_mode & S_ISGID) {
+ 		inode->i_gid = dir->i_gid;
+ 		if (S_ISDIR(mode))
+ 			mode |= S_ISGID;
+ 	} else
+ 		inode->i_gid = current_fsgid();
+ 	inode->i_mode = mode;
+}
+","void inode_init_owner(struct inode *inode, const struct inode *dir,
+			umode_t mode)
+{
+ 	inode->i_uid = current_fsuid();
+ 	if (dir && dir->i_mode & S_ISGID) {
+ 		inode->i_gid = dir->i_gid;
+
+		/* Directories are special, and always inherit S_ISGID */
+ 		if (S_ISDIR(mode))
+ 			mode |= S_ISGID;
+		else if ((mode & (S_ISGID | S_IXGRP)) == (S_ISGID | S_IXGRP) &&
+			 !in_group_p(inode->i_gid) &&
+			 !capable_wrt_inode_uidgid(dir, CAP_FSETID))
+			mode &= ~S_ISGID;
+ 	} else
+ 		inode->i_gid = current_fsgid();
+ 	inode->i_mode = mode;
+}
+","The `inode_init_owner` function initializes the ownership and permissions of a newly created inode in a filesystem. It sets the inode's user ID (`i_uid`) to the current filesystem user ID. If the parent directory (`dir`) exists and has the setgid bit set, the inode's group ID (`i_gid`) is inherited from the directory, and if the new inode is a directory, the setgid bit is also applied to its mode. If the directory does not meet these conditions, the inode's group ID is set to the current filesystem group ID. Finally, the function assigns the specified mode to the inode.","This function initializes the ownership and permissions of a newly created file system object. It assigns the user ID of the current user to the object. If a parent directory exists and has a specific permission set, the object inherits the group ID from that directory, and if the object is a directory itself, it also receives that specific permission. If the conditions for inheritance are not met, the object is assigned the group ID of the current user. Finally, the specified permission settings are applied to the object, establishing its access rights.","The vulnerability in the original code allowed unauthorized users to create files with unintended group ownership when a directory had the setgid bit set and was writable by a non-member of that group. This could lead to privilege escalation, as the non-member could create a file with the group's ownership and set it as executable and setgid. The fixed code addresses this by adding a check that ensures if the mode includes both the setgid bit and group execute permission, the group ownership is only retained if the user is a member of the group or has specific capabilities, thus preventing unauthorized group ownership for plain files.","The vulnerability allowed unauthorized users to create files with unintended group ownership when a writable directory had a specific permission set, enabling non-members to exploit this to gain elevated privileges. This situation arose because the code did not adequately restrict the conditions under which group ownership was inherited for plain files. The fix introduced additional checks to ensure that if a file's permissions included both specific group settings and executable permissions, the group ownership would only be retained if the user was a member of that group or had the necessary capabilities, thereby preventing unauthorized privilege escalation.","The vulnerability was fixed by adding a conditional check that ensures the group ownership is only retained under specific circumstances. In the modified code, if the mode includes both the setgid bit and group execute permission, the group ownership is preserved only if the user is a member of the group (checked using `in_group_p`) or has the necessary capabilities (`capable_wrt_inode_uidgid`). If neither condition is met, the setgid bit is removed from the mode using `mode &= ~S_ISGID`. This effectively prevents unauthorized users from creating files with unintended group ownership, thus mitigating the privilege escalation risk.","The vulnerability was fixed by implementing additional checks to restrict group ownership inheritance for newly created files. The updated code ensures that if a file's permissions include both specific group settings and executable permissions, the group ownership is only maintained if the user creating the file is a member of that group or possesses certain capabilities. If the user does not meet these criteria, the group ownership is removed, preventing unauthorized users from exploiting the directory's permissions to create files with unintended group ownership and thereby mitigating the risk of privilege escalation.","5, 5","5, 5","5,4","4,4"
+3,3,183250,183250,,Remote,Not required,Complete,CVE-2017-6903,https://www.cvedetails.com/cve/CVE-2017-6903/,CWE-269,Medium,Complete,Complete,,2017-03-14,9.3,"In ioquake3 before 2017-03-14, the auto-downloading feature has insufficient content restrictions. This also affects Quake III Arena, OpenArena, OpenJK, iortcw, and other id Tech 3 (aka Quake 3 engine) forks. A malicious auto-downloaded file can trigger loading of crafted auto-downloaded files as native code DLLs. A malicious auto-downloaded file can contain configuration defaults that override the user's. Executable bytecode in a malicious auto-downloaded file can set configuration variables to values that will result in unwanted native code DLLs being loaded, resulting in sandbox escape.",2019-10-02,,7,https://github.com/ioquake/ioq3/commit/f61fe5f6a0419ef4a88d46a128052f2e8352e85d,f61fe5f6a0419ef4a88d46a128052f2e8352e85d,Don't open .pk3 files as OpenAL drivers.,1,code/client/snd_openal.c,"{""sha"": ""319ea371b8a038c3cfc0d8533c7eaf7a09636066"", ""filename"": ""code/client/snd_openal.c"", ""status"": ""modified"", ""additions"": 7, ""deletions"": 1, ""changes"": 8, ""blob_url"": ""https://github.com/ioquake/ioq3/blob/f61fe5f6a0419ef4a88d46a128052f2e8352e85d/code/client/snd_openal.c"", ""raw_url"": ""https://github.com/ioquake/ioq3/raw/f61fe5f6a0419ef4a88d46a128052f2e8352e85d/code/client/snd_openal.c"", ""contents_url"": ""https://api.github.com/repos/ioquake/ioq3/contents/code/client/snd_openal.c?ref=f61fe5f6a0419ef4a88d46a128052f2e8352e85d"", ""patch"": ""@@ -2512,11 +2512,17 @@ qboolean S_AL_Init( soundInterface_t *si )\n \ts_alRolloff = Cvar_Get( \""s_alRolloff\"", \""2\"", CVAR_CHEAT);\n \ts_alGraceDistance = Cvar_Get(\""s_alGraceDistance\"", \""512\"", CVAR_CHEAT);\n \n-\ts_alDriver = Cvar_Get( \""s_alDriver\"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH );\n+\ts_alDriver = Cvar_Get( \""s_alDriver\"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED );\n \n \ts_alInputDevice = Cvar_Get( \""s_alInputDevice\"", \""\"", CVAR_ARCHIVE | CVAR_LATCH );\n \ts_alDevice = Cvar_Get(\""s_alDevice\"", \""\"", CVAR_ARCHIVE | CVAR_LATCH);\n \n+\tif ( COM_CompareExtension( s_alDriver->string, \"".pk3\"" ) )\n+\t{\n+\t\tCom_Printf( \""Rejecting DLL named \\\""%s\\\""\"", s_alDriver->string );\n+\t\treturn qfalse;\n+\t}\n+\n \t// Load QAL\n \tif( !QAL_Init( s_alDriver->string ) )\n \t{""}","qboolean S_AL_Init( soundInterface_t *si )
+{
+#ifdef USE_OPENAL
+	const char* device = NULL;
+	const char* inputdevice = NULL;
+	int i;
+
+	if( !si ) {
+		return qfalse;
+	}
+
+	for (i = 0; i < MAX_RAW_STREAMS; i++) {
+		streamSourceHandles[i] = -1;
+		streamPlaying[i] = qfalse;
+		streamSources[i] = 0;
+		streamNumBuffers[i] = 0;
+		streamBufIndex[i] = 0;
+	}
+
+	s_alPrecache = Cvar_Get( ""s_alPrecache"", ""1"", CVAR_ARCHIVE );
+	s_alGain = Cvar_Get( ""s_alGain"", ""1.0"", CVAR_ARCHIVE );
+	s_alSources = Cvar_Get( ""s_alSources"", ""96"", CVAR_ARCHIVE );
+	s_alDopplerFactor = Cvar_Get( ""s_alDopplerFactor"", ""1.0"", CVAR_ARCHIVE );
+	s_alDopplerSpeed = Cvar_Get( ""s_alDopplerSpeed"", ""9000"", CVAR_ARCHIVE );
+	s_alMinDistance = Cvar_Get( ""s_alMinDistance"", ""120"", CVAR_CHEAT );
+	s_alMaxDistance = Cvar_Get(""s_alMaxDistance"", ""1024"", CVAR_CHEAT);
+ 	s_alRolloff = Cvar_Get( ""s_alRolloff"", ""2"", CVAR_CHEAT);
+ 	s_alGraceDistance = Cvar_Get(""s_alGraceDistance"", ""512"", CVAR_CHEAT);
+ 
+	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED );
+ 
+ 	s_alInputDevice = Cvar_Get( ""s_alInputDevice"", """", CVAR_ARCHIVE | CVAR_LATCH );
+ 	s_alDevice = Cvar_Get(""s_alDevice"", """", CVAR_ARCHIVE | CVAR_LATCH);
+ 
+	if ( COM_CompareExtension( s_alDriver->string, "".pk3"" ) )
+	{
+		Com_Printf( ""Rejecting DLL named \""%s\"""", s_alDriver->string );
+		return qfalse;
+	}
+
+ 	if( !QAL_Init( s_alDriver->string ) )
+ 	{
+		Com_Printf( ""Failed to load library: \""%s\"".\n"", s_alDriver->string );
+		if( !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) || !QAL_Init( ALDRIVER_DEFAULT ) ) {
+			return qfalse;
+		}
+	}
+
+	device = s_alDevice->string;
+	if(device && !*device)
+		device = NULL;
+
+	inputdevice = s_alInputDevice->string;
+	if(inputdevice && !*inputdevice)
+		inputdevice = NULL;
+
+
+	enumeration_all_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATE_ALL_EXT"");
+	enumeration_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATION_EXT"");
+
+	if(enumeration_ext || enumeration_all_ext)
+	{
+		char devicenames[16384] = """";
+		const char *devicelist;
+#ifdef _WIN32
+		const char *defaultdevice;
+#endif
+		int curlen;
+
+		if(enumeration_all_ext)
+		{
+			devicelist = qalcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER);
+#endif
+		}
+		else
+		{
+			devicelist = qalcGetString(NULL, ALC_DEVICE_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
+#endif
+			enumeration_ext = qtrue;
+		}
+
+#ifdef _WIN32
+		if(!device && defaultdevice && !strcmp(defaultdevice, ""Generic Hardware""))
+			device = ""Generic Software"";
+#endif
+
+
+		if(devicelist)
+		{
+			while((curlen = strlen(devicelist)))
+			{
+				Q_strcat(devicenames, sizeof(devicenames), devicelist);
+				Q_strcat(devicenames, sizeof(devicenames), ""\n"");
+
+				devicelist += curlen + 1;
+			}
+		}
+
+		s_alAvailableDevices = Cvar_Get(""s_alAvailableDevices"", devicenames, CVAR_ROM | CVAR_NORESTART);
+	}
+
+	alDevice = qalcOpenDevice(device);
+	if( !alDevice && device )
+	{
+		Com_Printf( ""Failed to open OpenAL device '%s', trying default.\n"", device );
+		alDevice = qalcOpenDevice(NULL);
+	}
+
+	if( !alDevice )
+	{
+		QAL_Shutdown( );
+		Com_Printf( ""Failed to open OpenAL device.\n"" );
+		return qfalse;
+	}
+
+	alContext = qalcCreateContext( alDevice, NULL );
+	if( !alContext )
+	{
+		QAL_Shutdown( );
+		qalcCloseDevice( alDevice );
+		Com_Printf( ""Failed to create OpenAL context.\n"" );
+		return qfalse;
+	}
+	qalcMakeContextCurrent( alContext );
+
+	S_AL_BufferInit( );
+	S_AL_SrcInit( );
+
+	qalDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+	qalDopplerFactor( s_alDopplerFactor->value );
+	qalSpeedOfSound( s_alDopplerSpeed->value );
+
+#ifdef USE_VOIP
+	s_alCapture = Cvar_Get( ""s_alCapture"", ""1"", CVAR_ARCHIVE | CVAR_LATCH );
+	if (!s_alCapture->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled by user ('+set s_alCapture 1' to enable)\n"");
+	}
+#if USE_MUMBLE
+	else if (cl_useMumble->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled for Mumble support\n"");
+	}
+#endif
+	else
+	{
+#ifdef __APPLE__
+		if (qalcCaptureOpenDevice == NULL)
+#else
+		if (!qalcIsExtensionPresent(NULL, ""ALC_EXT_capture""))
+#endif
+		{
+			Com_Printf(""No ALC_EXT_capture support, can't record audio.\n"");
+		}
+		else
+		{
+			char inputdevicenames[16384] = """";
+			const char *inputdevicelist;
+			const char *defaultinputdevice;
+			int curlen;
+
+			capture_ext = qtrue;
+
+			inputdevicelist = qalcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
+			defaultinputdevice = qalcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER);
+
+			if (inputdevicelist)
+			{
+				while((curlen = strlen(inputdevicelist)))
+				{
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), inputdevicelist);
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), ""\n"");
+					inputdevicelist += curlen + 1;
+				}
+			}
+
+			s_alAvailableInputDevices = Cvar_Get(""s_alAvailableInputDevices"", inputdevicenames, CVAR_ROM | CVAR_NORESTART);
+
+			Com_Printf(""OpenAL default capture device is '%s'\n"", defaultinputdevice ? defaultinputdevice : ""none"");
+			alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			if( !alCaptureDevice && inputdevice )
+			{
+				Com_Printf( ""Failed to open OpenAL Input device '%s', trying default.\n"", inputdevice );
+				alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			}
+			Com_Printf( ""OpenAL capture device %s.\n"",
+				    (alCaptureDevice == NULL) ? ""failed to open"" : ""opened"");
+		}
+	}
+#endif
+
+	si->Shutdown = S_AL_Shutdown;
+	si->StartSound = S_AL_StartSound;
+	si->StartLocalSound = S_AL_StartLocalSound;
+	si->StartBackgroundTrack = S_AL_StartBackgroundTrack;
+	si->StopBackgroundTrack = S_AL_StopBackgroundTrack;
+	si->RawSamples = S_AL_RawSamples;
+	si->StopAllSounds = S_AL_StopAllSounds;
+	si->ClearLoopingSounds = S_AL_ClearLoopingSounds;
+	si->AddLoopingSound = S_AL_AddLoopingSound;
+	si->AddRealLoopingSound = S_AL_AddRealLoopingSound;
+	si->StopLoopingSound = S_AL_StopLoopingSound;
+	si->Respatialize = S_AL_Respatialize;
+	si->UpdateEntityPosition = S_AL_UpdateEntityPosition;
+	si->Update = S_AL_Update;
+	si->DisableSounds = S_AL_DisableSounds;
+	si->BeginRegistration = S_AL_BeginRegistration;
+	si->RegisterSound = S_AL_RegisterSound;
+	si->ClearSoundBuffer = S_AL_ClearSoundBuffer;
+	si->SoundInfo = S_AL_SoundInfo;
+	si->SoundList = S_AL_SoundList;
+
+#ifdef USE_VOIP
+	si->StartCapture = S_AL_StartCapture;
+	si->AvailableCaptureSamples = S_AL_AvailableCaptureSamples;
+	si->Capture = S_AL_Capture;
+	si->StopCapture = S_AL_StopCapture;
+	si->MasterGain = S_AL_MasterGain;
+#endif
+
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+","qboolean S_AL_Init( soundInterface_t *si )
+{
+#ifdef USE_OPENAL
+	const char* device = NULL;
+	const char* inputdevice = NULL;
+	int i;
+
+	if( !si ) {
+		return qfalse;
+	}
+
+	for (i = 0; i < MAX_RAW_STREAMS; i++) {
+		streamSourceHandles[i] = -1;
+		streamPlaying[i] = qfalse;
+		streamSources[i] = 0;
+		streamNumBuffers[i] = 0;
+		streamBufIndex[i] = 0;
+	}
+
+	s_alPrecache = Cvar_Get( ""s_alPrecache"", ""1"", CVAR_ARCHIVE );
+	s_alGain = Cvar_Get( ""s_alGain"", ""1.0"", CVAR_ARCHIVE );
+	s_alSources = Cvar_Get( ""s_alSources"", ""96"", CVAR_ARCHIVE );
+	s_alDopplerFactor = Cvar_Get( ""s_alDopplerFactor"", ""1.0"", CVAR_ARCHIVE );
+	s_alDopplerSpeed = Cvar_Get( ""s_alDopplerSpeed"", ""9000"", CVAR_ARCHIVE );
+	s_alMinDistance = Cvar_Get( ""s_alMinDistance"", ""120"", CVAR_CHEAT );
+	s_alMaxDistance = Cvar_Get(""s_alMaxDistance"", ""1024"", CVAR_CHEAT);
+ 	s_alRolloff = Cvar_Get( ""s_alRolloff"", ""2"", CVAR_CHEAT);
+ 	s_alGraceDistance = Cvar_Get(""s_alGraceDistance"", ""512"", CVAR_CHEAT);
+ 
+	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH );
+ 
+ 	s_alInputDevice = Cvar_Get( ""s_alInputDevice"", """", CVAR_ARCHIVE | CVAR_LATCH );
+ 	s_alDevice = Cvar_Get(""s_alDevice"", """", CVAR_ARCHIVE | CVAR_LATCH);
+ 
+ 	if( !QAL_Init( s_alDriver->string ) )
+ 	{
+		Com_Printf( ""Failed to load library: \""%s\"".\n"", s_alDriver->string );
+		if( !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) || !QAL_Init( ALDRIVER_DEFAULT ) ) {
+			return qfalse;
+		}
+	}
+
+	device = s_alDevice->string;
+	if(device && !*device)
+		device = NULL;
+
+	inputdevice = s_alInputDevice->string;
+	if(inputdevice && !*inputdevice)
+		inputdevice = NULL;
+
+
+	enumeration_all_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATE_ALL_EXT"");
+	enumeration_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATION_EXT"");
+
+	if(enumeration_ext || enumeration_all_ext)
+	{
+		char devicenames[16384] = """";
+		const char *devicelist;
+#ifdef _WIN32
+		const char *defaultdevice;
+#endif
+		int curlen;
+
+		if(enumeration_all_ext)
+		{
+			devicelist = qalcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER);
+#endif
+		}
+		else
+		{
+			devicelist = qalcGetString(NULL, ALC_DEVICE_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
+#endif
+			enumeration_ext = qtrue;
+		}
+
+#ifdef _WIN32
+		if(!device && defaultdevice && !strcmp(defaultdevice, ""Generic Hardware""))
+			device = ""Generic Software"";
+#endif
+
+
+		if(devicelist)
+		{
+			while((curlen = strlen(devicelist)))
+			{
+				Q_strcat(devicenames, sizeof(devicenames), devicelist);
+				Q_strcat(devicenames, sizeof(devicenames), ""\n"");
+
+				devicelist += curlen + 1;
+			}
+		}
+
+		s_alAvailableDevices = Cvar_Get(""s_alAvailableDevices"", devicenames, CVAR_ROM | CVAR_NORESTART);
+	}
+
+	alDevice = qalcOpenDevice(device);
+	if( !alDevice && device )
+	{
+		Com_Printf( ""Failed to open OpenAL device '%s', trying default.\n"", device );
+		alDevice = qalcOpenDevice(NULL);
+	}
+
+	if( !alDevice )
+	{
+		QAL_Shutdown( );
+		Com_Printf( ""Failed to open OpenAL device.\n"" );
+		return qfalse;
+	}
+
+	alContext = qalcCreateContext( alDevice, NULL );
+	if( !alContext )
+	{
+		QAL_Shutdown( );
+		qalcCloseDevice( alDevice );
+		Com_Printf( ""Failed to create OpenAL context.\n"" );
+		return qfalse;
+	}
+	qalcMakeContextCurrent( alContext );
+
+	S_AL_BufferInit( );
+	S_AL_SrcInit( );
+
+	qalDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+	qalDopplerFactor( s_alDopplerFactor->value );
+	qalSpeedOfSound( s_alDopplerSpeed->value );
+
+#ifdef USE_VOIP
+	s_alCapture = Cvar_Get( ""s_alCapture"", ""1"", CVAR_ARCHIVE | CVAR_LATCH );
+	if (!s_alCapture->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled by user ('+set s_alCapture 1' to enable)\n"");
+	}
+#if USE_MUMBLE
+	else if (cl_useMumble->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled for Mumble support\n"");
+	}
+#endif
+	else
+	{
+#ifdef __APPLE__
+		if (qalcCaptureOpenDevice == NULL)
+#else
+		if (!qalcIsExtensionPresent(NULL, ""ALC_EXT_capture""))
+#endif
+		{
+			Com_Printf(""No ALC_EXT_capture support, can't record audio.\n"");
+		}
+		else
+		{
+			char inputdevicenames[16384] = """";
+			const char *inputdevicelist;
+			const char *defaultinputdevice;
+			int curlen;
+
+			capture_ext = qtrue;
+
+			inputdevicelist = qalcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
+			defaultinputdevice = qalcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER);
+
+			if (inputdevicelist)
+			{
+				while((curlen = strlen(inputdevicelist)))
+				{
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), inputdevicelist);
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), ""\n"");
+					inputdevicelist += curlen + 1;
+				}
+			}
+
+			s_alAvailableInputDevices = Cvar_Get(""s_alAvailableInputDevices"", inputdevicenames, CVAR_ROM | CVAR_NORESTART);
+
+			Com_Printf(""OpenAL default capture device is '%s'\n"", defaultinputdevice ? defaultinputdevice : ""none"");
+			alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			if( !alCaptureDevice && inputdevice )
+			{
+				Com_Printf( ""Failed to open OpenAL Input device '%s', trying default.\n"", inputdevice );
+				alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			}
+			Com_Printf( ""OpenAL capture device %s.\n"",
+				    (alCaptureDevice == NULL) ? ""failed to open"" : ""opened"");
+		}
+	}
+#endif
+
+	si->Shutdown = S_AL_Shutdown;
+	si->StartSound = S_AL_StartSound;
+	si->StartLocalSound = S_AL_StartLocalSound;
+	si->StartBackgroundTrack = S_AL_StartBackgroundTrack;
+	si->StopBackgroundTrack = S_AL_StopBackgroundTrack;
+	si->RawSamples = S_AL_RawSamples;
+	si->StopAllSounds = S_AL_StopAllSounds;
+	si->ClearLoopingSounds = S_AL_ClearLoopingSounds;
+	si->AddLoopingSound = S_AL_AddLoopingSound;
+	si->AddRealLoopingSound = S_AL_AddRealLoopingSound;
+	si->StopLoopingSound = S_AL_StopLoopingSound;
+	si->Respatialize = S_AL_Respatialize;
+	si->UpdateEntityPosition = S_AL_UpdateEntityPosition;
+	si->Update = S_AL_Update;
+	si->DisableSounds = S_AL_DisableSounds;
+	si->BeginRegistration = S_AL_BeginRegistration;
+	si->RegisterSound = S_AL_RegisterSound;
+	si->ClearSoundBuffer = S_AL_ClearSoundBuffer;
+	si->SoundInfo = S_AL_SoundInfo;
+	si->SoundList = S_AL_SoundList;
+
+#ifdef USE_VOIP
+	si->StartCapture = S_AL_StartCapture;
+	si->AvailableCaptureSamples = S_AL_AvailableCaptureSamples;
+	si->Capture = S_AL_Capture;
+	si->StopCapture = S_AL_StopCapture;
+	si->MasterGain = S_AL_MasterGain;
+#endif
+
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+",C,"	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED );
+	if ( COM_CompareExtension( s_alDriver->string, "".pk3"" ) )
+	{
+		Com_Printf( ""Rejecting DLL named \""%s\"""", s_alDriver->string );
+		return qfalse;
+	}
+
+","	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH );
+",,"@@ -2512,11 +2512,17 @@ qboolean S_AL_Init( soundInterface_t *si )
+ 	s_alRolloff = Cvar_Get( ""s_alRolloff"", ""2"", CVAR_CHEAT);
+ 	s_alGraceDistance = Cvar_Get(""s_alGraceDistance"", ""512"", CVAR_CHEAT);
+ 
+-	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH );
++	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED );
+ 
+ 	s_alInputDevice = Cvar_Get( ""s_alInputDevice"", """", CVAR_ARCHIVE | CVAR_LATCH );
+ 	s_alDevice = Cvar_Get(""s_alDevice"", """", CVAR_ARCHIVE | CVAR_LATCH);
+ 
++	if ( COM_CompareExtension( s_alDriver->string, "".pk3"" ) )
++	{
++		Com_Printf( ""Rejecting DLL named \""%s\"""", s_alDriver->string );
++		return qfalse;
++	}
++
+ 	// Load QAL
+ 	if( !QAL_Init( s_alDriver->string ) )
+ 	{",OpenJK,f61fe5f6a0419ef4a88d46a128052f2e8352e85d,376267d534476a875d8b9228149c4ee18b74a4fd,1,"qboolean S_AL_Init( soundInterface_t *si )
+{
+#ifdef USE_OPENAL
+	const char* device = NULL;
+	const char* inputdevice = NULL;
+	int i;
+
+	if( !si ) {
+		return qfalse;
+	}
+
+	for (i = 0; i < MAX_RAW_STREAMS; i++) {
+		streamSourceHandles[i] = -1;
+		streamPlaying[i] = qfalse;
+		streamSources[i] = 0;
+		streamNumBuffers[i] = 0;
+		streamBufIndex[i] = 0;
+	}
+
+	// New console variables
+	s_alPrecache = Cvar_Get( ""s_alPrecache"", ""1"", CVAR_ARCHIVE );
+	s_alGain = Cvar_Get( ""s_alGain"", ""1.0"", CVAR_ARCHIVE );
+	s_alSources = Cvar_Get( ""s_alSources"", ""96"", CVAR_ARCHIVE );
+	s_alDopplerFactor = Cvar_Get( ""s_alDopplerFactor"", ""1.0"", CVAR_ARCHIVE );
+	s_alDopplerSpeed = Cvar_Get( ""s_alDopplerSpeed"", ""9000"", CVAR_ARCHIVE );
+	s_alMinDistance = Cvar_Get( ""s_alMinDistance"", ""120"", CVAR_CHEAT );
+	s_alMaxDistance = Cvar_Get(""s_alMaxDistance"", ""1024"", CVAR_CHEAT);
+ 	s_alRolloff = Cvar_Get( ""s_alRolloff"", ""2"", CVAR_CHEAT);
+ 	s_alGraceDistance = Cvar_Get(""s_alGraceDistance"", ""512"", CVAR_CHEAT);
+ 
+//flaw_line_below:
+	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH );
+//fix_flaw_line_below:
+//	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED );
+ 
+ 	s_alInputDevice = Cvar_Get( ""s_alInputDevice"", """", CVAR_ARCHIVE | CVAR_LATCH );
+ 	s_alDevice = Cvar_Get(""s_alDevice"", """", CVAR_ARCHIVE | CVAR_LATCH);
+ 
+//fix_flaw_line_below:
+//	if ( COM_CompareExtension( s_alDriver->string, "".pk3"" ) )
+//fix_flaw_line_below:
+//	{
+//fix_flaw_line_below:
+//		Com_Printf( ""Rejecting DLL named \""%s\"""", s_alDriver->string );
+//fix_flaw_line_below:
+//		return qfalse;
+//fix_flaw_line_below:
+//	}
+//fix_flaw_line_below:
+//
+ 	// Load QAL
+ 	if( !QAL_Init( s_alDriver->string ) )
+ 	{
+		Com_Printf( ""Failed to load library: \""%s\"".\n"", s_alDriver->string );
+		if( !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) || !QAL_Init( ALDRIVER_DEFAULT ) ) {
+			return qfalse;
+		}
+	}
+
+	device = s_alDevice->string;
+	if(device && !*device)
+		device = NULL;
+
+	inputdevice = s_alInputDevice->string;
+	if(inputdevice && !*inputdevice)
+		inputdevice = NULL;
+
+
+	// Device enumeration support
+	enumeration_all_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATE_ALL_EXT"");
+	enumeration_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATION_EXT"");
+
+	if(enumeration_ext || enumeration_all_ext)
+	{
+		char devicenames[16384] = """";
+		const char *devicelist;
+#ifdef _WIN32
+		const char *defaultdevice;
+#endif
+		int curlen;
+
+		// get all available devices + the default device name.
+		if(enumeration_all_ext)
+		{
+			devicelist = qalcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER);
+#endif
+		}
+		else
+		{
+			// We don't have ALC_ENUMERATE_ALL_EXT but normal enumeration.
+			devicelist = qalcGetString(NULL, ALC_DEVICE_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
+#endif
+			enumeration_ext = qtrue;
+		}
+
+#ifdef _WIN32
+		// check whether the default device is generic hardware. If it is, change to
+		// Generic Software as that one works more reliably with various sound systems.
+		// If it's not, use OpenAL's default selection as we don't want to ignore
+		// native hardware acceleration.
+		if(!device && defaultdevice && !strcmp(defaultdevice, ""Generic Hardware""))
+			device = ""Generic Software"";
+#endif
+
+		// dump a list of available devices to a cvar for the user to see.
+
+		if(devicelist)
+		{
+			while((curlen = strlen(devicelist)))
+			{
+				Q_strcat(devicenames, sizeof(devicenames), devicelist);
+				Q_strcat(devicenames, sizeof(devicenames), ""\n"");
+
+				devicelist += curlen + 1;
+			}
+		}
+
+		s_alAvailableDevices = Cvar_Get(""s_alAvailableDevices"", devicenames, CVAR_ROM | CVAR_NORESTART);
+	}
+
+	alDevice = qalcOpenDevice(device);
+	if( !alDevice && device )
+	{
+		Com_Printf( ""Failed to open OpenAL device '%s', trying default.\n"", device );
+		alDevice = qalcOpenDevice(NULL);
+	}
+
+	if( !alDevice )
+	{
+		QAL_Shutdown( );
+		Com_Printf( ""Failed to open OpenAL device.\n"" );
+		return qfalse;
+	}
+
+	// Create OpenAL context
+	alContext = qalcCreateContext( alDevice, NULL );
+	if( !alContext )
+	{
+		QAL_Shutdown( );
+		qalcCloseDevice( alDevice );
+		Com_Printf( ""Failed to create OpenAL context.\n"" );
+		return qfalse;
+	}
+	qalcMakeContextCurrent( alContext );
+
+	// Initialize sources, buffers, music
+	S_AL_BufferInit( );
+	S_AL_SrcInit( );
+
+	// Set up OpenAL parameters (doppler, etc)
+	qalDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+	qalDopplerFactor( s_alDopplerFactor->value );
+	qalSpeedOfSound( s_alDopplerSpeed->value );
+
+#ifdef USE_VOIP
+	// !!! FIXME: some of these alcCaptureOpenDevice() values should be cvars.
+	// !!! FIXME: add support for capture device enumeration.
+	// !!! FIXME: add some better error reporting.
+	s_alCapture = Cvar_Get( ""s_alCapture"", ""1"", CVAR_ARCHIVE | CVAR_LATCH );
+	if (!s_alCapture->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled by user ('+set s_alCapture 1' to enable)\n"");
+	}
+#if USE_MUMBLE
+	else if (cl_useMumble->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled for Mumble support\n"");
+	}
+#endif
+	else
+	{
+#ifdef __APPLE__
+		// !!! FIXME: Apple has a 1.1-compliant OpenAL, which includes
+		// !!! FIXME:  capture support, but they don't list it in the
+		// !!! FIXME:  extension string. We need to check the version string,
+		// !!! FIXME:  then the extension string, but that's too much trouble,
+		// !!! FIXME:  so we'll just check the function pointer for now.
+		if (qalcCaptureOpenDevice == NULL)
+#else
+		if (!qalcIsExtensionPresent(NULL, ""ALC_EXT_capture""))
+#endif
+		{
+			Com_Printf(""No ALC_EXT_capture support, can't record audio.\n"");
+		}
+		else
+		{
+			char inputdevicenames[16384] = """";
+			const char *inputdevicelist;
+			const char *defaultinputdevice;
+			int curlen;
+
+			capture_ext = qtrue;
+
+			// get all available input devices + the default input device name.
+			inputdevicelist = qalcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
+			defaultinputdevice = qalcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER);
+
+			// dump a list of available devices to a cvar for the user to see.
+			if (inputdevicelist)
+			{
+				while((curlen = strlen(inputdevicelist)))
+				{
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), inputdevicelist);
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), ""\n"");
+					inputdevicelist += curlen + 1;
+				}
+			}
+
+			s_alAvailableInputDevices = Cvar_Get(""s_alAvailableInputDevices"", inputdevicenames, CVAR_ROM | CVAR_NORESTART);
+
+			Com_Printf(""OpenAL default capture device is '%s'\n"", defaultinputdevice ? defaultinputdevice : ""none"");
+			alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			if( !alCaptureDevice && inputdevice )
+			{
+				Com_Printf( ""Failed to open OpenAL Input device '%s', trying default.\n"", inputdevice );
+				alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			}
+			Com_Printf( ""OpenAL capture device %s.\n"",
+				    (alCaptureDevice == NULL) ? ""failed to open"" : ""opened"");
+		}
+	}
+#endif
+
+	si->Shutdown = S_AL_Shutdown;
+	si->StartSound = S_AL_StartSound;
+	si->StartLocalSound = S_AL_StartLocalSound;
+	si->StartBackgroundTrack = S_AL_StartBackgroundTrack;
+	si->StopBackgroundTrack = S_AL_StopBackgroundTrack;
+	si->RawSamples = S_AL_RawSamples;
+	si->StopAllSounds = S_AL_StopAllSounds;
+	si->ClearLoopingSounds = S_AL_ClearLoopingSounds;
+	si->AddLoopingSound = S_AL_AddLoopingSound;
+	si->AddRealLoopingSound = S_AL_AddRealLoopingSound;
+	si->StopLoopingSound = S_AL_StopLoopingSound;
+	si->Respatialize = S_AL_Respatialize;
+	si->UpdateEntityPosition = S_AL_UpdateEntityPosition;
+	si->Update = S_AL_Update;
+	si->DisableSounds = S_AL_DisableSounds;
+	si->BeginRegistration = S_AL_BeginRegistration;
+	si->RegisterSound = S_AL_RegisterSound;
+	si->ClearSoundBuffer = S_AL_ClearSoundBuffer;
+	si->SoundInfo = S_AL_SoundInfo;
+	si->SoundList = S_AL_SoundList;
+
+#ifdef USE_VOIP
+	si->StartCapture = S_AL_StartCapture;
+	si->AvailableCaptureSamples = S_AL_AvailableCaptureSamples;
+	si->Capture = S_AL_Capture;
+	si->StopCapture = S_AL_StopCapture;
+	si->MasterGain = S_AL_MasterGain;
+#endif
+
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+",183250,"qboolean S_AL_Init( soundInterface_t *si )
+{
+#ifdef USE_OPENAL
+	const char* device = NULL;
+	const char* inputdevice = NULL;
+	int i;
+
+	if( !si ) {
+		return qfalse;
+	}
+
+	for (i = 0; i < MAX_RAW_STREAMS; i++) {
+		streamSourceHandles[i] = -1;
+		streamPlaying[i] = qfalse;
+		streamSources[i] = 0;
+		streamNumBuffers[i] = 0;
+		streamBufIndex[i] = 0;
+	}
+
+	s_alPrecache = Cvar_Get( ""s_alPrecache"", ""1"", CVAR_ARCHIVE );
+	s_alGain = Cvar_Get( ""s_alGain"", ""1.0"", CVAR_ARCHIVE );
+	s_alSources = Cvar_Get( ""s_alSources"", ""96"", CVAR_ARCHIVE );
+	s_alDopplerFactor = Cvar_Get( ""s_alDopplerFactor"", ""1.0"", CVAR_ARCHIVE );
+	s_alDopplerSpeed = Cvar_Get( ""s_alDopplerSpeed"", ""9000"", CVAR_ARCHIVE );
+	s_alMinDistance = Cvar_Get( ""s_alMinDistance"", ""120"", CVAR_CHEAT );
+	s_alMaxDistance = Cvar_Get(""s_alMaxDistance"", ""1024"", CVAR_CHEAT);
+ 	s_alRolloff = Cvar_Get( ""s_alRolloff"", ""2"", CVAR_CHEAT);
+ 	s_alGraceDistance = Cvar_Get(""s_alGraceDistance"", ""512"", CVAR_CHEAT);
+ 
+	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH );
+ 
+ 	s_alInputDevice = Cvar_Get( ""s_alInputDevice"", """", CVAR_ARCHIVE | CVAR_LATCH );
+ 	s_alDevice = Cvar_Get(""s_alDevice"", """", CVAR_ARCHIVE | CVAR_LATCH);
+ 
+ 	if( !QAL_Init( s_alDriver->string ) )
+ 	{
+		Com_Printf( ""Failed to load library: \""%s\"".\n"", s_alDriver->string );
+		if( !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) || !QAL_Init( ALDRIVER_DEFAULT ) ) {
+			return qfalse;
+		}
+	}
+
+	device = s_alDevice->string;
+	if(device && !*device)
+		device = NULL;
+
+	inputdevice = s_alInputDevice->string;
+	if(inputdevice && !*inputdevice)
+		inputdevice = NULL;
+
+
+	enumeration_all_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATE_ALL_EXT"");
+	enumeration_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATION_EXT"");
+
+	if(enumeration_ext || enumeration_all_ext)
+	{
+		char devicenames[16384] = """";
+		const char *devicelist;
+#ifdef _WIN32
+		const char *defaultdevice;
+#endif
+		int curlen;
+
+		if(enumeration_all_ext)
+		{
+			devicelist = qalcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER);
+#endif
+		}
+		else
+		{
+			devicelist = qalcGetString(NULL, ALC_DEVICE_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
+#endif
+			enumeration_ext = qtrue;
+		}
+
+#ifdef _WIN32
+		if(!device && defaultdevice && !strcmp(defaultdevice, ""Generic Hardware""))
+			device = ""Generic Software"";
+#endif
+
+
+		if(devicelist)
+		{
+			while((curlen = strlen(devicelist)))
+			{
+				Q_strcat(devicenames, sizeof(devicenames), devicelist);
+				Q_strcat(devicenames, sizeof(devicenames), ""\n"");
+
+				devicelist += curlen + 1;
+			}
+		}
+
+		s_alAvailableDevices = Cvar_Get(""s_alAvailableDevices"", devicenames, CVAR_ROM | CVAR_NORESTART);
+	}
+
+	alDevice = qalcOpenDevice(device);
+	if( !alDevice && device )
+	{
+		Com_Printf( ""Failed to open OpenAL device '%s', trying default.\n"", device );
+		alDevice = qalcOpenDevice(NULL);
+	}
+
+	if( !alDevice )
+	{
+		QAL_Shutdown( );
+		Com_Printf( ""Failed to open OpenAL device.\n"" );
+		return qfalse;
+	}
+
+	alContext = qalcCreateContext( alDevice, NULL );
+	if( !alContext )
+	{
+		QAL_Shutdown( );
+		qalcCloseDevice( alDevice );
+		Com_Printf( ""Failed to create OpenAL context.\n"" );
+		return qfalse;
+	}
+	qalcMakeContextCurrent( alContext );
+
+	S_AL_BufferInit( );
+	S_AL_SrcInit( );
+
+	qalDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+	qalDopplerFactor( s_alDopplerFactor->value );
+	qalSpeedOfSound( s_alDopplerSpeed->value );
+
+#ifdef USE_VOIP
+	s_alCapture = Cvar_Get( ""s_alCapture"", ""1"", CVAR_ARCHIVE | CVAR_LATCH );
+	if (!s_alCapture->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled by user ('+set s_alCapture 1' to enable)\n"");
+	}
+#if USE_MUMBLE
+	else if (cl_useMumble->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled for Mumble support\n"");
+	}
+#endif
+	else
+	{
+#ifdef __APPLE__
+		if (qalcCaptureOpenDevice == NULL)
+#else
+		if (!qalcIsExtensionPresent(NULL, ""ALC_EXT_capture""))
+#endif
+		{
+			Com_Printf(""No ALC_EXT_capture support, can't record audio.\n"");
+		}
+		else
+		{
+			char inputdevicenames[16384] = """";
+			const char *inputdevicelist;
+			const char *defaultinputdevice;
+			int curlen;
+
+			capture_ext = qtrue;
+
+			inputdevicelist = qalcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
+			defaultinputdevice = qalcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER);
+
+			if (inputdevicelist)
+			{
+				while((curlen = strlen(inputdevicelist)))
+				{
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), inputdevicelist);
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), ""\n"");
+					inputdevicelist += curlen + 1;
+				}
+			}
+
+			s_alAvailableInputDevices = Cvar_Get(""s_alAvailableInputDevices"", inputdevicenames, CVAR_ROM | CVAR_NORESTART);
+
+			Com_Printf(""OpenAL default capture device is '%s'\n"", defaultinputdevice ? defaultinputdevice : ""none"");
+			alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			if( !alCaptureDevice && inputdevice )
+			{
+				Com_Printf( ""Failed to open OpenAL Input device '%s', trying default.\n"", inputdevice );
+				alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			}
+			Com_Printf( ""OpenAL capture device %s.\n"",
+				    (alCaptureDevice == NULL) ? ""failed to open"" : ""opened"");
+		}
+	}
+#endif
+
+	si->Shutdown = S_AL_Shutdown;
+	si->StartSound = S_AL_StartSound;
+	si->StartLocalSound = S_AL_StartLocalSound;
+	si->StartBackgroundTrack = S_AL_StartBackgroundTrack;
+	si->StopBackgroundTrack = S_AL_StopBackgroundTrack;
+	si->RawSamples = S_AL_RawSamples;
+	si->StopAllSounds = S_AL_StopAllSounds;
+	si->ClearLoopingSounds = S_AL_ClearLoopingSounds;
+	si->AddLoopingSound = S_AL_AddLoopingSound;
+	si->AddRealLoopingSound = S_AL_AddRealLoopingSound;
+	si->StopLoopingSound = S_AL_StopLoopingSound;
+	si->Respatialize = S_AL_Respatialize;
+	si->UpdateEntityPosition = S_AL_UpdateEntityPosition;
+	si->Update = S_AL_Update;
+	si->DisableSounds = S_AL_DisableSounds;
+	si->BeginRegistration = S_AL_BeginRegistration;
+	si->RegisterSound = S_AL_RegisterSound;
+	si->ClearSoundBuffer = S_AL_ClearSoundBuffer;
+	si->SoundInfo = S_AL_SoundInfo;
+	si->SoundList = S_AL_SoundList;
+
+#ifdef USE_VOIP
+	si->StartCapture = S_AL_StartCapture;
+	si->AvailableCaptureSamples = S_AL_AvailableCaptureSamples;
+	si->Capture = S_AL_Capture;
+	si->StopCapture = S_AL_StopCapture;
+	si->MasterGain = S_AL_MasterGain;
+#endif
+
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+","qboolean S_AL_Init( soundInterface_t *si )
+{
+#ifdef USE_OPENAL
+	const char* device = NULL;
+	const char* inputdevice = NULL;
+	int i;
+
+	if( !si ) {
+		return qfalse;
+	}
+
+	for (i = 0; i < MAX_RAW_STREAMS; i++) {
+		streamSourceHandles[i] = -1;
+		streamPlaying[i] = qfalse;
+		streamSources[i] = 0;
+		streamNumBuffers[i] = 0;
+		streamBufIndex[i] = 0;
+	}
+
+	s_alPrecache = Cvar_Get( ""s_alPrecache"", ""1"", CVAR_ARCHIVE );
+	s_alGain = Cvar_Get( ""s_alGain"", ""1.0"", CVAR_ARCHIVE );
+	s_alSources = Cvar_Get( ""s_alSources"", ""96"", CVAR_ARCHIVE );
+	s_alDopplerFactor = Cvar_Get( ""s_alDopplerFactor"", ""1.0"", CVAR_ARCHIVE );
+	s_alDopplerSpeed = Cvar_Get( ""s_alDopplerSpeed"", ""9000"", CVAR_ARCHIVE );
+	s_alMinDistance = Cvar_Get( ""s_alMinDistance"", ""120"", CVAR_CHEAT );
+	s_alMaxDistance = Cvar_Get(""s_alMaxDistance"", ""1024"", CVAR_CHEAT);
+ 	s_alRolloff = Cvar_Get( ""s_alRolloff"", ""2"", CVAR_CHEAT);
+ 	s_alGraceDistance = Cvar_Get(""s_alGraceDistance"", ""512"", CVAR_CHEAT);
+ 
+	s_alDriver = Cvar_Get( ""s_alDriver"", ALDRIVER_DEFAULT, CVAR_ARCHIVE | CVAR_LATCH | CVAR_PROTECTED );
+ 
+ 	s_alInputDevice = Cvar_Get( ""s_alInputDevice"", """", CVAR_ARCHIVE | CVAR_LATCH );
+ 	s_alDevice = Cvar_Get(""s_alDevice"", """", CVAR_ARCHIVE | CVAR_LATCH);
+ 
+	if ( COM_CompareExtension( s_alDriver->string, "".pk3"" ) )
+	{
+		Com_Printf( ""Rejecting DLL named \""%s\"""", s_alDriver->string );
+		return qfalse;
+	}
+
+ 	if( !QAL_Init( s_alDriver->string ) )
+ 	{
+		Com_Printf( ""Failed to load library: \""%s\"".\n"", s_alDriver->string );
+		if( !Q_stricmp( s_alDriver->string, ALDRIVER_DEFAULT ) || !QAL_Init( ALDRIVER_DEFAULT ) ) {
+			return qfalse;
+		}
+	}
+
+	device = s_alDevice->string;
+	if(device && !*device)
+		device = NULL;
+
+	inputdevice = s_alInputDevice->string;
+	if(inputdevice && !*inputdevice)
+		inputdevice = NULL;
+
+
+	enumeration_all_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATE_ALL_EXT"");
+	enumeration_ext = qalcIsExtensionPresent(NULL, ""ALC_ENUMERATION_EXT"");
+
+	if(enumeration_ext || enumeration_all_ext)
+	{
+		char devicenames[16384] = """";
+		const char *devicelist;
+#ifdef _WIN32
+		const char *defaultdevice;
+#endif
+		int curlen;
+
+		if(enumeration_all_ext)
+		{
+			devicelist = qalcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_ALL_DEVICES_SPECIFIER);
+#endif
+		}
+		else
+		{
+			devicelist = qalcGetString(NULL, ALC_DEVICE_SPECIFIER);
+#ifdef _WIN32
+			defaultdevice = qalcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
+#endif
+			enumeration_ext = qtrue;
+		}
+
+#ifdef _WIN32
+		if(!device && defaultdevice && !strcmp(defaultdevice, ""Generic Hardware""))
+			device = ""Generic Software"";
+#endif
+
+
+		if(devicelist)
+		{
+			while((curlen = strlen(devicelist)))
+			{
+				Q_strcat(devicenames, sizeof(devicenames), devicelist);
+				Q_strcat(devicenames, sizeof(devicenames), ""\n"");
+
+				devicelist += curlen + 1;
+			}
+		}
+
+		s_alAvailableDevices = Cvar_Get(""s_alAvailableDevices"", devicenames, CVAR_ROM | CVAR_NORESTART);
+	}
+
+	alDevice = qalcOpenDevice(device);
+	if( !alDevice && device )
+	{
+		Com_Printf( ""Failed to open OpenAL device '%s', trying default.\n"", device );
+		alDevice = qalcOpenDevice(NULL);
+	}
+
+	if( !alDevice )
+	{
+		QAL_Shutdown( );
+		Com_Printf( ""Failed to open OpenAL device.\n"" );
+		return qfalse;
+	}
+
+	alContext = qalcCreateContext( alDevice, NULL );
+	if( !alContext )
+	{
+		QAL_Shutdown( );
+		qalcCloseDevice( alDevice );
+		Com_Printf( ""Failed to create OpenAL context.\n"" );
+		return qfalse;
+	}
+	qalcMakeContextCurrent( alContext );
+
+	S_AL_BufferInit( );
+	S_AL_SrcInit( );
+
+	qalDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+	qalDopplerFactor( s_alDopplerFactor->value );
+	qalSpeedOfSound( s_alDopplerSpeed->value );
+
+#ifdef USE_VOIP
+	s_alCapture = Cvar_Get( ""s_alCapture"", ""1"", CVAR_ARCHIVE | CVAR_LATCH );
+	if (!s_alCapture->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled by user ('+set s_alCapture 1' to enable)\n"");
+	}
+#if USE_MUMBLE
+	else if (cl_useMumble->integer)
+	{
+		Com_Printf(""OpenAL capture support disabled for Mumble support\n"");
+	}
+#endif
+	else
+	{
+#ifdef __APPLE__
+		if (qalcCaptureOpenDevice == NULL)
+#else
+		if (!qalcIsExtensionPresent(NULL, ""ALC_EXT_capture""))
+#endif
+		{
+			Com_Printf(""No ALC_EXT_capture support, can't record audio.\n"");
+		}
+		else
+		{
+			char inputdevicenames[16384] = """";
+			const char *inputdevicelist;
+			const char *defaultinputdevice;
+			int curlen;
+
+			capture_ext = qtrue;
+
+			inputdevicelist = qalcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
+			defaultinputdevice = qalcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER);
+
+			if (inputdevicelist)
+			{
+				while((curlen = strlen(inputdevicelist)))
+				{
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), inputdevicelist);
+					Q_strcat(inputdevicenames, sizeof(inputdevicenames), ""\n"");
+					inputdevicelist += curlen + 1;
+				}
+			}
+
+			s_alAvailableInputDevices = Cvar_Get(""s_alAvailableInputDevices"", inputdevicenames, CVAR_ROM | CVAR_NORESTART);
+
+			Com_Printf(""OpenAL default capture device is '%s'\n"", defaultinputdevice ? defaultinputdevice : ""none"");
+			alCaptureDevice = qalcCaptureOpenDevice(inputdevice, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			if( !alCaptureDevice && inputdevice )
+			{
+				Com_Printf( ""Failed to open OpenAL Input device '%s', trying default.\n"", inputdevice );
+				alCaptureDevice = qalcCaptureOpenDevice(NULL, 48000, AL_FORMAT_MONO16, VOIP_MAX_PACKET_SAMPLES*4);
+			}
+			Com_Printf( ""OpenAL capture device %s.\n"",
+				    (alCaptureDevice == NULL) ? ""failed to open"" : ""opened"");
+		}
+	}
+#endif
+
+	si->Shutdown = S_AL_Shutdown;
+	si->StartSound = S_AL_StartSound;
+	si->StartLocalSound = S_AL_StartLocalSound;
+	si->StartBackgroundTrack = S_AL_StartBackgroundTrack;
+	si->StopBackgroundTrack = S_AL_StopBackgroundTrack;
+	si->RawSamples = S_AL_RawSamples;
+	si->StopAllSounds = S_AL_StopAllSounds;
+	si->ClearLoopingSounds = S_AL_ClearLoopingSounds;
+	si->AddLoopingSound = S_AL_AddLoopingSound;
+	si->AddRealLoopingSound = S_AL_AddRealLoopingSound;
+	si->StopLoopingSound = S_AL_StopLoopingSound;
+	si->Respatialize = S_AL_Respatialize;
+	si->UpdateEntityPosition = S_AL_UpdateEntityPosition;
+	si->Update = S_AL_Update;
+	si->DisableSounds = S_AL_DisableSounds;
+	si->BeginRegistration = S_AL_BeginRegistration;
+	si->RegisterSound = S_AL_RegisterSound;
+	si->ClearSoundBuffer = S_AL_ClearSoundBuffer;
+	si->SoundInfo = S_AL_SoundInfo;
+	si->SoundList = S_AL_SoundList;
+
+#ifdef USE_VOIP
+	si->StartCapture = S_AL_StartCapture;
+	si->AvailableCaptureSamples = S_AL_AvailableCaptureSamples;
+	si->Capture = S_AL_Capture;
+	si->StopCapture = S_AL_StopCapture;
+	si->MasterGain = S_AL_MasterGain;
+#endif
+
+	return qtrue;
+#else
+	return qfalse;
+#endif
+}
+","The `S_AL_Init` function initializes the OpenAL sound system for a given sound interface, setting up various sound parameters and device configurations. It first checks for the presence of the OpenAL library and initializes sound stream handles and playback states. The function retrieves configuration variables for sound properties like gain, distance, and device names, and attempts to open the specified audio device. If successful, it creates an OpenAL context and initializes sound buffers and sources. Additionally, it sets up voice capture support if enabled, and assigns function pointers for sound operations to the provided interface structure, ultimately returning a success status.","The code initializes an audio system using a specific library, ensuring that sound functionalities are ready for use. It checks for the presence of the library, sets up various sound parameters, and prepares audio stream handles. The function retrieves configuration settings for sound properties and attempts to open the designated audio device, creating a context for sound playback. If successful, it initializes sound buffers and sources, and also sets up voice capture capabilities if enabled. Finally, it assigns necessary functions for sound operations to a provided interface, returning a success status upon completion.","The vulnerability in the original code arises from insufficient validation of the audio driver name, allowing potentially malicious files to be loaded as native code DLLs. Specifically, the code did not check if the driver name ended with a specific extension, which could lead to the execution of harmful code. The fix introduced a check using a comparison function to reject any driver names that match a certain pattern, thereby preventing the loading of potentially harmful DLLs. This additional validation ensures that only safe and expected driver names are processed, mitigating the risk of executing malicious code.","The vulnerability in the original code stems from inadequate validation of input related to the audio driver, allowing potentially harmful files to be loaded as native code. This lack of restrictions could enable a malicious file to override user configurations and execute arbitrary code, leading to security breaches. The fix implemented a validation check to reject any driver names that matched certain unsafe patterns, effectively preventing the loading of untrusted DLLs. This enhancement ensures that only legitimate and expected driver names are processed, thereby mitigating the risk of executing malicious code and protecting the system from potential exploitation.","The vulnerability was fixed by introducing a validation check for the audio driver name using the `COM_CompareExtension` function. This check specifically rejects any driver names that end with the "".pk3"" extension, which could indicate a potentially malicious file. By adding this condition before attempting to initialize the audio library, the code prevents the loading of untrusted DLLs that could execute harmful code. This enhancement ensures that only safe and legitimate driver names are processed, thereby significantly reducing the risk of executing malicious code and protecting the application from potential exploitation.","The vulnerability was addressed by implementing a validation mechanism that checks the audio driver name for specific unsafe patterns. This mechanism ensures that any driver names associated with potentially malicious files are rejected before any further processing occurs. By adding this validation step, the code prevents the loading of untrusted files that could execute harmful actions or override user configurations. This enhancement significantly strengthens the security of the application by ensuring that only legitimate and safe driver names are accepted, thereby mitigating the risk of executing arbitrary or malicious code.","5, 5","5, 5","4, 4","4,5"

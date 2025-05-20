@@ -1,0 +1,67 @@
+,Unnamed: 0.3,Unnamed: 0.2,Unnamed: 0.1,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix,C1_Description_of_Functionality_In_Context,C2_Description_of_Functionality_Generic,C3_Explanation_of_Vulnerability_In_Context,C4_Explanation_of_Vulnerability_Generic,C5_Explanation_Vulnerability_Fixed_In_Context,C6_Explanation_Vulnerability_Fixed_Generic,G1_Clarity_C3_C5,G2_Relevance_C3_C5,G3_Completeness_C3_C5,G4_Actionability_C3_C5,T1_Top_10_CWE_IDs,T2_Correctly_Found_CWE,T3_IFA
+0,0,0,181360,181360,,Local,Not required,Partial,CVE-2017-8925,https://www.cvedetails.com/cve/CVE-2017-8925/,CWE-404,Low,,,,2017-05-12,2.1,The omninet_open function in drivers/usb/serial/omninet.c in the Linux kernel before 4.10.4 allows local users to cause a denial of service (tty exhaustion) by leveraging reference count mishandling.,2019-10-02,DoS ,0,https://github.com/torvalds/linux/commit/30572418b445d85fcfe6c8fe84c947d2606767d8,30572418b445d85fcfe6c8fe84c947d2606767d8,"USB: serial: omninet: fix reference leaks at open
+
+This driver needlessly took another reference to the tty on open, a
+reference which was then never released on close. This lead to not just
+a leak of the tty, but also a driver reference leak that prevented the
+driver from being unloaded after a port had once been opened.
+
+Fixes: 4a90f09b20f4 (""tty: usb-serial krefs"")
+Cc: stable <stable@vger.kernel.org>	# 2.6.28
+Signed-off-by: Johan Hovold <johan@kernel.org>",4,drivers/usb/serial/omninet.c,"{""sha"": ""76564b3bebb9bc3b1c6c2ec5761b74b2bcefcd1e"", ""filename"": ""drivers/usb/serial/omninet.c"", ""status"": ""modified"", ""additions"": 0, ""deletions"": 6, ""changes"": 6, ""blob_url"": ""https://github.com/torvalds/linux/blob/30572418b445d85fcfe6c8fe84c947d2606767d8/drivers/usb/serial/omninet.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/30572418b445d85fcfe6c8fe84c947d2606767d8/drivers/usb/serial/omninet.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/usb/serial/omninet.c?ref=30572418b445d85fcfe6c8fe84c947d2606767d8"", ""patch"": ""@@ -142,12 +142,6 @@ static int omninet_port_remove(struct usb_serial_port *port)\n \n static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)\n {\n-\tstruct usb_serial\t*serial = port->serial;\n-\tstruct usb_serial_port\t*wport;\n-\n-\twport = serial->port[1];\n-\ttty_port_tty_set(&wport->port, tty);\n-\n \treturn usb_serial_generic_open(tty, port);\n }\n ""}"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+ 	return usb_serial_generic_open(tty, port);
+ }
+"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+ 	return usb_serial_generic_open(tty, port);
+ }
+",C,,"	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+",,"@@ -142,12 +142,6 @@ static int omninet_port_remove(struct usb_serial_port *port)
+ 
+ static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+-	struct usb_serial	*serial = port->serial;
+-	struct usb_serial_port	*wport;
+-
+-	wport = serial->port[1];
+-	tty_port_tty_set(&wport->port, tty);
+-
+ 	return usb_serial_generic_open(tty, port);
+ }
+ ",linux,30572418b445d85fcfe6c8fe84c947d2606767d8,0b1d250afb8eb9d65afb568bac9b9f9253a82b49,1," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+//flaw_line_below:
+	struct usb_serial	*serial = port->serial;
+//flaw_line_below:
+	struct usb_serial_port	*wport;
+//flaw_line_below:
+
+//flaw_line_below:
+	wport = serial->port[1];
+//flaw_line_below:
+	tty_port_tty_set(&wport->port, tty);
+//flaw_line_below:
+
+ 	return usb_serial_generic_open(tty, port);
+ }
+",181360," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+	struct usb_serial	*serial = port->serial;
+	struct usb_serial_port	*wport;
+	wport = serial->port[1];
+	tty_port_tty_set(&wport->port, tty);
+ 	return usb_serial_generic_open(tty, port);
+ }
+"," static int omninet_open(struct tty_struct *tty, struct usb_serial_port *port)
+ {
+ 	return usb_serial_generic_open(tty, port);
+ }
+","The provided code defines a function `omninet_open` that is responsible for opening a USB serial port in a Linux kernel module. It takes two parameters: a pointer to a `tty_struct` representing the terminal interface and a pointer to a `usb_serial_port` representing the specific USB serial port. The function retrieves the associated `usb_serial` structure and identifies a secondary port (the second port in the array). It then associates the terminal with this secondary port using `tty_port_tty_set`. Finally, it calls `usb_serial_generic_open` to perform the standard operations required to open the USB serial connection.","The code defines a function that facilitates the opening of a USB serial port within a Linux kernel module. It accepts parameters representing a terminal interface and a specific USB serial port. The function retrieves the associated serial structure and identifies a secondary port for use. It then links the terminal interface to this secondary port, ensuring proper communication. Finally, it invokes a standard procedure to execute the necessary operations for establishing the USB serial connection, enabling data transmission between the device and the system.","The vulnerability identified as CWE-404, which pertains to the use of uninitialized resources, was present in the original code due to the unnecessary manipulation of a secondary port without proper checks. In the vulnerable code, the function retrieved a secondary port and associated it with the terminal interface, potentially leading to undefined behavior if that port was not properly initialized. The fixed code eliminates this risk by directly calling the standard opening function without referencing the secondary port, ensuring that only the intended and properly initialized resources are utilized, thereby enhancing the overall safety and reliability of the operation.","The vulnerability identified as CWE-404, which involves the use of uninitialized resources, was present in the original code due to unnecessary handling of a secondary resource without proper validation. This could lead to undefined behavior if the resource was not correctly initialized, potentially causing system instability or crashes. The fixed code addresses this issue by removing the manipulation of the secondary resource and directly invoking a standard function to open the connection. This change ensures that only properly initialized and intended resources are utilized, thereby enhancing the safety and reliability of the operation while mitigating the risk of exploitation.","The vulnerability was fixed by simplifying the `omninet_open` function to eliminate unnecessary operations that could lead to the use of uninitialized resources. In the original code, the function retrieved a secondary port and associated it with the terminal interface, which posed a risk if that port was not properly initialized. The revised code directly calls `usb_serial_generic_open`, bypassing the retrieval and manipulation of the secondary port altogether. This change ensures that only the primary port is used for opening the connection, thereby reducing the potential for undefined behavior and enhancing the overall safety of the operation.","The vulnerability was fixed by streamlining the function to remove unnecessary handling of a secondary resource that could lead to the use of uninitialized elements. The revised implementation focuses solely on the primary operation required to open the connection, eliminating the risk associated with manipulating an additional resource. By directly invoking a standard procedure without referencing the secondary resource, the updated code ensures that only properly initialized and intended elements are utilized. This change enhances the overall safety and reliability of the operation, effectively mitigating the potential for undefined behavior and improving system stability.","4, 5","3,4","3,4","4,4","CWE-908, CWE-457, CWE-824, CWE-665, CWE-456, CWE-119, CWE-476, CWE-415, CWE-426, CWE-475",N,-1
