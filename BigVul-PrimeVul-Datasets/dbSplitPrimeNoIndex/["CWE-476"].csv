@@ -1,0 +1,3585 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+530,"[""CWE-476""]",tar,cb07844454d8cc9fb21f53ace75975f91185a120,cb07844454d8cc9fb21f53ace75975f91185a120,0,498918,5.503437804294007e+37,84.0,"Fix possible NULL dereference (savannah bug #55369)
+
+* src/sparse.c (pax_decode_header): Check return from find_next_block.",other,"pax_decode_header (struct tar_sparse_file *file)
+{
+  if (file->stat_info->sparse_major > 0)
+    {
+      uintmax_t u;
+      char nbuf[UINTMAX_STRSIZE_BOUND];
+      union block *blk;
+      char *p;
+      size_t i;
+      off_t start;
+      
+#define COPY_BUF(b,buf,src) do                                     \
+ {                                                                 \
+   char *endp = b->buffer + BLOCKSIZE;                             \
+   char *dst = buf;                                                \
+   do                                                              \
+     {                                                             \
+       if (dst == buf + UINTMAX_STRSIZE_BOUND -1)                  \
+         {                                                         \
+           ERROR ((0, 0, _(""%s: numeric overflow in sparse archive member""), \
+	          file->stat_info->orig_file_name));               \
+           return false;                                           \
+         }                                                         \
+       if (src == endp)                                            \
+	 {                                                         \
+	   set_next_block_after (b);                               \
+           b = find_next_block ();                                 \
+           src = b->buffer;                                        \
+	   endp = b->buffer + BLOCKSIZE;                           \
+	 }                                                         \
+       *dst = *src++;                                              \
+     }                                                             \
+   while (*dst++ != '\n');                                         \
+   dst[-1] = 0;                                                    \
+ } while (0)
+
+      start = current_block_ordinal ();
+      set_next_block_after (current_header);
+      blk = find_next_block ();
+      p = blk->buffer;
+      COPY_BUF (blk,nbuf,p);
+      if (!decode_num (&u, nbuf, TYPE_MAXIMUM (size_t)))
+	{
+	  ERROR ((0, 0, _(""%s: malformed sparse archive member""),
+		  file->stat_info->orig_file_name));
+	  return false;
+	}
+      file->stat_info->sparse_map_size = u;
+      file->stat_info->sparse_map = xcalloc (file->stat_info->sparse_map_size,
+					     sizeof (*file->stat_info->sparse_map));
+      file->stat_info->sparse_map_avail = 0;
+      for (i = 0; i < file->stat_info->sparse_map_size; i++)
+	{
+	  struct sp_array sp;
+
+	  COPY_BUF (blk,nbuf,p);
+	  if (!decode_num (&u, nbuf, TYPE_MAXIMUM (off_t)))
+	    {
+	      ERROR ((0, 0, _(""%s: malformed sparse archive member""),
+		      file->stat_info->orig_file_name));
+	      return false;
+	    }
+	  sp.offset = u;
+	  COPY_BUF (blk,nbuf,p);
+	  if (!decode_num (&u, nbuf, TYPE_MAXIMUM (off_t)))
+	    {
+	      ERROR ((0, 0, _(""%s: malformed sparse archive member""),
+		      file->stat_info->orig_file_name));
+	      return false;
+	    }
+	  sp.numbytes = u;
+	  sparse_add_map (file->stat_info, &sp);
+	}
+      set_next_block_after (blk);
+
+      file->dumped_size += BLOCKSIZE * (current_block_ordinal () - start);
+    }
+
+  return true;
+}","pax_decode_header (struct tar_sparse_file *file)
+{
+  if (file->stat_info->sparse_major > 0)
+    {
+      uintmax_t u;
+      char nbuf[UINTMAX_STRSIZE_BOUND];
+      union block *blk;
+      char *p;
+      size_t i;
+      off_t start;
+      
+#define COPY_BUF(b,buf,src) do                                     \
+ {                                                                 \
+   char *endp = b->buffer + BLOCKSIZE;                             \
+   char *dst = buf;                                                \
+   do                                                              \
+     {                                                             \
+       if (dst == buf + UINTMAX_STRSIZE_BOUND -1)                  \
+         {                                                         \
+           ERROR ((0, 0, _(""%s: numeric overflow in sparse archive member""), \
+	          file->stat_info->orig_file_name));               \
+           return false;                                           \
+         }                                                         \
+       if (src == endp)                                            \
+	 {                                                         \
+	   set_next_block_after (b);                               \
+           b = find_next_block ();                                 \
+           if (!b)                                                 \
+             FATAL_ERROR ((0, 0, _(""Unexpected EOF in archive""))); \
+           src = b->buffer;                                        \
+	   endp = b->buffer + BLOCKSIZE;                           \
+	 }                                                         \
+       *dst = *src++;                                              \
+     }                                                             \
+   while (*dst++ != '\n');                                         \
+   dst[-1] = 0;                                                    \
+ } while (0)
+
+      start = current_block_ordinal ();
+      set_next_block_after (current_header);
+      blk = find_next_block ();
+      if (!blk)
+        FATAL_ERROR ((0, 0, _(""Unexpected EOF in archive"")));
+      p = blk->buffer;
+      COPY_BUF (blk,nbuf,p);
+      if (!decode_num (&u, nbuf, TYPE_MAXIMUM (size_t)))
+	{
+	  ERROR ((0, 0, _(""%s: malformed sparse archive member""),
+		  file->stat_info->orig_file_name));
+	  return false;
+	}
+      file->stat_info->sparse_map_size = u;
+      file->stat_info->sparse_map = xcalloc (file->stat_info->sparse_map_size,
+					     sizeof (*file->stat_info->sparse_map));
+      file->stat_info->sparse_map_avail = 0;
+      for (i = 0; i < file->stat_info->sparse_map_size; i++)
+	{
+	  struct sp_array sp;
+
+	  COPY_BUF (blk,nbuf,p);
+	  if (!decode_num (&u, nbuf, TYPE_MAXIMUM (off_t)))
+	    {
+	      ERROR ((0, 0, _(""%s: malformed sparse archive member""),
+		      file->stat_info->orig_file_name));
+	      return false;
+	    }
+	  sp.offset = u;
+	  COPY_BUF (blk,nbuf,p);
+	  if (!decode_num (&u, nbuf, TYPE_MAXIMUM (off_t)))
+	    {
+	      ERROR ((0, 0, _(""%s: malformed sparse archive member""),
+		      file->stat_info->orig_file_name));
+	      return false;
+	    }
+	  sp.numbytes = u;
+	  sparse_add_map (file->stat_info, &sp);
+	}
+      set_next_block_after (blk);
+
+      file->dumped_size += BLOCKSIZE * (current_block_ordinal () - start);
+    }
+
+  return true;
+}",
+541,"[""CWE-476""]",openssl,97ab3c4b538840037812c8d9164d09a1f4bf11a1,97ab3c4b538840037812c8d9164d09a1f4bf11a1,0,506696,3.3388096069882313e+38,6.0,"Add a test for GENERAL_NAME_cmp
+
+Based on a boringssl test contributed by David Benjamin
+
+Reviewed-by: Tomas Mraz <tmraz@fedoraproject.org>",other,"int setup_tests(void)
+{
+    ADD_ALL_TESTS(call_run_cert, OSSL_NELEM(name_fns));
+    return 1;
+}","int setup_tests(void)
+{
+    ADD_ALL_TESTS(call_run_cert, OSSL_NELEM(name_fns));
+    ADD_TEST(test_GENERAL_NAME_cmp);
+    return 1;
+}",
+546,"[""CWE-476""]",server,3a52569499e2f0c4d1f25db1e81617a9d9755400,3a52569499e2f0c4d1f25db1e81617a9d9755400,0,508874,1.7896368127361e+38,129.0,"MDEV-25636: Bug report: abortion in sql/sql_parse.cc:6294
+
+The asserion failure was caused by this query
+
+  select /*id=1*/ from t1
+  where
+   col= ( select /*id=2*/ from ... where corr_cond1
+          union
+          select /*id=4*/ from ... where corr_cond2)
+
+Here,
+- select with id=2 was correlated due to corr_cond1.
+- select with id=4 was initially correlated due to corr_cond2, but then
+  the optimizer optimized away the correlation, making the select with id=4
+  uncorrelated.
+
+However, since select with id=2 remained correlated, the execution had to
+re-compute the whole UNION. When it tried to execute select with id=4, it
+hit an assertion  (join buffer already free'd).
+
+This is because select with id=4 has freed its execution structures after
+it has been executed once. The select is uncorrelated, so it did not expect
+it would need to be executed for the second time.
+
+Fixed this by adding this logic in
+st_select_lex::optimize_unflattened_subqueries():
+
+  If a member of a UNION is correlated, mark all its members as
+  correlated, so that they are prepared to be executed multiple times.",other,"bool st_select_lex::optimize_unflattened_subqueries(bool const_only)
+{
+  SELECT_LEX_UNIT *next_unit= NULL;
+  for (SELECT_LEX_UNIT *un= first_inner_unit();
+       un;
+       un= next_unit ? next_unit : un->next_unit())
+  {
+    Item_subselect *subquery_predicate= un->item;
+    next_unit= NULL;
+
+    if (subquery_predicate)
+    {
+      if (!subquery_predicate->fixed)
+      {
+	/*
+	 This subquery was excluded as part of some expression so it is
+	 invisible from all prepared expression.
+       */
+	next_unit= un->next_unit();
+	un->exclude_level();
+	if (next_unit)
+	  continue;
+	break;
+      }
+      if (subquery_predicate->substype() == Item_subselect::IN_SUBS)
+      {
+        Item_in_subselect *in_subs= (Item_in_subselect*) subquery_predicate;
+        if (in_subs->is_jtbm_merged)
+          continue;
+      }
+
+      if (const_only && !subquery_predicate->const_item())
+      {
+        /* Skip non-constant subqueries if the caller asked so. */
+        continue;
+      }
+
+      bool empty_union_result= true;
+      bool is_correlated_unit= false;
+      bool first= true;
+      bool union_plan_saved= false;
+      /*
+        If the subquery is a UNION, optimize all the subqueries in the UNION. If
+        there is no UNION, then the loop will execute once for the subquery.
+      */
+      for (SELECT_LEX *sl= un->first_select(); sl; sl= sl->next_select())
+      {
+        JOIN *inner_join= sl->join;
+        if (first)
+          first= false;
+        else
+        {
+          if (!union_plan_saved)
+          {
+            union_plan_saved= true;
+            if (un->save_union_explain(un->thd->lex->explain))
+              return true; /* Failure */
+          }
+        }
+        if (!inner_join)
+          continue;
+        SELECT_LEX *save_select= un->thd->lex->current_select;
+        ulonglong save_options;
+        int res;
+        /* We need only 1 row to determine existence */
+        un->set_limit(un->global_parameters());
+        un->thd->lex->current_select= sl;
+        save_options= inner_join->select_options;
+        if (options & SELECT_DESCRIBE)
+        {
+          /* Optimize the subquery in the context of EXPLAIN. */
+          sl->set_explain_type(FALSE);
+          sl->options|= SELECT_DESCRIBE;
+          inner_join->select_options|= SELECT_DESCRIBE;
+        }
+        if ((res= inner_join->optimize()))
+          return TRUE;
+        if (!inner_join->cleaned)
+          sl->update_used_tables();
+        sl->update_correlated_cache();
+        is_correlated_unit|= sl->is_correlated;
+        inner_join->select_options= save_options;
+        un->thd->lex->current_select= save_select;
+
+        Explain_query *eq;
+        if ((eq= inner_join->thd->lex->explain))
+        {
+          Explain_select *expl_sel;
+          if ((expl_sel= eq->get_select(inner_join->select_lex->select_number)))
+          {
+            sl->set_explain_type(TRUE);
+            expl_sel->select_type= sl->type;
+          }
+        }
+
+        if (empty_union_result)
+        {
+          /*
+            If at least one subquery in a union is non-empty, the UNION result
+            is non-empty. If there is no UNION, the only subquery is non-empy.
+          */
+          empty_union_result= inner_join->empty_result();
+        }
+        if (res)
+          return TRUE;
+      }
+      if (empty_union_result)
+        subquery_predicate->no_rows_in_result();
+      if (!is_correlated_unit)
+        un->uncacheable&= ~UNCACHEABLE_DEPENDENT;
+      subquery_predicate->is_correlated= is_correlated_unit;
+    }
+  }
+  return FALSE;
+}","bool st_select_lex::optimize_unflattened_subqueries(bool const_only)
+{
+  SELECT_LEX_UNIT *next_unit= NULL;
+  for (SELECT_LEX_UNIT *un= first_inner_unit();
+       un;
+       un= next_unit ? next_unit : un->next_unit())
+  {
+    Item_subselect *subquery_predicate= un->item;
+    next_unit= NULL;
+
+    if (subquery_predicate)
+    {
+      if (!subquery_predicate->fixed)
+      {
+	/*
+	 This subquery was excluded as part of some expression so it is
+	 invisible from all prepared expression.
+       */
+	next_unit= un->next_unit();
+	un->exclude_level();
+	if (next_unit)
+	  continue;
+	break;
+      }
+      if (subquery_predicate->substype() == Item_subselect::IN_SUBS)
+      {
+        Item_in_subselect *in_subs= (Item_in_subselect*) subquery_predicate;
+        if (in_subs->is_jtbm_merged)
+          continue;
+      }
+
+      if (const_only && !subquery_predicate->const_item())
+      {
+        /* Skip non-constant subqueries if the caller asked so. */
+        continue;
+      }
+
+      bool empty_union_result= true;
+      bool is_correlated_unit= false;
+      bool first= true;
+      bool union_plan_saved= false;
+      /*
+        If the subquery is a UNION, optimize all the subqueries in the UNION. If
+        there is no UNION, then the loop will execute once for the subquery.
+      */
+      for (SELECT_LEX *sl= un->first_select(); sl; sl= sl->next_select())
+      {
+        JOIN *inner_join= sl->join;
+        if (first)
+          first= false;
+        else
+        {
+          if (!union_plan_saved)
+          {
+            union_plan_saved= true;
+            if (un->save_union_explain(un->thd->lex->explain))
+              return true; /* Failure */
+          }
+        }
+        if (!inner_join)
+          continue;
+        SELECT_LEX *save_select= un->thd->lex->current_select;
+        ulonglong save_options;
+        int res;
+        /* We need only 1 row to determine existence */
+        un->set_limit(un->global_parameters());
+        un->thd->lex->current_select= sl;
+        save_options= inner_join->select_options;
+        if (options & SELECT_DESCRIBE)
+        {
+          /* Optimize the subquery in the context of EXPLAIN. */
+          sl->set_explain_type(FALSE);
+          sl->options|= SELECT_DESCRIBE;
+          inner_join->select_options|= SELECT_DESCRIBE;
+        }
+        if ((res= inner_join->optimize()))
+          return TRUE;
+        if (!inner_join->cleaned)
+          sl->update_used_tables();
+        sl->update_correlated_cache();
+        is_correlated_unit|= sl->is_correlated;
+        inner_join->select_options= save_options;
+        un->thd->lex->current_select= save_select;
+
+        Explain_query *eq;
+        if ((eq= inner_join->thd->lex->explain))
+        {
+          Explain_select *expl_sel;
+          if ((expl_sel= eq->get_select(inner_join->select_lex->select_number)))
+          {
+            sl->set_explain_type(TRUE);
+            expl_sel->select_type= sl->type;
+          }
+        }
+
+        if (empty_union_result)
+        {
+          /*
+            If at least one subquery in a union is non-empty, the UNION result
+            is non-empty. If there is no UNION, the only subquery is non-empy.
+          */
+          empty_union_result= inner_join->empty_result();
+        }
+        if (res)
+          return TRUE;
+      }
+      if (empty_union_result)
+        subquery_predicate->no_rows_in_result();
+
+      if (is_correlated_unit)
+      {
+        /*
+          Some parts of UNION are not correlated. This means we will need to
+          re-execute the whole UNION every time. Mark all parts of the UNION
+          as correlated so that they are prepared to be executed multiple
+          times (if we don't do that, some part of the UNION may free its
+          execution data at the end of first execution and crash on the second
+          execution)
+        */
+        for (SELECT_LEX *sl= un->first_select(); sl; sl= sl->next_select())
+          sl->uncacheable |= UNCACHEABLE_DEPENDENT;
+      }
+      else
+        un->uncacheable&= ~UNCACHEABLE_DEPENDENT;
+      subquery_predicate->is_correlated= is_correlated_unit;
+    }
+  }
+  return FALSE;
+}",
+2481,"[""CWE-476""]",linux-2.6,59839dfff5eabca01cc4e20b45797a60a80af8cb,59839dfff5eabca01cc4e20b45797a60a80af8cb,0,490535,4.960124496141258e+37,87.0,"KVM: x86: check for cr3 validity in ioctl_set_sregs
+
+Matt T. Yourst notes that kvm_arch_vcpu_ioctl_set_sregs lacks validity
+checking for the new cr3 value:
+
+""Userspace callers of KVM_SET_SREGS can pass a bogus value of cr3 to
+the kernel. This will trigger a NULL pointer access in gfn_to_rmap()
+when userspace next tries to call KVM_RUN on the affected VCPU and kvm
+attempts to activate the new non-existent page table root.
+
+This happens since kvm only validates that cr3 points to a valid guest
+physical memory page when code *inside* the guest sets cr3. However, kvm
+currently trusts the userspace caller (e.g. QEMU) on the host machine to
+always supply a valid page table root, rather than properly validating
+it along with the rest of the reloaded guest state.""
+
+http://sourceforge.net/tracker/?func=detail&atid=893831&aid=2687641&group_id=180599
+
+Check for a valid cr3 address in kvm_arch_vcpu_ioctl_set_sregs, triple
+fault in case of failure.
+
+Cc: stable@kernel.org
+Signed-off-by: Marcelo Tosatti <mtosatti@redhat.com>
+Signed-off-by: Avi Kivity <avi@redhat.com>",other,"int kvm_arch_vcpu_ioctl_set_sregs(struct kvm_vcpu *vcpu,
+				  struct kvm_sregs *sregs)
+{
+	int mmu_reset_needed = 0;
+	int i, pending_vec, max_bits;
+	struct descriptor_table dt;
+
+	vcpu_load(vcpu);
+
+	dt.limit = sregs->idt.limit;
+	dt.base = sregs->idt.base;
+	kvm_x86_ops->set_idt(vcpu, &dt);
+	dt.limit = sregs->gdt.limit;
+	dt.base = sregs->gdt.base;
+	kvm_x86_ops->set_gdt(vcpu, &dt);
+
+	vcpu->arch.cr2 = sregs->cr2;
+	mmu_reset_needed |= vcpu->arch.cr3 != sregs->cr3;
+	vcpu->arch.cr3 = sregs->cr3;
+
+	kvm_set_cr8(vcpu, sregs->cr8);
+
+	mmu_reset_needed |= vcpu->arch.shadow_efer != sregs->efer;
+	kvm_x86_ops->set_efer(vcpu, sregs->efer);
+	kvm_set_apic_base(vcpu, sregs->apic_base);
+
+	kvm_x86_ops->decache_cr4_guest_bits(vcpu);
+
+	mmu_reset_needed |= vcpu->arch.cr0 != sregs->cr0;
+	kvm_x86_ops->set_cr0(vcpu, sregs->cr0);
+	vcpu->arch.cr0 = sregs->cr0;
+
+	mmu_reset_needed |= vcpu->arch.cr4 != sregs->cr4;
+	kvm_x86_ops->set_cr4(vcpu, sregs->cr4);
+	if (!is_long_mode(vcpu) && is_pae(vcpu))
+		load_pdptrs(vcpu, vcpu->arch.cr3);
+
+	if (mmu_reset_needed)
+		kvm_mmu_reset_context(vcpu);
+
+	if (!irqchip_in_kernel(vcpu->kvm)) {
+		memcpy(vcpu->arch.irq_pending, sregs->interrupt_bitmap,
+		       sizeof vcpu->arch.irq_pending);
+		vcpu->arch.irq_summary = 0;
+		for (i = 0; i < ARRAY_SIZE(vcpu->arch.irq_pending); ++i)
+			if (vcpu->arch.irq_pending[i])
+				__set_bit(i, &vcpu->arch.irq_summary);
+	} else {
+		max_bits = (sizeof sregs->interrupt_bitmap) << 3;
+		pending_vec = find_first_bit(
+			(const unsigned long *)sregs->interrupt_bitmap,
+			max_bits);
+		/* Only pending external irq is handled here */
+		if (pending_vec < max_bits) {
+			kvm_x86_ops->set_irq(vcpu, pending_vec);
+			pr_debug(""Set back pending irq %d\n"",
+				 pending_vec);
+		}
+		kvm_pic_clear_isr_ack(vcpu->kvm);
+	}
+
+	kvm_set_segment(vcpu, &sregs->cs, VCPU_SREG_CS);
+	kvm_set_segment(vcpu, &sregs->ds, VCPU_SREG_DS);
+	kvm_set_segment(vcpu, &sregs->es, VCPU_SREG_ES);
+	kvm_set_segment(vcpu, &sregs->fs, VCPU_SREG_FS);
+	kvm_set_segment(vcpu, &sregs->gs, VCPU_SREG_GS);
+	kvm_set_segment(vcpu, &sregs->ss, VCPU_SREG_SS);
+
+	kvm_set_segment(vcpu, &sregs->tr, VCPU_SREG_TR);
+	kvm_set_segment(vcpu, &sregs->ldt, VCPU_SREG_LDTR);
+
+	/* Older userspace won't unhalt the vcpu on reset. */
+	if (vcpu->vcpu_id == 0 && kvm_rip_read(vcpu) == 0xfff0 &&
+	    sregs->cs.selector == 0xf000 && sregs->cs.base == 0xffff0000 &&
+	    !(vcpu->arch.cr0 & X86_CR0_PE))
+		vcpu->arch.mp_state = KVM_MP_STATE_RUNNABLE;
+
+	vcpu_put(vcpu);
+
+	return 0;
+}","int kvm_arch_vcpu_ioctl_set_sregs(struct kvm_vcpu *vcpu,
+				  struct kvm_sregs *sregs)
+{
+	int mmu_reset_needed = 0;
+	int i, pending_vec, max_bits;
+	struct descriptor_table dt;
+
+	vcpu_load(vcpu);
+
+	dt.limit = sregs->idt.limit;
+	dt.base = sregs->idt.base;
+	kvm_x86_ops->set_idt(vcpu, &dt);
+	dt.limit = sregs->gdt.limit;
+	dt.base = sregs->gdt.base;
+	kvm_x86_ops->set_gdt(vcpu, &dt);
+
+	vcpu->arch.cr2 = sregs->cr2;
+	mmu_reset_needed |= vcpu->arch.cr3 != sregs->cr3;
+
+	down_read(&vcpu->kvm->slots_lock);
+	if (gfn_to_memslot(vcpu->kvm, sregs->cr3 >> PAGE_SHIFT))
+		vcpu->arch.cr3 = sregs->cr3;
+	else
+		set_bit(KVM_REQ_TRIPLE_FAULT, &vcpu->requests);
+	up_read(&vcpu->kvm->slots_lock);
+
+	kvm_set_cr8(vcpu, sregs->cr8);
+
+	mmu_reset_needed |= vcpu->arch.shadow_efer != sregs->efer;
+	kvm_x86_ops->set_efer(vcpu, sregs->efer);
+	kvm_set_apic_base(vcpu, sregs->apic_base);
+
+	kvm_x86_ops->decache_cr4_guest_bits(vcpu);
+
+	mmu_reset_needed |= vcpu->arch.cr0 != sregs->cr0;
+	kvm_x86_ops->set_cr0(vcpu, sregs->cr0);
+	vcpu->arch.cr0 = sregs->cr0;
+
+	mmu_reset_needed |= vcpu->arch.cr4 != sregs->cr4;
+	kvm_x86_ops->set_cr4(vcpu, sregs->cr4);
+	if (!is_long_mode(vcpu) && is_pae(vcpu))
+		load_pdptrs(vcpu, vcpu->arch.cr3);
+
+	if (mmu_reset_needed)
+		kvm_mmu_reset_context(vcpu);
+
+	if (!irqchip_in_kernel(vcpu->kvm)) {
+		memcpy(vcpu->arch.irq_pending, sregs->interrupt_bitmap,
+		       sizeof vcpu->arch.irq_pending);
+		vcpu->arch.irq_summary = 0;
+		for (i = 0; i < ARRAY_SIZE(vcpu->arch.irq_pending); ++i)
+			if (vcpu->arch.irq_pending[i])
+				__set_bit(i, &vcpu->arch.irq_summary);
+	} else {
+		max_bits = (sizeof sregs->interrupt_bitmap) << 3;
+		pending_vec = find_first_bit(
+			(const unsigned long *)sregs->interrupt_bitmap,
+			max_bits);
+		/* Only pending external irq is handled here */
+		if (pending_vec < max_bits) {
+			kvm_x86_ops->set_irq(vcpu, pending_vec);
+			pr_debug(""Set back pending irq %d\n"",
+				 pending_vec);
+		}
+		kvm_pic_clear_isr_ack(vcpu->kvm);
+	}
+
+	kvm_set_segment(vcpu, &sregs->cs, VCPU_SREG_CS);
+	kvm_set_segment(vcpu, &sregs->ds, VCPU_SREG_DS);
+	kvm_set_segment(vcpu, &sregs->es, VCPU_SREG_ES);
+	kvm_set_segment(vcpu, &sregs->fs, VCPU_SREG_FS);
+	kvm_set_segment(vcpu, &sregs->gs, VCPU_SREG_GS);
+	kvm_set_segment(vcpu, &sregs->ss, VCPU_SREG_SS);
+
+	kvm_set_segment(vcpu, &sregs->tr, VCPU_SREG_TR);
+	kvm_set_segment(vcpu, &sregs->ldt, VCPU_SREG_LDTR);
+
+	/* Older userspace won't unhalt the vcpu on reset. */
+	if (vcpu->vcpu_id == 0 && kvm_rip_read(vcpu) == 0xfff0 &&
+	    sregs->cs.selector == 0xf000 && sregs->cs.base == 0xffff0000 &&
+	    !(vcpu->arch.cr0 & X86_CR0_PE))
+		vcpu->arch.mp_state = KVM_MP_STATE_RUNNABLE;
+
+	vcpu_put(vcpu);
+
+	return 0;
+}",
+2486,"[""CWE-476""]",linux-2.6,1e0c14f49d6b393179f423abbac47f85618d3d46,1e0c14f49d6b393179f423abbac47f85618d3d46,0,490776,1.2720956387305444e+38,203.0,"[UDP]: Fix MSG_PROBE crash
+
+UDP tracks corking status through the pending variable.  The
+IP layer also tracks it through the socket write queue.  It
+is possible for the two to get out of sync when MSG_PROBE is
+used.
+
+This patch changes UDP to check the write queue to ensure
+that the two stay in sync.
+
+Signed-off-by: Herbert Xu <herbert@gondor.apana.org.au>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+		size_t len)
+{
+	struct inet_sock *inet = inet_sk(sk);
+	struct udp_sock *up = udp_sk(sk);
+	int ulen = len;
+	struct ipcm_cookie ipc;
+	struct rtable *rt = NULL;
+	int free = 0;
+	int connected = 0;
+	__be32 daddr, faddr, saddr;
+	__be16 dport;
+	u8  tos;
+	int err;
+	int corkreq = up->corkflag || msg->msg_flags&MSG_MORE;
+
+	if (len > 0xFFFF)
+		return -EMSGSIZE;
+
+	/* 
+	 *	Check the flags.
+	 */
+
+	if (msg->msg_flags&MSG_OOB)	/* Mirror BSD error message compatibility */
+		return -EOPNOTSUPP;
+
+	ipc.opt = NULL;
+
+	if (up->pending) {
+		/*
+		 * There are pending frames.
+	 	 * The socket lock must be held while it's corked.
+		 */
+		lock_sock(sk);
+		if (likely(up->pending)) {
+			if (unlikely(up->pending != AF_INET)) {
+				release_sock(sk);
+				return -EINVAL;
+			}
+ 			goto do_append_data;
+		}
+		release_sock(sk);
+	}
+	ulen += sizeof(struct udphdr);
+
+	/*
+	 *	Get and verify the address. 
+	 */
+	if (msg->msg_name) {
+		struct sockaddr_in * usin = (struct sockaddr_in*)msg->msg_name;
+		if (msg->msg_namelen < sizeof(*usin))
+			return -EINVAL;
+		if (usin->sin_family != AF_INET) {
+			if (usin->sin_family != AF_UNSPEC)
+				return -EAFNOSUPPORT;
+		}
+
+		daddr = usin->sin_addr.s_addr;
+		dport = usin->sin_port;
+		if (dport == 0)
+			return -EINVAL;
+	} else {
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -EDESTADDRREQ;
+		daddr = inet->daddr;
+		dport = inet->dport;
+		/* Open fast path for connected socket.
+		   Route will not be used, if at least one option is set.
+		 */
+		connected = 1;
+  	}
+	ipc.addr = inet->saddr;
+
+	ipc.oif = sk->sk_bound_dev_if;
+	if (msg->msg_controllen) {
+		err = ip_cmsg_send(msg, &ipc);
+		if (err)
+			return err;
+		if (ipc.opt)
+			free = 1;
+		connected = 0;
+	}
+	if (!ipc.opt)
+		ipc.opt = inet->opt;
+
+	saddr = ipc.addr;
+	ipc.addr = faddr = daddr;
+
+	if (ipc.opt && ipc.opt->srr) {
+		if (!daddr)
+			return -EINVAL;
+		faddr = ipc.opt->faddr;
+		connected = 0;
+	}
+	tos = RT_TOS(inet->tos);
+	if (sock_flag(sk, SOCK_LOCALROUTE) ||
+	    (msg->msg_flags & MSG_DONTROUTE) || 
+	    (ipc.opt && ipc.opt->is_strictroute)) {
+		tos |= RTO_ONLINK;
+		connected = 0;
+	}
+
+	if (MULTICAST(daddr)) {
+		if (!ipc.oif)
+			ipc.oif = inet->mc_index;
+		if (!saddr)
+			saddr = inet->mc_addr;
+		connected = 0;
+	}
+
+	if (connected)
+		rt = (struct rtable*)sk_dst_check(sk, 0);
+
+	if (rt == NULL) {
+		struct flowi fl = { .oif = ipc.oif,
+				    .nl_u = { .ip4_u =
+					      { .daddr = faddr,
+						.saddr = saddr,
+						.tos = tos } },
+				    .proto = IPPROTO_UDP,
+				    .uli_u = { .ports =
+					       { .sport = inet->sport,
+						 .dport = dport } } };
+		security_sk_classify_flow(sk, &fl);
+		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
+		if (err)
+			goto out;
+
+		err = -EACCES;
+		if ((rt->rt_flags & RTCF_BROADCAST) &&
+		    !sock_flag(sk, SOCK_BROADCAST))
+			goto out;
+		if (connected)
+			sk_dst_set(sk, dst_clone(&rt->u.dst));
+	}
+
+	if (msg->msg_flags&MSG_CONFIRM)
+		goto do_confirm;
+back_from_confirm:
+
+	saddr = rt->rt_src;
+	if (!ipc.addr)
+		daddr = ipc.addr = rt->rt_dst;
+
+	lock_sock(sk);
+	if (unlikely(up->pending)) {
+		/* The socket is already corked while preparing it. */
+		/* ... which is an evident application bug. --ANK */
+		release_sock(sk);
+
+		LIMIT_NETDEBUG(KERN_DEBUG ""udp cork app bug 2\n"");
+		err = -EINVAL;
+		goto out;
+	}
+	/*
+	 *	Now cork the socket to pend data.
+	 */
+	inet->cork.fl.fl4_dst = daddr;
+	inet->cork.fl.fl_ip_dport = dport;
+	inet->cork.fl.fl4_src = saddr;
+	inet->cork.fl.fl_ip_sport = inet->sport;
+	up->pending = AF_INET;
+
+do_append_data:
+	up->len += ulen;
+	err = ip_append_data(sk, ip_generic_getfrag, msg->msg_iov, ulen, 
+			sizeof(struct udphdr), &ipc, rt, 
+			corkreq ? msg->msg_flags|MSG_MORE : msg->msg_flags);
+	if (err)
+		udp_flush_pending_frames(sk);
+	else if (!corkreq)
+		err = udp_push_pending_frames(sk, up);
+	release_sock(sk);
+
+out:
+	ip_rt_put(rt);
+	if (free)
+		kfree(ipc.opt);
+	if (!err) {
+		UDP_INC_STATS_USER(UDP_MIB_OUTDATAGRAMS);
+		return len;
+	}
+	/*
+	 * ENOBUFS = no kernel mem, SOCK_NOSPACE = no sndbuf space.  Reporting
+	 * ENOBUFS might not be good (it's not tunable per se), but otherwise
+	 * we don't have a good statistic (IpOutDiscards but it can be too many
+	 * things).  We could add another new stat but at least for now that
+	 * seems like overkill.
+	 */
+	if (err == -ENOBUFS || test_bit(SOCK_NOSPACE, &sk->sk_socket->flags)) {
+		UDP_INC_STATS_USER(UDP_MIB_SNDBUFERRORS);
+	}
+	return err;
+
+do_confirm:
+	dst_confirm(&rt->u.dst);
+	if (!(msg->msg_flags&MSG_PROBE) || len)
+		goto back_from_confirm;
+	err = 0;
+	goto out;
+}","int udp_sendmsg(struct kiocb *iocb, struct sock *sk, struct msghdr *msg,
+		size_t len)
+{
+	struct inet_sock *inet = inet_sk(sk);
+	struct udp_sock *up = udp_sk(sk);
+	int ulen = len;
+	struct ipcm_cookie ipc;
+	struct rtable *rt = NULL;
+	int free = 0;
+	int connected = 0;
+	__be32 daddr, faddr, saddr;
+	__be16 dport;
+	u8  tos;
+	int err;
+	int corkreq = up->corkflag || msg->msg_flags&MSG_MORE;
+
+	if (len > 0xFFFF)
+		return -EMSGSIZE;
+
+	/* 
+	 *	Check the flags.
+	 */
+
+	if (msg->msg_flags&MSG_OOB)	/* Mirror BSD error message compatibility */
+		return -EOPNOTSUPP;
+
+	ipc.opt = NULL;
+
+	if (up->pending) {
+		/*
+		 * There are pending frames.
+	 	 * The socket lock must be held while it's corked.
+		 */
+		lock_sock(sk);
+		if (likely(up->pending)) {
+			if (unlikely(up->pending != AF_INET)) {
+				release_sock(sk);
+				return -EINVAL;
+			}
+ 			goto do_append_data;
+		}
+		release_sock(sk);
+	}
+	ulen += sizeof(struct udphdr);
+
+	/*
+	 *	Get and verify the address. 
+	 */
+	if (msg->msg_name) {
+		struct sockaddr_in * usin = (struct sockaddr_in*)msg->msg_name;
+		if (msg->msg_namelen < sizeof(*usin))
+			return -EINVAL;
+		if (usin->sin_family != AF_INET) {
+			if (usin->sin_family != AF_UNSPEC)
+				return -EAFNOSUPPORT;
+		}
+
+		daddr = usin->sin_addr.s_addr;
+		dport = usin->sin_port;
+		if (dport == 0)
+			return -EINVAL;
+	} else {
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -EDESTADDRREQ;
+		daddr = inet->daddr;
+		dport = inet->dport;
+		/* Open fast path for connected socket.
+		   Route will not be used, if at least one option is set.
+		 */
+		connected = 1;
+  	}
+	ipc.addr = inet->saddr;
+
+	ipc.oif = sk->sk_bound_dev_if;
+	if (msg->msg_controllen) {
+		err = ip_cmsg_send(msg, &ipc);
+		if (err)
+			return err;
+		if (ipc.opt)
+			free = 1;
+		connected = 0;
+	}
+	if (!ipc.opt)
+		ipc.opt = inet->opt;
+
+	saddr = ipc.addr;
+	ipc.addr = faddr = daddr;
+
+	if (ipc.opt && ipc.opt->srr) {
+		if (!daddr)
+			return -EINVAL;
+		faddr = ipc.opt->faddr;
+		connected = 0;
+	}
+	tos = RT_TOS(inet->tos);
+	if (sock_flag(sk, SOCK_LOCALROUTE) ||
+	    (msg->msg_flags & MSG_DONTROUTE) || 
+	    (ipc.opt && ipc.opt->is_strictroute)) {
+		tos |= RTO_ONLINK;
+		connected = 0;
+	}
+
+	if (MULTICAST(daddr)) {
+		if (!ipc.oif)
+			ipc.oif = inet->mc_index;
+		if (!saddr)
+			saddr = inet->mc_addr;
+		connected = 0;
+	}
+
+	if (connected)
+		rt = (struct rtable*)sk_dst_check(sk, 0);
+
+	if (rt == NULL) {
+		struct flowi fl = { .oif = ipc.oif,
+				    .nl_u = { .ip4_u =
+					      { .daddr = faddr,
+						.saddr = saddr,
+						.tos = tos } },
+				    .proto = IPPROTO_UDP,
+				    .uli_u = { .ports =
+					       { .sport = inet->sport,
+						 .dport = dport } } };
+		security_sk_classify_flow(sk, &fl);
+		err = ip_route_output_flow(&rt, &fl, sk, !(msg->msg_flags&MSG_DONTWAIT));
+		if (err)
+			goto out;
+
+		err = -EACCES;
+		if ((rt->rt_flags & RTCF_BROADCAST) &&
+		    !sock_flag(sk, SOCK_BROADCAST))
+			goto out;
+		if (connected)
+			sk_dst_set(sk, dst_clone(&rt->u.dst));
+	}
+
+	if (msg->msg_flags&MSG_CONFIRM)
+		goto do_confirm;
+back_from_confirm:
+
+	saddr = rt->rt_src;
+	if (!ipc.addr)
+		daddr = ipc.addr = rt->rt_dst;
+
+	lock_sock(sk);
+	if (unlikely(up->pending)) {
+		/* The socket is already corked while preparing it. */
+		/* ... which is an evident application bug. --ANK */
+		release_sock(sk);
+
+		LIMIT_NETDEBUG(KERN_DEBUG ""udp cork app bug 2\n"");
+		err = -EINVAL;
+		goto out;
+	}
+	/*
+	 *	Now cork the socket to pend data.
+	 */
+	inet->cork.fl.fl4_dst = daddr;
+	inet->cork.fl.fl_ip_dport = dport;
+	inet->cork.fl.fl4_src = saddr;
+	inet->cork.fl.fl_ip_sport = inet->sport;
+	up->pending = AF_INET;
+
+do_append_data:
+	up->len += ulen;
+	err = ip_append_data(sk, ip_generic_getfrag, msg->msg_iov, ulen, 
+			sizeof(struct udphdr), &ipc, rt, 
+			corkreq ? msg->msg_flags|MSG_MORE : msg->msg_flags);
+	if (err)
+		udp_flush_pending_frames(sk);
+	else if (!corkreq)
+		err = udp_push_pending_frames(sk, up);
+	else if (unlikely(skb_queue_empty(&sk->sk_write_queue)))
+		up->pending = 0;
+	release_sock(sk);
+
+out:
+	ip_rt_put(rt);
+	if (free)
+		kfree(ipc.opt);
+	if (!err) {
+		UDP_INC_STATS_USER(UDP_MIB_OUTDATAGRAMS);
+		return len;
+	}
+	/*
+	 * ENOBUFS = no kernel mem, SOCK_NOSPACE = no sndbuf space.  Reporting
+	 * ENOBUFS might not be good (it's not tunable per se), but otherwise
+	 * we don't have a good statistic (IpOutDiscards but it can be too many
+	 * things).  We could add another new stat but at least for now that
+	 * seems like overkill.
+	 */
+	if (err == -ENOBUFS || test_bit(SOCK_NOSPACE, &sk->sk_socket->flags)) {
+		UDP_INC_STATS_USER(UDP_MIB_SNDBUFERRORS);
+	}
+	return err;
+
+do_confirm:
+	dst_confirm(&rt->u.dst);
+	if (!(msg->msg_flags&MSG_PROBE) || len)
+		goto back_from_confirm;
+	err = 0;
+	goto out;
+}",
+2522,"[""CWE-476""]",linux-2.6,8ed030dd0aa400d18c63861c2c6deb7c38f4edde,8ed030dd0aa400d18c63861c2c6deb7c38f4edde,0,493255,8.948780131062243e+37,13.0,"dccp: fix bug in cache allocation
+
+This fixes a bug introduced in commit de4ef86cfce60d2250111f34f8a084e769f23b16
+(""dccp: fix dccp rmmod when kernel configured to use slub"", 17 Jan): the
+vsnprintf used sizeof(slab_name_fmt), which became truncated to 4 bytes, since
+slab_name_fmt is now a 4-byte pointer and no longer a 32-character array.
+
+This lead to error messages such as
+ FATAL: Error inserting dccp: No buffer space available
+
+ >> kernel: [ 1456.341501] kmem_cache_create: duplicate cache cci
+generated due to the truncation after the 3rd character.
+
+Fixed for the moment by introducing a symbolic constant. Tested to fix the bug.
+
+Signed-off-by: Gerrit Renker <gerrit@erg.abdn.ac.uk>
+Acked-by: Neil Horman <nhorman@tuxdriver.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static struct kmem_cache *ccid_kmem_cache_create(int obj_size, char *slab_name_fmt, const char *fmt,...)
+{
+	struct kmem_cache *slab;
+	va_list args;
+
+	va_start(args, fmt);
+	vsnprintf(slab_name_fmt, sizeof(slab_name_fmt), fmt, args);
+	va_end(args);
+
+	slab = kmem_cache_create(slab_name_fmt, sizeof(struct ccid) + obj_size, 0,
+				 SLAB_HWCACHE_ALIGN, NULL);
+	return slab;
+}","static struct kmem_cache *ccid_kmem_cache_create(int obj_size, char *slab_name_fmt, const char *fmt,...)
+{
+	struct kmem_cache *slab;
+	va_list args;
+
+	va_start(args, fmt);
+	vsnprintf(slab_name_fmt, CCID_SLAB_NAME_LENGTH, fmt, args);
+	va_end(args);
+
+	slab = kmem_cache_create(slab_name_fmt, sizeof(struct ccid) + obj_size, 0,
+				 SLAB_HWCACHE_ALIGN, NULL);
+	return slab;
+}",
+2572,"[""CWE-476""]",libssh,b36272eac1b36982598c10de7af0a501582de07a,b36272eac1b36982598c10de7af0a501582de07a,0,498997,8.155368075421308e+37,8.0,"CVE-2020-1730: Fix a possible segfault when zeroing AES-CTR key
+
+Fixes T213
+
+Signed-off-by: Andreas Schneider <asn@cryptomilk.org>
+Reviewed-by: Anderson Toshiyuki Sasaki <ansasaki@redhat.com>",other,"static void aes_ctr_cleanup(struct ssh_cipher_struct *cipher){
+    explicit_bzero(cipher->aes_key, sizeof(*cipher->aes_key));
+    SAFE_FREE(cipher->aes_key);
+}","static void aes_ctr_cleanup(struct ssh_cipher_struct *cipher){
+    if (cipher != NULL) {
+        if (cipher->aes_key != NULL) {
+            explicit_bzero(cipher->aes_key, sizeof(*cipher->aes_key));
+        }
+        SAFE_FREE(cipher->aes_key);
+    }
+}",
+2639,"[""CWE-476""]",openssl,a87f3fe01a5a894aa27ccd6a239155fd129988e4,a87f3fe01a5a894aa27ccd6a239155fd129988e4,0,505978,2.577778912659069e+38,32.0,"Fix NULL dereference in SSL_check_chain() for TLS 1.3
+
+In the tls1_check_sig_alg() helper function, we loop through the list of
+""signature_algorithms_cert"" values received from the client and attempt
+to look up each one in turn in our internal table that maps wire
+codepoint to string-form name, digest and/or signature NID, etc., in
+order to compare the signature scheme from the peer's list against what
+is used to sign the certificates in the certificate chain we're
+checking.  Unfortunately, when the peer sends a value that we don't
+support, the lookup returns NULL, but we unconditionally dereference the
+lookup result for the comparison, leading to an application crash
+triggerable by an unauthenticated client.
+
+Since we will not be able to say anything about algorithms we don't
+recognize, treat NULL return from lookup as ""does not match"".
+
+We currently only apply the ""signature_algorithm_cert"" checks on TLS 1.3
+connections, so previous TLS versions are unaffected.  SSL_check_chain()
+is not called directly from libssl, but may be used by the application
+inside a callback (e.g., client_hello or cert callback) to verify that a
+candidate certificate chain will be acceptable to the client.
+
+CVE-2020-1967
+
+Reviewed-by: Matt Caswell <matt@openssl.org>",other,"static int tls1_check_sig_alg(SSL *s, X509 *x, int default_nid)
+{
+    int sig_nid, use_pc_sigalgs = 0;
+    size_t i;
+    const SIGALG_LOOKUP *sigalg;
+    size_t sigalgslen;
+    if (default_nid == -1)
+        return 1;
+    sig_nid = X509_get_signature_nid(x);
+    if (default_nid)
+        return sig_nid == default_nid ? 1 : 0;
+
+    if (SSL_IS_TLS13(s) && s->s3.tmp.peer_cert_sigalgs != NULL) {
+        /*
+         * If we're in TLSv1.3 then we only get here if we're checking the
+         * chain. If the peer has specified peer_cert_sigalgs then we use them
+         * otherwise we default to normal sigalgs.
+         */
+        sigalgslen = s->s3.tmp.peer_cert_sigalgslen;
+        use_pc_sigalgs = 1;
+    } else {
+        sigalgslen = s->shared_sigalgslen;
+    }
+    for (i = 0; i < sigalgslen; i++) {
+        sigalg = use_pc_sigalgs
+                 ? tls1_lookup_sigalg(s->s3.tmp.peer_cert_sigalgs[i])
+                 : s->shared_sigalgs[i];
+        if (sig_nid == sigalg->sigandhash)
+            return 1;
+    }
+    return 0;
+}","static int tls1_check_sig_alg(SSL *s, X509 *x, int default_nid)
+{
+    int sig_nid, use_pc_sigalgs = 0;
+    size_t i;
+    const SIGALG_LOOKUP *sigalg;
+    size_t sigalgslen;
+    if (default_nid == -1)
+        return 1;
+    sig_nid = X509_get_signature_nid(x);
+    if (default_nid)
+        return sig_nid == default_nid ? 1 : 0;
+
+    if (SSL_IS_TLS13(s) && s->s3.tmp.peer_cert_sigalgs != NULL) {
+        /*
+         * If we're in TLSv1.3 then we only get here if we're checking the
+         * chain. If the peer has specified peer_cert_sigalgs then we use them
+         * otherwise we default to normal sigalgs.
+         */
+        sigalgslen = s->s3.tmp.peer_cert_sigalgslen;
+        use_pc_sigalgs = 1;
+    } else {
+        sigalgslen = s->shared_sigalgslen;
+    }
+    for (i = 0; i < sigalgslen; i++) {
+        sigalg = use_pc_sigalgs
+                 ? tls1_lookup_sigalg(s->s3.tmp.peer_cert_sigalgs[i])
+                 : s->shared_sigalgs[i];
+        if (sigalg != NULL && sig_nid == sigalg->sigandhash)
+            return 1;
+    }
+    return 0;
+}",
+2640,"[""CWE-476""]",openssl,3db2c9f3e5fb9f649ebb4a55918398756310af43,3db2c9f3e5fb9f649ebb4a55918398756310af43,0,506633,3.055145513630788e+37,132.0,"Complain if we are attempting to encode with an invalid ASN.1 template
+
+It never makes sense for multi-string or CHOICE types to have implicit
+tagging. If we have a template that uses the in this way then we
+should immediately fail.
+
+Thanks to David Benjamin from Google for reporting this issue.
+
+Reviewed-by: Tomas Mraz <tmraz@fedoraproject.org>",other,"int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
+                     const ASN1_ITEM *it, int tag, int aclass)
+{
+    const ASN1_TEMPLATE *tt = NULL;
+    int i, seqcontlen, seqlen, ndef = 1;
+    const ASN1_EXTERN_FUNCS *ef;
+    const ASN1_AUX *aux = it->funcs;
+    ASN1_aux_const_cb *asn1_cb = NULL;
+
+    if ((it->itype != ASN1_ITYPE_PRIMITIVE) && *pval == NULL)
+        return 0;
+
+    if (aux != NULL) {
+        asn1_cb = ((aux->flags & ASN1_AFLG_CONST_CB) != 0) ? aux->asn1_const_cb
+            : (ASN1_aux_const_cb *)aux->asn1_cb; /* backward compatibility */
+    }
+
+    switch (it->itype) {
+
+    case ASN1_ITYPE_PRIMITIVE:
+        if (it->templates)
+            return asn1_template_ex_i2d(pval, out, it->templates,
+                                        tag, aclass);
+        return asn1_i2d_ex_primitive(pval, out, it, tag, aclass);
+
+    case ASN1_ITYPE_MSTRING:
+        return asn1_i2d_ex_primitive(pval, out, it, -1, aclass);
+
+    case ASN1_ITYPE_CHOICE:
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_PRE, pval, it, NULL))
+            return 0;
+        i = asn1_get_choice_selector_const(pval, it);
+        if ((i >= 0) && (i < it->tcount)) {
+            const ASN1_VALUE **pchval;
+            const ASN1_TEMPLATE *chtt;
+            chtt = it->templates + i;
+            pchval = asn1_get_const_field_ptr(pval, chtt);
+            return asn1_template_ex_i2d(pchval, out, chtt, -1, aclass);
+        }
+        /* Fixme: error condition if selector out of range */
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_POST, pval, it, NULL))
+            return 0;
+        break;
+
+    case ASN1_ITYPE_EXTERN:
+        /* If new style i2d it does all the work */
+        ef = it->funcs;
+        return ef->asn1_ex_i2d(pval, out, it, tag, aclass);
+
+    case ASN1_ITYPE_NDEF_SEQUENCE:
+        /* Use indefinite length constructed if requested */
+        if (aclass & ASN1_TFLG_NDEF)
+            ndef = 2;
+        /* fall through */
+
+    case ASN1_ITYPE_SEQUENCE:
+        i = asn1_enc_restore(&seqcontlen, out, pval, it);
+        /* An error occurred */
+        if (i < 0)
+            return 0;
+        /* We have a valid cached encoding... */
+        if (i > 0)
+            return seqcontlen;
+        /* Otherwise carry on */
+        seqcontlen = 0;
+        /* If no IMPLICIT tagging set to SEQUENCE, UNIVERSAL */
+        if (tag == -1) {
+            tag = V_ASN1_SEQUENCE;
+            /* Retain any other flags in aclass */
+            aclass = (aclass & ~ASN1_TFLG_TAG_CLASS)
+                | V_ASN1_UNIVERSAL;
+        }
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_PRE, pval, it, NULL))
+            return 0;
+        /* First work out sequence content length */
+        for (i = 0, tt = it->templates; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            const ASN1_VALUE **pseqval;
+            int tmplen;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (!seqtt)
+                return 0;
+            pseqval = asn1_get_const_field_ptr(pval, seqtt);
+            tmplen = asn1_template_ex_i2d(pseqval, NULL, seqtt, -1, aclass);
+            if (tmplen == -1 || (tmplen > INT_MAX - seqcontlen))
+                return -1;
+            seqcontlen += tmplen;
+        }
+
+        seqlen = ASN1_object_size(ndef, seqcontlen, tag);
+        if (!out || seqlen == -1)
+            return seqlen;
+        /* Output SEQUENCE header */
+        ASN1_put_object(out, ndef, seqcontlen, tag, aclass);
+        for (i = 0, tt = it->templates; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            const ASN1_VALUE **pseqval;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (!seqtt)
+                return 0;
+            pseqval = asn1_get_const_field_ptr(pval, seqtt);
+            /* FIXME: check for errors in enhanced version */
+            asn1_template_ex_i2d(pseqval, out, seqtt, -1, aclass);
+        }
+        if (ndef == 2)
+            ASN1_put_eoc(out);
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_POST, pval, it, NULL))
+            return 0;
+        return seqlen;
+
+    default:
+        return 0;
+
+    }
+    return 0;
+}","int ASN1_item_ex_i2d(const ASN1_VALUE **pval, unsigned char **out,
+                     const ASN1_ITEM *it, int tag, int aclass)
+{
+    const ASN1_TEMPLATE *tt = NULL;
+    int i, seqcontlen, seqlen, ndef = 1;
+    const ASN1_EXTERN_FUNCS *ef;
+    const ASN1_AUX *aux = it->funcs;
+    ASN1_aux_const_cb *asn1_cb = NULL;
+
+    if ((it->itype != ASN1_ITYPE_PRIMITIVE) && *pval == NULL)
+        return 0;
+
+    if (aux != NULL) {
+        asn1_cb = ((aux->flags & ASN1_AFLG_CONST_CB) != 0) ? aux->asn1_const_cb
+            : (ASN1_aux_const_cb *)aux->asn1_cb; /* backward compatibility */
+    }
+
+    switch (it->itype) {
+
+    case ASN1_ITYPE_PRIMITIVE:
+        if (it->templates)
+            return asn1_template_ex_i2d(pval, out, it->templates,
+                                        tag, aclass);
+        return asn1_i2d_ex_primitive(pval, out, it, tag, aclass);
+
+    case ASN1_ITYPE_MSTRING:
+        /*
+         * It never makes sense for multi-strings to have implicit tagging, so
+         * if tag != -1, then this looks like an error in the template.
+         */
+        if (tag != -1) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_BAD_TEMPLATE);
+            return -1;
+        }
+        return asn1_i2d_ex_primitive(pval, out, it, -1, aclass);
+
+    case ASN1_ITYPE_CHOICE:
+        /*
+         * It never makes sense for CHOICE types to have implicit tagging, so
+         * if tag != -1, then this looks like an error in the template.
+         */
+        if (tag != -1) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_BAD_TEMPLATE);
+            return -1;
+        }
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_PRE, pval, it, NULL))
+            return 0;
+        i = asn1_get_choice_selector_const(pval, it);
+        if ((i >= 0) && (i < it->tcount)) {
+            const ASN1_VALUE **pchval;
+            const ASN1_TEMPLATE *chtt;
+            chtt = it->templates + i;
+            pchval = asn1_get_const_field_ptr(pval, chtt);
+            return asn1_template_ex_i2d(pchval, out, chtt, -1, aclass);
+        }
+        /* Fixme: error condition if selector out of range */
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_POST, pval, it, NULL))
+            return 0;
+        break;
+
+    case ASN1_ITYPE_EXTERN:
+        /* If new style i2d it does all the work */
+        ef = it->funcs;
+        return ef->asn1_ex_i2d(pval, out, it, tag, aclass);
+
+    case ASN1_ITYPE_NDEF_SEQUENCE:
+        /* Use indefinite length constructed if requested */
+        if (aclass & ASN1_TFLG_NDEF)
+            ndef = 2;
+        /* fall through */
+
+    case ASN1_ITYPE_SEQUENCE:
+        i = asn1_enc_restore(&seqcontlen, out, pval, it);
+        /* An error occurred */
+        if (i < 0)
+            return 0;
+        /* We have a valid cached encoding... */
+        if (i > 0)
+            return seqcontlen;
+        /* Otherwise carry on */
+        seqcontlen = 0;
+        /* If no IMPLICIT tagging set to SEQUENCE, UNIVERSAL */
+        if (tag == -1) {
+            tag = V_ASN1_SEQUENCE;
+            /* Retain any other flags in aclass */
+            aclass = (aclass & ~ASN1_TFLG_TAG_CLASS)
+                | V_ASN1_UNIVERSAL;
+        }
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_PRE, pval, it, NULL))
+            return 0;
+        /* First work out sequence content length */
+        for (i = 0, tt = it->templates; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            const ASN1_VALUE **pseqval;
+            int tmplen;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (!seqtt)
+                return 0;
+            pseqval = asn1_get_const_field_ptr(pval, seqtt);
+            tmplen = asn1_template_ex_i2d(pseqval, NULL, seqtt, -1, aclass);
+            if (tmplen == -1 || (tmplen > INT_MAX - seqcontlen))
+                return -1;
+            seqcontlen += tmplen;
+        }
+
+        seqlen = ASN1_object_size(ndef, seqcontlen, tag);
+        if (!out || seqlen == -1)
+            return seqlen;
+        /* Output SEQUENCE header */
+        ASN1_put_object(out, ndef, seqcontlen, tag, aclass);
+        for (i = 0, tt = it->templates; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            const ASN1_VALUE **pseqval;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (!seqtt)
+                return 0;
+            pseqval = asn1_get_const_field_ptr(pval, seqtt);
+            /* FIXME: check for errors in enhanced version */
+            asn1_template_ex_i2d(pseqval, out, seqtt, -1, aclass);
+        }
+        if (ndef == 2)
+            ASN1_put_eoc(out);
+        if (asn1_cb && !asn1_cb(ASN1_OP_I2D_POST, pval, it, NULL))
+            return 0;
+        return seqlen;
+
+    default:
+        return 0;
+
+    }
+    return 0;
+}",
+2641,"[""CWE-476""]",openssl,43a7033a010feaf72c79d39df65ca733fb9dcd4c,43a7033a010feaf72c79d39df65ca733fb9dcd4c,0,506643,3.155742495182142e+38,315.0,"Check that multi-strings/CHOICE types don't use implicit tagging
+
+It never makes sense for multi-string or CHOICE types to use implicit
+tagging since the content would be ambiguous. It is an error in the
+template if this ever happens. If we detect it we should stop parsing.
+
+Thanks to David Benjamin from Google for reporting this issue.
+
+Reviewed-by: Tomas Mraz <tmraz@fedoraproject.org>",other,"static int asn1_item_embed_d2i(ASN1_VALUE **pval, const unsigned char **in,
+                               long len, const ASN1_ITEM *it,
+                               int tag, int aclass, char opt, ASN1_TLC *ctx,
+                               int depth)
+{
+    const ASN1_TEMPLATE *tt, *errtt = NULL;
+    const ASN1_EXTERN_FUNCS *ef;
+    const ASN1_AUX *aux = it->funcs;
+    ASN1_aux_cb *asn1_cb;
+    const unsigned char *p = NULL, *q;
+    unsigned char oclass;
+    char seq_eoc, seq_nolen, cst, isopt;
+    long tmplen;
+    int i;
+    int otag;
+    int ret = 0;
+    ASN1_VALUE **pchptr;
+
+    if (pval == NULL)
+        return 0;
+    if (aux && aux->asn1_cb)
+        asn1_cb = aux->asn1_cb;
+    else
+        asn1_cb = 0;
+
+    if (++depth > ASN1_MAX_CONSTRUCTED_NEST) {
+        ERR_raise(ERR_LIB_ASN1, ASN1_R_NESTED_TOO_DEEP);
+        goto err;
+    }
+
+    switch (it->itype) {
+    case ASN1_ITYPE_PRIMITIVE:
+        if (it->templates) {
+            /*
+             * tagging or OPTIONAL is currently illegal on an item template
+             * because the flags can't get passed down. In practice this
+             * isn't a problem: we include the relevant flags from the item
+             * template in the template itself.
+             */
+            if ((tag != -1) || opt) {
+                ERR_raise(ERR_LIB_ASN1,
+                          ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE);
+                goto err;
+            }
+            return asn1_template_ex_d2i(pval, in, len,
+                                        it->templates, opt, ctx, depth);
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it,
+                                     tag, aclass, opt, ctx);
+
+    case ASN1_ITYPE_MSTRING:
+        p = *in;
+        /* Just read in tag and class */
+        ret = asn1_check_tlen(NULL, &otag, &oclass, NULL, NULL,
+                              &p, len, -1, 0, 1, ctx);
+        if (!ret) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Must be UNIVERSAL class */
+        if (oclass != V_ASN1_UNIVERSAL) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_MSTRING_NOT_UNIVERSAL);
+            goto err;
+        }
+        /* Check tag matches bit map */
+        if (!(ASN1_tag2bit(otag) & it->utype)) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_MSTRING_WRONG_TAG);
+            goto err;
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it, otag, 0, 0, ctx);
+
+    case ASN1_ITYPE_EXTERN:
+        /* Use new style d2i */
+        ef = it->funcs;
+        return ef->asn1_ex_d2i(pval, in, len, it, tag, aclass, opt, ctx);
+
+    case ASN1_ITYPE_CHOICE:
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+        if (*pval) {
+            /* Free up and zero CHOICE value if initialised */
+            i = asn1_get_choice_selector(pval, it);
+            if ((i >= 0) && (i < it->tcount)) {
+                tt = it->templates + i;
+                pchptr = asn1_get_field_ptr(pval, tt);
+                asn1_template_free(pchptr, tt);
+                asn1_set_choice_selector(pval, -1, it);
+            }
+        } else if (!ASN1_item_ex_new(pval, it)) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+        /* CHOICE type, try each possibility in turn */
+        p = *in;
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            pchptr = asn1_get_field_ptr(pval, tt);
+            /*
+             * We mark field as OPTIONAL so its absence can be recognised.
+             */
+            ret = asn1_template_ex_d2i(pchptr, &p, len, tt, 1, ctx, depth);
+            /* If field not present, try the next one */
+            if (ret == -1)
+                continue;
+            /* If positive return, read OK, break loop */
+            if (ret > 0)
+                break;
+            /*
+             * Must be an ASN1 parsing error.
+             * Free up any partial choice value
+             */
+            asn1_template_free(pchptr, tt);
+            errtt = tt;
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Did we fall off the end without reading anything? */
+        if (i == it->tcount) {
+            /* If OPTIONAL, this is OK */
+            if (opt) {
+                /* Free and zero it */
+                ASN1_item_ex_free(pval, it);
+                return -1;
+            }
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_NO_MATCHING_CHOICE_TYPE);
+            goto err;
+        }
+
+        asn1_set_choice_selector(pval, i, it);
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        *in = p;
+        return 1;
+
+    case ASN1_ITYPE_NDEF_SEQUENCE:
+    case ASN1_ITYPE_SEQUENCE:
+        p = *in;
+        tmplen = len;
+
+        /* If no IMPLICIT tagging set to SEQUENCE, UNIVERSAL */
+        if (tag == -1) {
+            tag = V_ASN1_SEQUENCE;
+            aclass = V_ASN1_UNIVERSAL;
+        }
+        /* Get SEQUENCE length and update len, p */
+        ret = asn1_check_tlen(&len, NULL, NULL, &seq_eoc, &cst,
+                              &p, len, tag, aclass, opt, ctx);
+        if (!ret) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        } else if (ret == -1)
+            return -1;
+        if (aux && (aux->flags & ASN1_AFLG_BROKEN)) {
+            len = tmplen - (p - *in);
+            seq_nolen = 1;
+        }
+        /* If indefinite we don't do a length check */
+        else
+            seq_nolen = seq_eoc;
+        if (!cst) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_SEQUENCE_NOT_CONSTRUCTED);
+            goto err;
+        }
+
+        if (*pval == NULL && !ASN1_item_ex_new(pval, it)) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+
+        /* Free up and zero any ADB found */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            if (tt->flags & ASN1_TFLG_ADB_MASK) {
+                const ASN1_TEMPLATE *seqtt;
+                ASN1_VALUE **pseqval;
+                seqtt = asn1_do_adb(*pval, tt, 0);
+                if (seqtt == NULL)
+                    continue;
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                asn1_template_free(pseqval, seqtt);
+            }
+        }
+
+        /* Get each field entry */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            const ASN1_TEMPLATE *seqtt;
+            ASN1_VALUE **pseqval;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (seqtt == NULL)
+                goto err;
+            pseqval = asn1_get_field_ptr(pval, seqtt);
+            /* Have we ran out of data? */
+            if (!len)
+                break;
+            q = p;
+            if (asn1_check_eoc(&p, len)) {
+                if (!seq_eoc) {
+                    ERR_raise(ERR_LIB_ASN1, ASN1_R_UNEXPECTED_EOC);
+                    goto err;
+                }
+                len -= p - q;
+                seq_eoc = 0;
+                break;
+            }
+            /*
+             * This determines the OPTIONAL flag value. The field cannot be
+             * omitted if it is the last of a SEQUENCE and there is still
+             * data to be read. This isn't strictly necessary but it
+             * increases efficiency in some cases.
+             */
+            if (i == (it->tcount - 1))
+                isopt = 0;
+            else
+                isopt = (char)(seqtt->flags & ASN1_TFLG_OPTIONAL);
+            /*
+             * attempt to read in field, allowing each to be OPTIONAL
+             */
+
+            ret = asn1_template_ex_d2i(pseqval, &p, len, seqtt, isopt, ctx,
+                                       depth);
+            if (!ret) {
+                errtt = seqtt;
+                goto err;
+            } else if (ret == -1) {
+                /*
+                 * OPTIONAL component absent. Free and zero the field.
+                 */
+                asn1_template_free(pseqval, seqtt);
+                continue;
+            }
+            /* Update length */
+            len -= p - q;
+        }
+
+        /* Check for EOC if expecting one */
+        if (seq_eoc && !asn1_check_eoc(&p, len)) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_MISSING_EOC);
+            goto err;
+        }
+        /* Check all data read */
+        if (!seq_nolen && len) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_SEQUENCE_LENGTH_MISMATCH);
+            goto err;
+        }
+
+        /*
+         * If we get here we've got no more data in the SEQUENCE, however we
+         * may not have read all fields so check all remaining are OPTIONAL
+         * and clear any that are.
+         */
+        for (; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (seqtt == NULL)
+                goto err;
+            if (seqtt->flags & ASN1_TFLG_OPTIONAL) {
+                ASN1_VALUE **pseqval;
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                asn1_template_free(pseqval, seqtt);
+            } else {
+                errtt = seqtt;
+                ERR_raise(ERR_LIB_ASN1, ASN1_R_FIELD_MISSING);
+                goto err;
+            }
+        }
+        /* Save encoding */
+        if (!asn1_enc_save(pval, *in, p - *in, it))
+            goto auxerr;
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        *in = p;
+        return 1;
+
+    default:
+        return 0;
+    }
+ auxerr:
+    ERR_raise(ERR_LIB_ASN1, ASN1_R_AUX_ERROR);
+ err:
+    if (errtt)
+        ERR_add_error_data(4, ""Field="", errtt->field_name,
+                           "", Type="", it->sname);
+    else
+        ERR_add_error_data(2, ""Type="", it->sname);
+    return 0;
+}","static int asn1_item_embed_d2i(ASN1_VALUE **pval, const unsigned char **in,
+                               long len, const ASN1_ITEM *it,
+                               int tag, int aclass, char opt, ASN1_TLC *ctx,
+                               int depth)
+{
+    const ASN1_TEMPLATE *tt, *errtt = NULL;
+    const ASN1_EXTERN_FUNCS *ef;
+    const ASN1_AUX *aux = it->funcs;
+    ASN1_aux_cb *asn1_cb;
+    const unsigned char *p = NULL, *q;
+    unsigned char oclass;
+    char seq_eoc, seq_nolen, cst, isopt;
+    long tmplen;
+    int i;
+    int otag;
+    int ret = 0;
+    ASN1_VALUE **pchptr;
+
+    if (pval == NULL)
+        return 0;
+    if (aux && aux->asn1_cb)
+        asn1_cb = aux->asn1_cb;
+    else
+        asn1_cb = 0;
+
+    if (++depth > ASN1_MAX_CONSTRUCTED_NEST) {
+        ERR_raise(ERR_LIB_ASN1, ASN1_R_NESTED_TOO_DEEP);
+        goto err;
+    }
+
+    switch (it->itype) {
+    case ASN1_ITYPE_PRIMITIVE:
+        if (it->templates) {
+            /*
+             * tagging or OPTIONAL is currently illegal on an item template
+             * because the flags can't get passed down. In practice this
+             * isn't a problem: we include the relevant flags from the item
+             * template in the template itself.
+             */
+            if ((tag != -1) || opt) {
+                ERR_raise(ERR_LIB_ASN1,
+                          ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE);
+                goto err;
+            }
+            return asn1_template_ex_d2i(pval, in, len,
+                                        it->templates, opt, ctx, depth);
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it,
+                                     tag, aclass, opt, ctx);
+
+    case ASN1_ITYPE_MSTRING:
+        /*
+         * It never makes sense for multi-strings to have implicit tagging, so
+         * if tag != -1, then this looks like an error in the template.
+         */
+        if (tag != -1) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_BAD_TEMPLATE);
+            goto err;
+        }
+
+        p = *in;
+        /* Just read in tag and class */
+        ret = asn1_check_tlen(NULL, &otag, &oclass, NULL, NULL,
+                              &p, len, -1, 0, 1, ctx);
+        if (!ret) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Must be UNIVERSAL class */
+        if (oclass != V_ASN1_UNIVERSAL) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_MSTRING_NOT_UNIVERSAL);
+            goto err;
+        }
+
+        /* Check tag matches bit map */
+        if (!(ASN1_tag2bit(otag) & it->utype)) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_MSTRING_WRONG_TAG);
+            goto err;
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it, otag, 0, 0, ctx);
+
+    case ASN1_ITYPE_EXTERN:
+        /* Use new style d2i */
+        ef = it->funcs;
+        return ef->asn1_ex_d2i(pval, in, len, it, tag, aclass, opt, ctx);
+
+    case ASN1_ITYPE_CHOICE:
+        /*
+         * It never makes sense for CHOICE types to have implicit tagging, so
+         * if tag != -1, then this looks like an error in the template.
+         */
+        if (tag != -1) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_BAD_TEMPLATE);
+            goto err;
+        }
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+        if (*pval) {
+            /* Free up and zero CHOICE value if initialised */
+            i = asn1_get_choice_selector(pval, it);
+            if ((i >= 0) && (i < it->tcount)) {
+                tt = it->templates + i;
+                pchptr = asn1_get_field_ptr(pval, tt);
+                asn1_template_free(pchptr, tt);
+                asn1_set_choice_selector(pval, -1, it);
+            }
+        } else if (!ASN1_item_ex_new(pval, it)) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+        /* CHOICE type, try each possibility in turn */
+        p = *in;
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            pchptr = asn1_get_field_ptr(pval, tt);
+            /*
+             * We mark field as OPTIONAL so its absence can be recognised.
+             */
+            ret = asn1_template_ex_d2i(pchptr, &p, len, tt, 1, ctx, depth);
+            /* If field not present, try the next one */
+            if (ret == -1)
+                continue;
+            /* If positive return, read OK, break loop */
+            if (ret > 0)
+                break;
+            /*
+             * Must be an ASN1 parsing error.
+             * Free up any partial choice value
+             */
+            asn1_template_free(pchptr, tt);
+            errtt = tt;
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Did we fall off the end without reading anything? */
+        if (i == it->tcount) {
+            /* If OPTIONAL, this is OK */
+            if (opt) {
+                /* Free and zero it */
+                ASN1_item_ex_free(pval, it);
+                return -1;
+            }
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_NO_MATCHING_CHOICE_TYPE);
+            goto err;
+        }
+
+        asn1_set_choice_selector(pval, i, it);
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        *in = p;
+        return 1;
+
+    case ASN1_ITYPE_NDEF_SEQUENCE:
+    case ASN1_ITYPE_SEQUENCE:
+        p = *in;
+        tmplen = len;
+
+        /* If no IMPLICIT tagging set to SEQUENCE, UNIVERSAL */
+        if (tag == -1) {
+            tag = V_ASN1_SEQUENCE;
+            aclass = V_ASN1_UNIVERSAL;
+        }
+        /* Get SEQUENCE length and update len, p */
+        ret = asn1_check_tlen(&len, NULL, NULL, &seq_eoc, &cst,
+                              &p, len, tag, aclass, opt, ctx);
+        if (!ret) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        } else if (ret == -1)
+            return -1;
+        if (aux && (aux->flags & ASN1_AFLG_BROKEN)) {
+            len = tmplen - (p - *in);
+            seq_nolen = 1;
+        }
+        /* If indefinite we don't do a length check */
+        else
+            seq_nolen = seq_eoc;
+        if (!cst) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_SEQUENCE_NOT_CONSTRUCTED);
+            goto err;
+        }
+
+        if (*pval == NULL && !ASN1_item_ex_new(pval, it)) {
+            ERR_raise(ERR_LIB_ASN1, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+
+        /* Free up and zero any ADB found */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            if (tt->flags & ASN1_TFLG_ADB_MASK) {
+                const ASN1_TEMPLATE *seqtt;
+                ASN1_VALUE **pseqval;
+                seqtt = asn1_do_adb(*pval, tt, 0);
+                if (seqtt == NULL)
+                    continue;
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                asn1_template_free(pseqval, seqtt);
+            }
+        }
+
+        /* Get each field entry */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            const ASN1_TEMPLATE *seqtt;
+            ASN1_VALUE **pseqval;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (seqtt == NULL)
+                goto err;
+            pseqval = asn1_get_field_ptr(pval, seqtt);
+            /* Have we ran out of data? */
+            if (!len)
+                break;
+            q = p;
+            if (asn1_check_eoc(&p, len)) {
+                if (!seq_eoc) {
+                    ERR_raise(ERR_LIB_ASN1, ASN1_R_UNEXPECTED_EOC);
+                    goto err;
+                }
+                len -= p - q;
+                seq_eoc = 0;
+                break;
+            }
+            /*
+             * This determines the OPTIONAL flag value. The field cannot be
+             * omitted if it is the last of a SEQUENCE and there is still
+             * data to be read. This isn't strictly necessary but it
+             * increases efficiency in some cases.
+             */
+            if (i == (it->tcount - 1))
+                isopt = 0;
+            else
+                isopt = (char)(seqtt->flags & ASN1_TFLG_OPTIONAL);
+            /*
+             * attempt to read in field, allowing each to be OPTIONAL
+             */
+
+            ret = asn1_template_ex_d2i(pseqval, &p, len, seqtt, isopt, ctx,
+                                       depth);
+            if (!ret) {
+                errtt = seqtt;
+                goto err;
+            } else if (ret == -1) {
+                /*
+                 * OPTIONAL component absent. Free and zero the field.
+                 */
+                asn1_template_free(pseqval, seqtt);
+                continue;
+            }
+            /* Update length */
+            len -= p - q;
+        }
+
+        /* Check for EOC if expecting one */
+        if (seq_eoc && !asn1_check_eoc(&p, len)) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_MISSING_EOC);
+            goto err;
+        }
+        /* Check all data read */
+        if (!seq_nolen && len) {
+            ERR_raise(ERR_LIB_ASN1, ASN1_R_SEQUENCE_LENGTH_MISMATCH);
+            goto err;
+        }
+
+        /*
+         * If we get here we've got no more data in the SEQUENCE, however we
+         * may not have read all fields so check all remaining are OPTIONAL
+         * and clear any that are.
+         */
+        for (; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            seqtt = asn1_do_adb(*pval, tt, 1);
+            if (seqtt == NULL)
+                goto err;
+            if (seqtt->flags & ASN1_TFLG_OPTIONAL) {
+                ASN1_VALUE **pseqval;
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                asn1_template_free(pseqval, seqtt);
+            } else {
+                errtt = seqtt;
+                ERR_raise(ERR_LIB_ASN1, ASN1_R_FIELD_MISSING);
+                goto err;
+            }
+        }
+        /* Save encoding */
+        if (!asn1_enc_save(pval, *in, p - *in, it))
+            goto auxerr;
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        *in = p;
+        return 1;
+
+    default:
+        return 0;
+    }
+ auxerr:
+    ERR_raise(ERR_LIB_ASN1, ASN1_R_AUX_ERROR);
+ err:
+    if (errtt)
+        ERR_add_error_data(4, ""Field="", errtt->field_name,
+                           "", Type="", it->sname);
+    else
+        ERR_add_error_data(2, ""Type="", it->sname);
+    return 0;
+}",
+2642,"[""CWE-476""]",openssl,b33c48b75aaf33c93aeda42d7138616b9e6a64cb,b33c48b75aaf33c93aeda42d7138616b9e6a64cb,0,506651,2.2136884032437457e+38,39.0,"Correctly compare EdiPartyName in GENERAL_NAME_cmp()
+
+If a GENERAL_NAME field contained EdiPartyName data then it was
+incorrectly being handled as type ""other"". This could lead to a
+segmentation fault.
+
+Many thanks to David Benjamin from Google for reporting this issue.
+
+CVE-2020-1971
+
+Reviewed-by: Tomas Mraz <tmraz@fedoraproject.org>",other,"int GENERAL_NAME_cmp(GENERAL_NAME *a, GENERAL_NAME *b)
+{
+    int result = -1;
+
+    if (!a || !b || a->type != b->type)
+        return -1;
+    switch (a->type) {
+    case GEN_X400:
+    case GEN_EDIPARTY:
+        result = ASN1_TYPE_cmp(a->d.other, b->d.other);
+        break;
+
+    case GEN_OTHERNAME:
+        result = OTHERNAME_cmp(a->d.otherName, b->d.otherName);
+        break;
+
+    case GEN_EMAIL:
+    case GEN_DNS:
+    case GEN_URI:
+        result = ASN1_STRING_cmp(a->d.ia5, b->d.ia5);
+        break;
+
+    case GEN_DIRNAME:
+        result = X509_NAME_cmp(a->d.dirn, b->d.dirn);
+        break;
+
+    case GEN_IPADD:
+        result = ASN1_OCTET_STRING_cmp(a->d.ip, b->d.ip);
+        break;
+
+    case GEN_RID:
+        result = OBJ_cmp(a->d.rid, b->d.rid);
+        break;
+    }
+    return result;
+}","int GENERAL_NAME_cmp(GENERAL_NAME *a, GENERAL_NAME *b)
+{
+    int result = -1;
+
+    if (!a || !b || a->type != b->type)
+        return -1;
+    switch (a->type) {
+    case GEN_X400:
+        result = ASN1_TYPE_cmp(a->d.x400Address, b->d.x400Address);
+        break;
+
+    case GEN_EDIPARTY:
+        result = edipartyname_cmp(a->d.ediPartyName, b->d.ediPartyName);
+        break;
+
+    case GEN_OTHERNAME:
+        result = OTHERNAME_cmp(a->d.otherName, b->d.otherName);
+        break;
+
+    case GEN_EMAIL:
+    case GEN_DNS:
+    case GEN_URI:
+        result = ASN1_STRING_cmp(a->d.ia5, b->d.ia5);
+        break;
+
+    case GEN_DIRNAME:
+        result = X509_NAME_cmp(a->d.dirn, b->d.dirn);
+        break;
+
+    case GEN_IPADD:
+        result = ASN1_OCTET_STRING_cmp(a->d.ip, b->d.ip);
+        break;
+
+    case GEN_RID:
+        result = OBJ_cmp(a->d.rid, b->d.rid);
+        break;
+    }
+    return result;
+}",
+2654,"[""CWE-476""]",openssl,8130d654d1de922ea224fa18ee3bc7262edc39c0,8130d654d1de922ea224fa18ee3bc7262edc39c0,0,507205,6.535159435281601e+37,30.0,"Fix Null pointer deref in X509_issuer_and_serial_hash()
+
+The OpenSSL public API function X509_issuer_and_serial_hash() attempts
+to create a unique hash value based on the issuer and serial number data
+contained within an X509 certificate. However it fails to correctly
+handle any errors that may occur while parsing the issuer field (which
+might occur if the issuer field is maliciously constructed). This may
+subsequently result in a NULL pointer deref and a crash leading to a
+potential denial of service attack.
+
+The function X509_issuer_and_serial_hash() is never directly called by
+OpenSSL itself so applications are only vulnerable if they use this
+function directly and they use it on certificates that may have been
+obtained from untrusted sources.
+
+CVE-2021-23841
+
+Reviewed-by: Richard Levitte <levitte@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"unsigned long X509_issuer_and_serial_hash(X509 *a)
+{
+    unsigned long ret = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    unsigned char md[16];
+    char *f;
+
+    if (ctx == NULL)
+        goto err;
+    f = X509_NAME_oneline(a->cert_info.issuer, NULL, 0);
+    if (!EVP_DigestInit_ex(ctx, EVP_md5(), NULL))
+        goto err;
+    if (!EVP_DigestUpdate(ctx, (unsigned char *)f, strlen(f)))
+        goto err;
+    OPENSSL_free(f);
+    if (!EVP_DigestUpdate
+        (ctx, (unsigned char *)a->cert_info.serialNumber.data,
+         (unsigned long)a->cert_info.serialNumber.length))
+        goto err;
+    if (!EVP_DigestFinal_ex(ctx, &(md[0]), NULL))
+        goto err;
+    ret = (((unsigned long)md[0]) | ((unsigned long)md[1] << 8L) |
+           ((unsigned long)md[2] << 16L) | ((unsigned long)md[3] << 24L)
+        ) & 0xffffffffL;
+ err:
+    EVP_MD_CTX_free(ctx);
+    return ret;
+}","unsigned long X509_issuer_and_serial_hash(X509 *a)
+{
+    unsigned long ret = 0;
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    unsigned char md[16];
+    char *f;
+
+    if (ctx == NULL)
+        goto err;
+    f = X509_NAME_oneline(a->cert_info.issuer, NULL, 0);
+    if (f == NULL)
+        goto err;
+    if (!EVP_DigestInit_ex(ctx, EVP_md5(), NULL))
+        goto err;
+    if (!EVP_DigestUpdate(ctx, (unsigned char *)f, strlen(f)))
+        goto err;
+    OPENSSL_free(f);
+    if (!EVP_DigestUpdate
+        (ctx, (unsigned char *)a->cert_info.serialNumber.data,
+         (unsigned long)a->cert_info.serialNumber.length))
+        goto err;
+    if (!EVP_DigestFinal_ex(ctx, &(md[0]), NULL))
+        goto err;
+    ret = (((unsigned long)md[0]) | ((unsigned long)md[1] << 8L) |
+           ((unsigned long)md[2] << 16L) | ((unsigned long)md[3] << 24L)
+        ) & 0xffffffffL;
+ err:
+    EVP_MD_CTX_free(ctx);
+    return ret;
+}",
+2655,"[""CWE-476""]",openssl,55869f594f052561b11a2db6a7c42690051868de,55869f594f052561b11a2db6a7c42690051868de,0,507223,1.8832321027845606e+37,22.0,"Test that X509_issuer_and_serial_hash doesn't crash
+
+Provide a certificate with a bad issuer and check that
+X509_issuer_and_serial_hash doesn't crash.
+
+Reviewed-by: Richard Levitte <levitte@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+{
+    const unsigned char *p = buf;
+    unsigned char *der = NULL;
+
+    X509 *x509 = d2i_X509(NULL, &p, len);
+    if (x509 != NULL) {
+        BIO *bio = BIO_new(BIO_s_null());
+        /* This will load and print the public key as well as extensions */
+        X509_print(bio, x509);
+        BIO_free(bio);
+
+        i2d_X509(x509, &der);
+        OPENSSL_free(der);
+
+        X509_free(x509);
+    }
+    ERR_clear_error();
+    return 0;
+}","int FuzzerTestOneInput(const uint8_t *buf, size_t len)
+{
+    const unsigned char *p = buf;
+    unsigned char *der = NULL;
+
+    X509 *x509 = d2i_X509(NULL, &p, len);
+    if (x509 != NULL) {
+        BIO *bio = BIO_new(BIO_s_null());
+        /* This will load and print the public key as well as extensions */
+        X509_print(bio, x509);
+        BIO_free(bio);
+
+        X509_issuer_and_serial_hash(x509);
+
+        i2d_X509(x509, &der);
+        OPENSSL_free(der);
+
+        X509_free(x509);
+    }
+    ERR_clear_error();
+    return 0;
+}",
+2657,"[""CWE-476""]",openssl,fb9fa6b51defd48157eeb207f52181f735d96148,fb9fa6b51defd48157eeb207f52181f735d96148,0,507338,2.441532092953805e+37,8.0,"ssl sigalg extension: fix NULL pointer dereference
+
+As the variable peer_sigalgslen is not cleared on ssl rehandshake, it's
+possible to crash an openssl tls secured server remotely by sending a
+manipulated hello message in a rehandshake.
+
+On such a manipulated rehandshake, tls1_set_shared_sigalgs() calls
+tls12_shared_sigalgs() with the peer_sigalgslen of the previous
+handshake, while the peer_sigalgs has been freed.
+As a result tls12_shared_sigalgs() walks over the available
+peer_sigalgs and tries to access data of a NULL pointer.
+
+This issue was introduced by c589c34e61 (Add support for the TLS 1.3
+signature_algorithms_cert extension, 2018-01-11).
+
+Signed-off-by: Peter Kästle <peter.kaestle@nokia.com>
+Signed-off-by: Samuel Sapalski <samuel.sapalski@nokia.com>
+
+CVE-2021-3449
+
+CLA: trivial
+
+Reviewed-by: Tomas Mraz <tomas@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>
+Reviewed-by: Matt Caswell <matt@openssl.org>",other,"static int init_sig_algs(SSL *s, unsigned int context)
+{
+    /* Clear any signature algorithms extension received */
+    OPENSSL_free(s->s3->tmp.peer_sigalgs);
+    s->s3->tmp.peer_sigalgs = NULL;
+
+    return 1;
+}","static int init_sig_algs_cert(SSL *s, unsigned int context)
+{
+    /* Clear any signature algorithms extension received */
+    OPENSSL_free(s->s3->tmp.peer_cert_sigalgs);
+    s->s3->tmp.peer_cert_sigalgs = NULL;
+
+    return 1;
+}",
+3225,"[""CWE-476""]",linux-2.6,3d96406c7da1ed5811ea52a3b0905f4f0e295376,3d96406c7da1ed5811ea52a3b0905f4f0e295376,0,492806,2.155433010004219e+38,100.0,"KEYS: Fix bug in keyctl_session_to_parent() if parent has no session keyring
+
+Fix a bug in keyctl_session_to_parent() whereby it tries to check the ownership
+of the parent process's session keyring whether or not the parent has a session
+keyring [CVE-2010-2960].
+
+This results in the following oops:
+
+  BUG: unable to handle kernel NULL pointer dereference at 00000000000000a0
+  IP: [<ffffffff811ae4dd>] keyctl_session_to_parent+0x251/0x443
+  ...
+  Call Trace:
+   [<ffffffff811ae2f3>] ? keyctl_session_to_parent+0x67/0x443
+   [<ffffffff8109d286>] ? __do_fault+0x24b/0x3d0
+   [<ffffffff811af98c>] sys_keyctl+0xb4/0xb8
+   [<ffffffff81001eab>] system_call_fastpath+0x16/0x1b
+
+if the parent process has no session keyring.
+
+If the system is using pam_keyinit then it mostly protected against this as all
+processes derived from a login will have inherited the session keyring created
+by pam_keyinit during the log in procedure.
+
+To test this, pam_keyinit calls need to be commented out in /etc/pam.d/.
+
+Reported-by: Tavis Ormandy <taviso@cmpxchg8b.com>
+Signed-off-by: David Howells <dhowells@redhat.com>
+Acked-by: Tavis Ormandy <taviso@cmpxchg8b.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"long keyctl_session_to_parent(void)
+{
+#ifdef TIF_NOTIFY_RESUME
+	struct task_struct *me, *parent;
+	const struct cred *mycred, *pcred;
+	struct cred *cred, *oldcred;
+	key_ref_t keyring_r;
+	int ret;
+
+	keyring_r = lookup_user_key(KEY_SPEC_SESSION_KEYRING, 0, KEY_LINK);
+	if (IS_ERR(keyring_r))
+		return PTR_ERR(keyring_r);
+
+	/* our parent is going to need a new cred struct, a new tgcred struct
+	 * and new security data, so we allocate them here to prevent ENOMEM in
+	 * our parent */
+	ret = -ENOMEM;
+	cred = cred_alloc_blank();
+	if (!cred)
+		goto error_keyring;
+
+	cred->tgcred->session_keyring = key_ref_to_ptr(keyring_r);
+	keyring_r = NULL;
+
+	me = current;
+	rcu_read_lock();
+	write_lock_irq(&tasklist_lock);
+
+	parent = me->real_parent;
+	ret = -EPERM;
+
+	/* the parent mustn't be init and mustn't be a kernel thread */
+	if (parent->pid <= 1 || !parent->mm)
+		goto not_permitted;
+
+	/* the parent must be single threaded */
+	if (!thread_group_empty(parent))
+		goto not_permitted;
+
+	/* the parent and the child must have different session keyrings or
+	 * there's no point */
+	mycred = current_cred();
+	pcred = __task_cred(parent);
+	if (mycred == pcred ||
+	    mycred->tgcred->session_keyring == pcred->tgcred->session_keyring)
+		goto already_same;
+
+	/* the parent must have the same effective ownership and mustn't be
+	 * SUID/SGID */
+	if (pcred->uid	!= mycred->euid	||
+	    pcred->euid	!= mycred->euid	||
+	    pcred->suid	!= mycred->euid	||
+	    pcred->gid	!= mycred->egid	||
+	    pcred->egid	!= mycred->egid	||
+	    pcred->sgid	!= mycred->egid)
+		goto not_permitted;
+
+	/* the keyrings must have the same UID */
+	if (pcred->tgcred->session_keyring->uid != mycred->euid ||
+	    mycred->tgcred->session_keyring->uid != mycred->euid)
+		goto not_permitted;
+
+	/* if there's an already pending keyring replacement, then we replace
+	 * that */
+	oldcred = parent->replacement_session_keyring;
+
+	/* the replacement session keyring is applied just prior to userspace
+	 * restarting */
+	parent->replacement_session_keyring = cred;
+	cred = NULL;
+	set_ti_thread_flag(task_thread_info(parent), TIF_NOTIFY_RESUME);
+
+	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
+	if (oldcred)
+		put_cred(oldcred);
+	return 0;
+
+already_same:
+	ret = 0;
+not_permitted:
+	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
+	put_cred(cred);
+	return ret;
+
+error_keyring:
+	key_ref_put(keyring_r);
+	return ret;
+
+#else /* !TIF_NOTIFY_RESUME */
+	/*
+	 * To be removed when TIF_NOTIFY_RESUME has been implemented on
+	 * m68k/xtensa
+	 */
+#warning TIF_NOTIFY_RESUME not implemented
+	return -EOPNOTSUPP;
+#endif /* !TIF_NOTIFY_RESUME */
+}","long keyctl_session_to_parent(void)
+{
+#ifdef TIF_NOTIFY_RESUME
+	struct task_struct *me, *parent;
+	const struct cred *mycred, *pcred;
+	struct cred *cred, *oldcred;
+	key_ref_t keyring_r;
+	int ret;
+
+	keyring_r = lookup_user_key(KEY_SPEC_SESSION_KEYRING, 0, KEY_LINK);
+	if (IS_ERR(keyring_r))
+		return PTR_ERR(keyring_r);
+
+	/* our parent is going to need a new cred struct, a new tgcred struct
+	 * and new security data, so we allocate them here to prevent ENOMEM in
+	 * our parent */
+	ret = -ENOMEM;
+	cred = cred_alloc_blank();
+	if (!cred)
+		goto error_keyring;
+
+	cred->tgcred->session_keyring = key_ref_to_ptr(keyring_r);
+	keyring_r = NULL;
+
+	me = current;
+	rcu_read_lock();
+	write_lock_irq(&tasklist_lock);
+
+	parent = me->real_parent;
+	ret = -EPERM;
+
+	/* the parent mustn't be init and mustn't be a kernel thread */
+	if (parent->pid <= 1 || !parent->mm)
+		goto not_permitted;
+
+	/* the parent must be single threaded */
+	if (!thread_group_empty(parent))
+		goto not_permitted;
+
+	/* the parent and the child must have different session keyrings or
+	 * there's no point */
+	mycred = current_cred();
+	pcred = __task_cred(parent);
+	if (mycred == pcred ||
+	    mycred->tgcred->session_keyring == pcred->tgcred->session_keyring)
+		goto already_same;
+
+	/* the parent must have the same effective ownership and mustn't be
+	 * SUID/SGID */
+	if (pcred->uid	!= mycred->euid	||
+	    pcred->euid	!= mycred->euid	||
+	    pcred->suid	!= mycred->euid	||
+	    pcred->gid	!= mycred->egid	||
+	    pcred->egid	!= mycred->egid	||
+	    pcred->sgid	!= mycred->egid)
+		goto not_permitted;
+
+	/* the keyrings must have the same UID */
+	if ((pcred->tgcred->session_keyring &&
+	     pcred->tgcred->session_keyring->uid != mycred->euid) ||
+	    mycred->tgcred->session_keyring->uid != mycred->euid)
+		goto not_permitted;
+
+	/* if there's an already pending keyring replacement, then we replace
+	 * that */
+	oldcred = parent->replacement_session_keyring;
+
+	/* the replacement session keyring is applied just prior to userspace
+	 * restarting */
+	parent->replacement_session_keyring = cred;
+	cred = NULL;
+	set_ti_thread_flag(task_thread_info(parent), TIF_NOTIFY_RESUME);
+
+	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
+	if (oldcred)
+		put_cred(oldcred);
+	return 0;
+
+already_same:
+	ret = 0;
+not_permitted:
+	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
+	put_cred(cred);
+	return ret;
+
+error_keyring:
+	key_ref_put(keyring_r);
+	return ret;
+
+#else /* !TIF_NOTIFY_RESUME */
+	/*
+	 * To be removed when TIF_NOTIFY_RESUME has been implemented on
+	 * m68k/xtensa
+	 */
+#warning TIF_NOTIFY_RESUME not implemented
+	return -EOPNOTSUPP;
+#endif /* !TIF_NOTIFY_RESUME */
+}",
+3237,"[""CWE-476""]",openssl,141a5482fdd1944804cc342c1c443362eed8501b,141a5482fdd1944804cc342c1c443362eed8501b,0,501557,2.2606040620945614e+38,509.0,"Fix CVE-2014-3470
+
+Check session_cert is not NULL before dereferencing it.",other,"int ssl3_send_client_key_exchange(SSL *s)
+	{
+	unsigned char *p,*d;
+	int n;
+	unsigned long l;
+#ifndef OPENSSL_NO_RSA
+	unsigned char *q;
+	EVP_PKEY *pkey=NULL;
+#endif
+#ifndef OPENSSL_NO_KRB5
+	KSSL_ERR kssl_err;
+#endif /* OPENSSL_NO_KRB5 */
+#ifndef OPENSSL_NO_ECDH
+	EC_KEY *clnt_ecdh = NULL;
+	const EC_POINT *srvr_ecpoint = NULL;
+	EVP_PKEY *srvr_pub_pkey = NULL;
+	unsigned char *encodedPoint = NULL;
+	int encoded_pt_len = 0;
+	BN_CTX * bn_ctx = NULL;
+#endif
+
+	if (s->state == SSL3_ST_CW_KEY_EXCH_A)
+		{
+		d=(unsigned char *)s->init_buf->data;
+		p= &(d[4]);
+
+		l=s->s3->tmp.new_cipher->algorithms;
+
+		/* Fool emacs indentation */
+		if (0) {}
+#ifndef OPENSSL_NO_RSA
+		else if (l & SSL_kRSA)
+			{
+			RSA *rsa;
+			unsigned char tmp_buf[SSL_MAX_MASTER_KEY_LENGTH];
+
+			if (s->session->sess_cert->peer_rsa_tmp != NULL)
+				rsa=s->session->sess_cert->peer_rsa_tmp;
+			else
+				{
+				pkey=X509_get_pubkey(s->session->sess_cert->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
+				if ((pkey == NULL) ||
+					(pkey->type != EVP_PKEY_RSA) ||
+					(pkey->pkey.rsa == NULL))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_INTERNAL_ERROR);
+					goto err;
+					}
+				rsa=pkey->pkey.rsa;
+				EVP_PKEY_free(pkey);
+				}
+				
+			tmp_buf[0]=s->client_version>>8;
+			tmp_buf[1]=s->client_version&0xff;
+			if (RAND_bytes(&(tmp_buf[2]),sizeof tmp_buf-2) <= 0)
+					goto err;
+
+			s->session->master_key_length=sizeof tmp_buf;
+
+			q=p;
+			/* Fix buf for TLS and beyond */
+			if (s->version > SSL3_VERSION)
+				p+=2;
+			n=RSA_public_encrypt(sizeof tmp_buf,
+				tmp_buf,p,rsa,RSA_PKCS1_PADDING);
+#ifdef PKCS1_CHECK
+			if (s->options & SSL_OP_PKCS1_CHECK_1) p[1]++;
+			if (s->options & SSL_OP_PKCS1_CHECK_2) tmp_buf[0]=0x70;
+#endif
+			if (n <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_BAD_RSA_ENCRYPT);
+				goto err;
+				}
+
+			/* Fix buf for TLS and beyond */
+			if (s->version > SSL3_VERSION)
+				{
+				s2n(n,q);
+				n+=2;
+				}
+
+			s->session->master_key_length=
+				s->method->ssl3_enc->generate_master_secret(s,
+					s->session->master_key,
+					tmp_buf,sizeof tmp_buf);
+			OPENSSL_cleanse(tmp_buf,sizeof tmp_buf);
+			}
+#endif
+#ifndef OPENSSL_NO_KRB5
+		else if (l & SSL_kKRB5)
+			{
+			krb5_error_code	krb5rc;
+			KSSL_CTX	*kssl_ctx = s->kssl_ctx;
+			/*  krb5_data	krb5_ap_req;  */
+			krb5_data	*enc_ticket;
+			krb5_data	authenticator, *authp = NULL;
+			EVP_CIPHER_CTX	ciph_ctx;
+			EVP_CIPHER	*enc = NULL;
+			unsigned char	iv[EVP_MAX_IV_LENGTH];
+			unsigned char	tmp_buf[SSL_MAX_MASTER_KEY_LENGTH];
+			unsigned char	epms[SSL_MAX_MASTER_KEY_LENGTH 
+						+ EVP_MAX_IV_LENGTH];
+			int 		padl, outl = sizeof(epms);
+
+			EVP_CIPHER_CTX_init(&ciph_ctx);
+
+#ifdef KSSL_DEBUG
+			printf(""ssl3_send_client_key_exchange(%lx & %lx)\n"",
+			        l, SSL_kKRB5);
+#endif	/* KSSL_DEBUG */
+
+			authp = NULL;
+#ifdef KRB5SENDAUTH
+			if (KRB5SENDAUTH)  authp = &authenticator;
+#endif	/* KRB5SENDAUTH */
+
+			krb5rc = kssl_cget_tkt(kssl_ctx, &enc_ticket, authp,
+				&kssl_err);
+			enc = kssl_map_enc(kssl_ctx->enctype);
+			if (enc == NULL)
+			    goto err;
+#ifdef KSSL_DEBUG
+			{
+			printf(""kssl_cget_tkt rtn %d\n"", krb5rc);
+			if (krb5rc && kssl_err.text)
+			  printf(""kssl_cget_tkt kssl_err=%s\n"", kssl_err.text);
+			}
+#endif	/* KSSL_DEBUG */
+
+			if (krb5rc)
+				{
+				ssl3_send_alert(s,SSL3_AL_FATAL,
+						SSL_AD_HANDSHAKE_FAILURE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+						kssl_err.reason);
+				goto err;
+				}
+
+			/*  20010406 VRS - Earlier versions used KRB5 AP_REQ
+			**  in place of RFC 2712 KerberosWrapper, as in:
+			**
+			**  Send ticket (copy to *p, set n = length)
+			**  n = krb5_ap_req.length;
+			**  memcpy(p, krb5_ap_req.data, krb5_ap_req.length);
+			**  if (krb5_ap_req.data)  
+			**    kssl_krb5_free_data_contents(NULL,&krb5_ap_req);
+			**
+			**  Now using real RFC 2712 KerberosWrapper
+			**  (Thanks to Simon Wilkinson <sxw@sxw.org.uk>)
+			**  Note: 2712 ""opaque"" types are here replaced
+			**  with a 2-byte length followed by the value.
+			**  Example:
+			**  KerberosWrapper= xx xx asn1ticket 0 0 xx xx encpms
+			**  Where ""xx xx"" = length bytes.  Shown here with
+			**  optional authenticator omitted.
+			*/
+
+			/*  KerberosWrapper.Ticket		*/
+			s2n(enc_ticket->length,p);
+			memcpy(p, enc_ticket->data, enc_ticket->length);
+			p+= enc_ticket->length;
+			n = enc_ticket->length + 2;
+
+			/*  KerberosWrapper.Authenticator	*/
+			if (authp  &&  authp->length)  
+				{
+				s2n(authp->length,p);
+				memcpy(p, authp->data, authp->length);
+				p+= authp->length;
+				n+= authp->length + 2;
+				
+				free(authp->data);
+				authp->data = NULL;
+				authp->length = 0;
+				}
+			else
+				{
+				s2n(0,p);/*  null authenticator length	*/
+				n+=2;
+				}
+ 
+			    tmp_buf[0]=s->client_version>>8;
+			    tmp_buf[1]=s->client_version&0xff;
+			    if (RAND_bytes(&(tmp_buf[2]),sizeof tmp_buf-2) <= 0)
+				goto err;
+
+			/*  20010420 VRS.  Tried it this way; failed.
+			**	EVP_EncryptInit_ex(&ciph_ctx,enc, NULL,NULL);
+			**	EVP_CIPHER_CTX_set_key_length(&ciph_ctx,
+			**				kssl_ctx->length);
+			**	EVP_EncryptInit_ex(&ciph_ctx,NULL, key,iv);
+			*/
+
+			memset(iv, 0, sizeof iv);  /* per RFC 1510 */
+			EVP_EncryptInit_ex(&ciph_ctx,enc, NULL,
+				kssl_ctx->key,iv);
+			EVP_EncryptUpdate(&ciph_ctx,epms,&outl,tmp_buf,
+				sizeof tmp_buf);
+			EVP_EncryptFinal_ex(&ciph_ctx,&(epms[outl]),&padl);
+			outl += padl;
+			if (outl > sizeof epms)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, ERR_R_INTERNAL_ERROR);
+				goto err;
+				}
+			EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+
+			/*  KerberosWrapper.EncryptedPreMasterSecret	*/
+			s2n(outl,p);
+			memcpy(p, epms, outl);
+			p+=outl;
+			n+=outl + 2;
+
+			s->session->master_key_length=
+			        s->method->ssl3_enc->generate_master_secret(s,
+					s->session->master_key,
+					tmp_buf, sizeof tmp_buf);
+
+			OPENSSL_cleanse(tmp_buf, sizeof tmp_buf);
+			OPENSSL_cleanse(epms, outl);
+			}
+#endif
+#ifndef OPENSSL_NO_DH
+		else if (l & (SSL_kEDH|SSL_kDHr|SSL_kDHd))
+			{
+			DH *dh_srvr,*dh_clnt;
+
+			if (s->session->sess_cert == NULL) 
+				{
+				ssl3_send_alert(s,SSL3_AL_FATAL,SSL_AD_UNEXPECTED_MESSAGE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_UNEXPECTED_MESSAGE);
+				goto err;
+			        }
+
+			if (s->session->sess_cert->peer_dh_tmp != NULL)
+				dh_srvr=s->session->sess_cert->peer_dh_tmp;
+			else
+				{
+				/* we get them from the cert */
+				ssl3_send_alert(s,SSL3_AL_FATAL,SSL_AD_HANDSHAKE_FAILURE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_UNABLE_TO_FIND_DH_PARAMETERS);
+				goto err;
+				}
+			
+			/* generate a new random key */
+			if ((dh_clnt=DHparams_dup(dh_srvr)) == NULL)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_DH_LIB);
+				goto err;
+				}
+			if (!DH_generate_key(dh_clnt))
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_DH_LIB);
+				goto err;
+				}
+
+			/* use the 'p' output buffer for the DH key, but
+			 * make sure to clear it out afterwards */
+
+			n=DH_compute_key(p,dh_srvr->pub_key,dh_clnt);
+
+			if (n <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_DH_LIB);
+				goto err;
+				}
+
+			/* generate master key from the result */
+			s->session->master_key_length=
+				s->method->ssl3_enc->generate_master_secret(s,
+					s->session->master_key,p,n);
+			/* clean up */
+			memset(p,0,n);
+
+			/* send off the data */
+			n=BN_num_bytes(dh_clnt->pub_key);
+			s2n(n,p);
+			BN_bn2bin(dh_clnt->pub_key,p);
+			n+=2;
+
+			DH_free(dh_clnt);
+
+			/* perhaps clean things up a bit EAY EAY EAY EAY*/
+			}
+#endif
+
+#ifndef OPENSSL_NO_ECDH 
+		else if ((l & SSL_kECDH) || (l & SSL_kECDHE))
+			{
+			const EC_GROUP *srvr_group = NULL;
+			EC_KEY *tkey;
+			int ecdh_clnt_cert = 0;
+			int field_size = 0;
+
+			/* Did we send out the client's
+			 * ECDH share for use in premaster
+			 * computation as part of client certificate?
+			 * If so, set ecdh_clnt_cert to 1.
+			 */
+			if ((l & SSL_kECDH) && (s->cert != NULL)) 
+				{
+				/* XXX: For now, we do not support client
+				 * authentication using ECDH certificates.
+				 * To add such support, one needs to add
+				 * code that checks for appropriate 
+				 * conditions and sets ecdh_clnt_cert to 1.
+				 * For example, the cert have an ECC
+				 * key on the same curve as the server's
+				 * and the key should be authorized for
+				 * key agreement.
+				 *
+				 * One also needs to add code in ssl3_connect
+				 * to skip sending the certificate verify
+				 * message.
+				 *
+				 * if ((s->cert->key->privatekey != NULL) &&
+				 *     (s->cert->key->privatekey->type ==
+				 *      EVP_PKEY_EC) && ...)
+				 * ecdh_clnt_cert = 1;
+				 */
+				}
+
+			if (s->session->sess_cert->peer_ecdh_tmp != NULL)
+				{
+				tkey = s->session->sess_cert->peer_ecdh_tmp;
+				}
+			else
+				{
+				/* Get the Server Public Key from Cert */
+				srvr_pub_pkey = X509_get_pubkey(s->session-> \
+				    sess_cert->peer_pkeys[SSL_PKEY_ECC].x509);
+				if ((srvr_pub_pkey == NULL) ||
+				    (srvr_pub_pkey->type != EVP_PKEY_EC) ||
+				    (srvr_pub_pkey->pkey.ec == NULL))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+					    ERR_R_INTERNAL_ERROR);
+					goto err;
+					}
+
+				tkey = srvr_pub_pkey->pkey.ec;
+				}
+
+			srvr_group   = EC_KEY_get0_group(tkey);
+			srvr_ecpoint = EC_KEY_get0_public_key(tkey);
+
+			if ((srvr_group == NULL) || (srvr_ecpoint == NULL))
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+				    ERR_R_INTERNAL_ERROR);
+				goto err;
+				}
+
+			if ((clnt_ecdh=EC_KEY_new()) == NULL) 
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
+				goto err;
+				}
+
+			if (!EC_KEY_set_group(clnt_ecdh, srvr_group))
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_EC_LIB);
+				goto err;
+				}
+			if (ecdh_clnt_cert) 
+				{ 
+				/* Reuse key info from our certificate
+				 * We only need our private key to perform
+				 * the ECDH computation.
+				 */
+				const BIGNUM *priv_key;
+				tkey = s->cert->key->privatekey->pkey.ec;
+				priv_key = EC_KEY_get0_private_key(tkey);
+				if (priv_key == NULL)
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
+					goto err;
+					}
+				if (!EC_KEY_set_private_key(clnt_ecdh, priv_key))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_EC_LIB);
+					goto err;
+					}
+				}
+			else 
+				{
+				/* Generate a new ECDH key pair */
+				if (!(EC_KEY_generate_key(clnt_ecdh)))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, ERR_R_ECDH_LIB);
+					goto err;
+					}
+				}
+
+			/* use the 'p' output buffer for the ECDH key, but
+			 * make sure to clear it out afterwards
+			 */
+
+			field_size = EC_GROUP_get_degree(srvr_group);
+			if (field_size <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, 
+				       ERR_R_ECDH_LIB);
+				goto err;
+				}
+			n=ECDH_compute_key(p, (field_size+7)/8, srvr_ecpoint, clnt_ecdh, NULL);
+			if (n <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, 
+				       ERR_R_ECDH_LIB);
+				goto err;
+				}
+
+			/* generate master key from the result */
+			s->session->master_key_length = s->method->ssl3_enc \
+			    -> generate_master_secret(s, 
+				s->session->master_key,
+				p, n);
+
+			memset(p, 0, n); /* clean up */
+
+			if (ecdh_clnt_cert) 
+				{
+				/* Send empty client key exch message */
+				n = 0;
+				}
+			else 
+				{
+				/* First check the size of encoding and
+				 * allocate memory accordingly.
+				 */
+				encoded_pt_len = 
+				    EC_POINT_point2oct(srvr_group, 
+					EC_KEY_get0_public_key(clnt_ecdh), 
+					POINT_CONVERSION_UNCOMPRESSED, 
+					NULL, 0, NULL);
+
+				encodedPoint = (unsigned char *) 
+				    OPENSSL_malloc(encoded_pt_len * 
+					sizeof(unsigned char)); 
+				bn_ctx = BN_CTX_new();
+				if ((encodedPoint == NULL) || 
+				    (bn_ctx == NULL)) 
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
+					goto err;
+					}
+
+				/* Encode the public key */
+				n = EC_POINT_point2oct(srvr_group, 
+				    EC_KEY_get0_public_key(clnt_ecdh), 
+				    POINT_CONVERSION_UNCOMPRESSED, 
+				    encodedPoint, encoded_pt_len, bn_ctx);
+
+				*p = n; /* length of encoded point */
+				/* Encoded point will be copied here */
+				p += 1; 
+				/* copy the point */
+				memcpy((unsigned char *)p, encodedPoint, n);
+				/* increment n to account for length field */
+				n += 1; 
+				}
+
+			/* Free allocated memory */
+			BN_CTX_free(bn_ctx);
+			if (encodedPoint != NULL) OPENSSL_free(encodedPoint);
+			if (clnt_ecdh != NULL) 
+				 EC_KEY_free(clnt_ecdh);
+			EVP_PKEY_free(srvr_pub_pkey);
+			}
+#endif /* !OPENSSL_NO_ECDH */
+		else
+			{
+			ssl3_send_alert(s, SSL3_AL_FATAL,
+			    SSL_AD_HANDSHAKE_FAILURE);
+			SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+			    ERR_R_INTERNAL_ERROR);
+			goto err;
+			}
+		
+		*(d++)=SSL3_MT_CLIENT_KEY_EXCHANGE;
+		l2n3(n,d);
+
+		s->state=SSL3_ST_CW_KEY_EXCH_B;
+		/* number of bytes to write */
+		s->init_num=n+4;
+		s->init_off=0;
+		}
+
+	/* SSL3_ST_CW_KEY_EXCH_B */
+	return(ssl3_do_write(s,SSL3_RT_HANDSHAKE));
+err:
+#ifndef OPENSSL_NO_ECDH
+	BN_CTX_free(bn_ctx);
+	if (encodedPoint != NULL) OPENSSL_free(encodedPoint);
+	if (clnt_ecdh != NULL) 
+		EC_KEY_free(clnt_ecdh);
+	EVP_PKEY_free(srvr_pub_pkey);
+#endif
+	return(-1);
+	}","int ssl3_send_client_key_exchange(SSL *s)
+	{
+	unsigned char *p,*d;
+	int n;
+	unsigned long l;
+#ifndef OPENSSL_NO_RSA
+	unsigned char *q;
+	EVP_PKEY *pkey=NULL;
+#endif
+#ifndef OPENSSL_NO_KRB5
+	KSSL_ERR kssl_err;
+#endif /* OPENSSL_NO_KRB5 */
+#ifndef OPENSSL_NO_ECDH
+	EC_KEY *clnt_ecdh = NULL;
+	const EC_POINT *srvr_ecpoint = NULL;
+	EVP_PKEY *srvr_pub_pkey = NULL;
+	unsigned char *encodedPoint = NULL;
+	int encoded_pt_len = 0;
+	BN_CTX * bn_ctx = NULL;
+#endif
+
+	if (s->state == SSL3_ST_CW_KEY_EXCH_A)
+		{
+		d=(unsigned char *)s->init_buf->data;
+		p= &(d[4]);
+
+		l=s->s3->tmp.new_cipher->algorithms;
+
+		/* Fool emacs indentation */
+		if (0) {}
+#ifndef OPENSSL_NO_RSA
+		else if (l & SSL_kRSA)
+			{
+			RSA *rsa;
+			unsigned char tmp_buf[SSL_MAX_MASTER_KEY_LENGTH];
+
+			if (s->session->sess_cert->peer_rsa_tmp != NULL)
+				rsa=s->session->sess_cert->peer_rsa_tmp;
+			else
+				{
+				pkey=X509_get_pubkey(s->session->sess_cert->peer_pkeys[SSL_PKEY_RSA_ENC].x509);
+				if ((pkey == NULL) ||
+					(pkey->type != EVP_PKEY_RSA) ||
+					(pkey->pkey.rsa == NULL))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_INTERNAL_ERROR);
+					goto err;
+					}
+				rsa=pkey->pkey.rsa;
+				EVP_PKEY_free(pkey);
+				}
+				
+			tmp_buf[0]=s->client_version>>8;
+			tmp_buf[1]=s->client_version&0xff;
+			if (RAND_bytes(&(tmp_buf[2]),sizeof tmp_buf-2) <= 0)
+					goto err;
+
+			s->session->master_key_length=sizeof tmp_buf;
+
+			q=p;
+			/* Fix buf for TLS and beyond */
+			if (s->version > SSL3_VERSION)
+				p+=2;
+			n=RSA_public_encrypt(sizeof tmp_buf,
+				tmp_buf,p,rsa,RSA_PKCS1_PADDING);
+#ifdef PKCS1_CHECK
+			if (s->options & SSL_OP_PKCS1_CHECK_1) p[1]++;
+			if (s->options & SSL_OP_PKCS1_CHECK_2) tmp_buf[0]=0x70;
+#endif
+			if (n <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_BAD_RSA_ENCRYPT);
+				goto err;
+				}
+
+			/* Fix buf for TLS and beyond */
+			if (s->version > SSL3_VERSION)
+				{
+				s2n(n,q);
+				n+=2;
+				}
+
+			s->session->master_key_length=
+				s->method->ssl3_enc->generate_master_secret(s,
+					s->session->master_key,
+					tmp_buf,sizeof tmp_buf);
+			OPENSSL_cleanse(tmp_buf,sizeof tmp_buf);
+			}
+#endif
+#ifndef OPENSSL_NO_KRB5
+		else if (l & SSL_kKRB5)
+			{
+			krb5_error_code	krb5rc;
+			KSSL_CTX	*kssl_ctx = s->kssl_ctx;
+			/*  krb5_data	krb5_ap_req;  */
+			krb5_data	*enc_ticket;
+			krb5_data	authenticator, *authp = NULL;
+			EVP_CIPHER_CTX	ciph_ctx;
+			EVP_CIPHER	*enc = NULL;
+			unsigned char	iv[EVP_MAX_IV_LENGTH];
+			unsigned char	tmp_buf[SSL_MAX_MASTER_KEY_LENGTH];
+			unsigned char	epms[SSL_MAX_MASTER_KEY_LENGTH 
+						+ EVP_MAX_IV_LENGTH];
+			int 		padl, outl = sizeof(epms);
+
+			EVP_CIPHER_CTX_init(&ciph_ctx);
+
+#ifdef KSSL_DEBUG
+			printf(""ssl3_send_client_key_exchange(%lx & %lx)\n"",
+			        l, SSL_kKRB5);
+#endif	/* KSSL_DEBUG */
+
+			authp = NULL;
+#ifdef KRB5SENDAUTH
+			if (KRB5SENDAUTH)  authp = &authenticator;
+#endif	/* KRB5SENDAUTH */
+
+			krb5rc = kssl_cget_tkt(kssl_ctx, &enc_ticket, authp,
+				&kssl_err);
+			enc = kssl_map_enc(kssl_ctx->enctype);
+			if (enc == NULL)
+			    goto err;
+#ifdef KSSL_DEBUG
+			{
+			printf(""kssl_cget_tkt rtn %d\n"", krb5rc);
+			if (krb5rc && kssl_err.text)
+			  printf(""kssl_cget_tkt kssl_err=%s\n"", kssl_err.text);
+			}
+#endif	/* KSSL_DEBUG */
+
+			if (krb5rc)
+				{
+				ssl3_send_alert(s,SSL3_AL_FATAL,
+						SSL_AD_HANDSHAKE_FAILURE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+						kssl_err.reason);
+				goto err;
+				}
+
+			/*  20010406 VRS - Earlier versions used KRB5 AP_REQ
+			**  in place of RFC 2712 KerberosWrapper, as in:
+			**
+			**  Send ticket (copy to *p, set n = length)
+			**  n = krb5_ap_req.length;
+			**  memcpy(p, krb5_ap_req.data, krb5_ap_req.length);
+			**  if (krb5_ap_req.data)  
+			**    kssl_krb5_free_data_contents(NULL,&krb5_ap_req);
+			**
+			**  Now using real RFC 2712 KerberosWrapper
+			**  (Thanks to Simon Wilkinson <sxw@sxw.org.uk>)
+			**  Note: 2712 ""opaque"" types are here replaced
+			**  with a 2-byte length followed by the value.
+			**  Example:
+			**  KerberosWrapper= xx xx asn1ticket 0 0 xx xx encpms
+			**  Where ""xx xx"" = length bytes.  Shown here with
+			**  optional authenticator omitted.
+			*/
+
+			/*  KerberosWrapper.Ticket		*/
+			s2n(enc_ticket->length,p);
+			memcpy(p, enc_ticket->data, enc_ticket->length);
+			p+= enc_ticket->length;
+			n = enc_ticket->length + 2;
+
+			/*  KerberosWrapper.Authenticator	*/
+			if (authp  &&  authp->length)  
+				{
+				s2n(authp->length,p);
+				memcpy(p, authp->data, authp->length);
+				p+= authp->length;
+				n+= authp->length + 2;
+				
+				free(authp->data);
+				authp->data = NULL;
+				authp->length = 0;
+				}
+			else
+				{
+				s2n(0,p);/*  null authenticator length	*/
+				n+=2;
+				}
+ 
+			    tmp_buf[0]=s->client_version>>8;
+			    tmp_buf[1]=s->client_version&0xff;
+			    if (RAND_bytes(&(tmp_buf[2]),sizeof tmp_buf-2) <= 0)
+				goto err;
+
+			/*  20010420 VRS.  Tried it this way; failed.
+			**	EVP_EncryptInit_ex(&ciph_ctx,enc, NULL,NULL);
+			**	EVP_CIPHER_CTX_set_key_length(&ciph_ctx,
+			**				kssl_ctx->length);
+			**	EVP_EncryptInit_ex(&ciph_ctx,NULL, key,iv);
+			*/
+
+			memset(iv, 0, sizeof iv);  /* per RFC 1510 */
+			EVP_EncryptInit_ex(&ciph_ctx,enc, NULL,
+				kssl_ctx->key,iv);
+			EVP_EncryptUpdate(&ciph_ctx,epms,&outl,tmp_buf,
+				sizeof tmp_buf);
+			EVP_EncryptFinal_ex(&ciph_ctx,&(epms[outl]),&padl);
+			outl += padl;
+			if (outl > sizeof epms)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, ERR_R_INTERNAL_ERROR);
+				goto err;
+				}
+			EVP_CIPHER_CTX_cleanup(&ciph_ctx);
+
+			/*  KerberosWrapper.EncryptedPreMasterSecret	*/
+			s2n(outl,p);
+			memcpy(p, epms, outl);
+			p+=outl;
+			n+=outl + 2;
+
+			s->session->master_key_length=
+			        s->method->ssl3_enc->generate_master_secret(s,
+					s->session->master_key,
+					tmp_buf, sizeof tmp_buf);
+
+			OPENSSL_cleanse(tmp_buf, sizeof tmp_buf);
+			OPENSSL_cleanse(epms, outl);
+			}
+#endif
+#ifndef OPENSSL_NO_DH
+		else if (l & (SSL_kEDH|SSL_kDHr|SSL_kDHd))
+			{
+			DH *dh_srvr,*dh_clnt;
+
+			if (s->session->sess_cert == NULL) 
+				{
+				ssl3_send_alert(s,SSL3_AL_FATAL,SSL_AD_UNEXPECTED_MESSAGE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_UNEXPECTED_MESSAGE);
+				goto err;
+			        }
+
+			if (s->session->sess_cert->peer_dh_tmp != NULL)
+				dh_srvr=s->session->sess_cert->peer_dh_tmp;
+			else
+				{
+				/* we get them from the cert */
+				ssl3_send_alert(s,SSL3_AL_FATAL,SSL_AD_HANDSHAKE_FAILURE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_UNABLE_TO_FIND_DH_PARAMETERS);
+				goto err;
+				}
+			
+			/* generate a new random key */
+			if ((dh_clnt=DHparams_dup(dh_srvr)) == NULL)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_DH_LIB);
+				goto err;
+				}
+			if (!DH_generate_key(dh_clnt))
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_DH_LIB);
+				goto err;
+				}
+
+			/* use the 'p' output buffer for the DH key, but
+			 * make sure to clear it out afterwards */
+
+			n=DH_compute_key(p,dh_srvr->pub_key,dh_clnt);
+
+			if (n <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_DH_LIB);
+				goto err;
+				}
+
+			/* generate master key from the result */
+			s->session->master_key_length=
+				s->method->ssl3_enc->generate_master_secret(s,
+					s->session->master_key,p,n);
+			/* clean up */
+			memset(p,0,n);
+
+			/* send off the data */
+			n=BN_num_bytes(dh_clnt->pub_key);
+			s2n(n,p);
+			BN_bn2bin(dh_clnt->pub_key,p);
+			n+=2;
+
+			DH_free(dh_clnt);
+
+			/* perhaps clean things up a bit EAY EAY EAY EAY*/
+			}
+#endif
+
+#ifndef OPENSSL_NO_ECDH 
+		else if ((l & SSL_kECDH) || (l & SSL_kECDHE))
+			{
+			const EC_GROUP *srvr_group = NULL;
+			EC_KEY *tkey;
+			int ecdh_clnt_cert = 0;
+			int field_size = 0;
+
+			if (s->session->sess_cert == NULL) 
+				{
+				ssl3_send_alert(s,SSL3_AL_FATAL,SSL_AD_UNEXPECTED_MESSAGE);
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,SSL_R_UNEXPECTED_MESSAGE);
+				goto err;
+				}
+
+			/* Did we send out the client's
+			 * ECDH share for use in premaster
+			 * computation as part of client certificate?
+			 * If so, set ecdh_clnt_cert to 1.
+			 */
+			if ((l & SSL_kECDH) && (s->cert != NULL)) 
+				{
+				/* XXX: For now, we do not support client
+				 * authentication using ECDH certificates.
+				 * To add such support, one needs to add
+				 * code that checks for appropriate 
+				 * conditions and sets ecdh_clnt_cert to 1.
+				 * For example, the cert have an ECC
+				 * key on the same curve as the server's
+				 * and the key should be authorized for
+				 * key agreement.
+				 *
+				 * One also needs to add code in ssl3_connect
+				 * to skip sending the certificate verify
+				 * message.
+				 *
+				 * if ((s->cert->key->privatekey != NULL) &&
+				 *     (s->cert->key->privatekey->type ==
+				 *      EVP_PKEY_EC) && ...)
+				 * ecdh_clnt_cert = 1;
+				 */
+				}
+
+			if (s->session->sess_cert->peer_ecdh_tmp != NULL)
+				{
+				tkey = s->session->sess_cert->peer_ecdh_tmp;
+				}
+			else
+				{
+				/* Get the Server Public Key from Cert */
+				srvr_pub_pkey = X509_get_pubkey(s->session-> \
+				    sess_cert->peer_pkeys[SSL_PKEY_ECC].x509);
+				if ((srvr_pub_pkey == NULL) ||
+				    (srvr_pub_pkey->type != EVP_PKEY_EC) ||
+				    (srvr_pub_pkey->pkey.ec == NULL))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+					    ERR_R_INTERNAL_ERROR);
+					goto err;
+					}
+
+				tkey = srvr_pub_pkey->pkey.ec;
+				}
+
+			srvr_group   = EC_KEY_get0_group(tkey);
+			srvr_ecpoint = EC_KEY_get0_public_key(tkey);
+
+			if ((srvr_group == NULL) || (srvr_ecpoint == NULL))
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+				    ERR_R_INTERNAL_ERROR);
+				goto err;
+				}
+
+			if ((clnt_ecdh=EC_KEY_new()) == NULL) 
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
+				goto err;
+				}
+
+			if (!EC_KEY_set_group(clnt_ecdh, srvr_group))
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_EC_LIB);
+				goto err;
+				}
+			if (ecdh_clnt_cert) 
+				{ 
+				/* Reuse key info from our certificate
+				 * We only need our private key to perform
+				 * the ECDH computation.
+				 */
+				const BIGNUM *priv_key;
+				tkey = s->cert->key->privatekey->pkey.ec;
+				priv_key = EC_KEY_get0_private_key(tkey);
+				if (priv_key == NULL)
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
+					goto err;
+					}
+				if (!EC_KEY_set_private_key(clnt_ecdh, priv_key))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_EC_LIB);
+					goto err;
+					}
+				}
+			else 
+				{
+				/* Generate a new ECDH key pair */
+				if (!(EC_KEY_generate_key(clnt_ecdh)))
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, ERR_R_ECDH_LIB);
+					goto err;
+					}
+				}
+
+			/* use the 'p' output buffer for the ECDH key, but
+			 * make sure to clear it out afterwards
+			 */
+
+			field_size = EC_GROUP_get_degree(srvr_group);
+			if (field_size <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, 
+				       ERR_R_ECDH_LIB);
+				goto err;
+				}
+			n=ECDH_compute_key(p, (field_size+7)/8, srvr_ecpoint, clnt_ecdh, NULL);
+			if (n <= 0)
+				{
+				SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE, 
+				       ERR_R_ECDH_LIB);
+				goto err;
+				}
+
+			/* generate master key from the result */
+			s->session->master_key_length = s->method->ssl3_enc \
+			    -> generate_master_secret(s, 
+				s->session->master_key,
+				p, n);
+
+			memset(p, 0, n); /* clean up */
+
+			if (ecdh_clnt_cert) 
+				{
+				/* Send empty client key exch message */
+				n = 0;
+				}
+			else 
+				{
+				/* First check the size of encoding and
+				 * allocate memory accordingly.
+				 */
+				encoded_pt_len = 
+				    EC_POINT_point2oct(srvr_group, 
+					EC_KEY_get0_public_key(clnt_ecdh), 
+					POINT_CONVERSION_UNCOMPRESSED, 
+					NULL, 0, NULL);
+
+				encodedPoint = (unsigned char *) 
+				    OPENSSL_malloc(encoded_pt_len * 
+					sizeof(unsigned char)); 
+				bn_ctx = BN_CTX_new();
+				if ((encodedPoint == NULL) || 
+				    (bn_ctx == NULL)) 
+					{
+					SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,ERR_R_MALLOC_FAILURE);
+					goto err;
+					}
+
+				/* Encode the public key */
+				n = EC_POINT_point2oct(srvr_group, 
+				    EC_KEY_get0_public_key(clnt_ecdh), 
+				    POINT_CONVERSION_UNCOMPRESSED, 
+				    encodedPoint, encoded_pt_len, bn_ctx);
+
+				*p = n; /* length of encoded point */
+				/* Encoded point will be copied here */
+				p += 1; 
+				/* copy the point */
+				memcpy((unsigned char *)p, encodedPoint, n);
+				/* increment n to account for length field */
+				n += 1; 
+				}
+
+			/* Free allocated memory */
+			BN_CTX_free(bn_ctx);
+			if (encodedPoint != NULL) OPENSSL_free(encodedPoint);
+			if (clnt_ecdh != NULL) 
+				 EC_KEY_free(clnt_ecdh);
+			EVP_PKEY_free(srvr_pub_pkey);
+			}
+#endif /* !OPENSSL_NO_ECDH */
+		else
+			{
+			ssl3_send_alert(s, SSL3_AL_FATAL,
+			    SSL_AD_HANDSHAKE_FAILURE);
+			SSLerr(SSL_F_SSL3_SEND_CLIENT_KEY_EXCHANGE,
+			    ERR_R_INTERNAL_ERROR);
+			goto err;
+			}
+		
+		*(d++)=SSL3_MT_CLIENT_KEY_EXCHANGE;
+		l2n3(n,d);
+
+		s->state=SSL3_ST_CW_KEY_EXCH_B;
+		/* number of bytes to write */
+		s->init_num=n+4;
+		s->init_off=0;
+		}
+
+	/* SSL3_ST_CW_KEY_EXCH_B */
+	return(ssl3_do_write(s,SSL3_RT_HANDSHAKE));
+err:
+#ifndef OPENSSL_NO_ECDH
+	BN_CTX_free(bn_ctx);
+	if (encodedPoint != NULL) OPENSSL_free(encodedPoint);
+	if (clnt_ecdh != NULL) 
+		EC_KEY_free(clnt_ecdh);
+	EVP_PKEY_free(srvr_pub_pkey);
+#endif
+	return(-1);
+	}",
+3244,"[""CWE-476""]",graphviz,839085f8026afd6f6920a0c31ad2a9d880d97932,839085f8026afd6f6920a0c31ad2a9d880d97932,0,505492,2.485635983948009e+38,15.0,attempted fix for null pointer deference on malformed input,other,"Agraph_t *agroot(void* obj)
+{
+    switch (AGTYPE(obj)) {
+    case AGINEDGE:
+    case AGOUTEDGE:
+	return ((Agedge_t *) obj)->node->root;
+    case AGNODE:
+	return ((Agnode_t *) obj)->root;
+    case AGRAPH:
+	return ((Agraph_t *) obj)->root;
+    default:			/* actually can't occur if only 2 bit tags */
+	agerr(AGERR, ""agroot of a bad object"");
+	return NILgraph;
+    }
+}","Agraph_t *agraphof(void *obj)
+{
+    switch (AGTYPE(obj)) {
+    case AGINEDGE:
+    case AGOUTEDGE:
+	return ((Agedge_t *) obj)->node->root;
+    case AGNODE:
+	return ((Agnode_t *) obj)->root;
+    case AGRAPH:
+	return (Agraph_t *) obj;
+    default:			/* actually can't occur if only 2 bit tags */
+	agerr(AGERR, ""agraphof a bad object"");
+	return NILgraph;
+    }
+}",

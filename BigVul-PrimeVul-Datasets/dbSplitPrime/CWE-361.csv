@@ -1,0 +1,56 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix
+145685,145685,,Remote,Not required,Complete,CVE-2016-1643,https://www.cvedetails.com/cve/CVE-2016-1643/,CWE-361,Medium,Complete,Complete,,2016-03-13,9.3,"The ImageInputType::ensurePrimaryContent function in WebKit/Source/core/html/forms/ImageInputType.cpp in Blink, as used in Google Chrome before 49.0.2623.87, does not properly maintain the user agent shadow DOM, which allows remote attackers to cause a denial of service or possibly have unspecified other impact via vectors that leverage *type confusion.*",2016-12-02,DoS ,0,https://github.com/chromium/chromium/commit/2386a6a49ea992a1e859eb0296c1cc53e5772cdb,2386a6a49ea992a1e859eb0296c1cc53e5772cdb,"ImageInputType::ensurePrimaryContent should recreate UA shadow tree.
+
+Once the fallback shadow tree was created, it was never recreated even if
+ensurePrimaryContent was called.  Such situation happens by updating |src|
+attribute.
+
+BUG=589838
+
+Review URL: https://codereview.chromium.org/1732753004
+
+Cr-Commit-Position: refs/heads/master@{#377804}",0,third_party/WebKit/Source/core/html/forms/ImageInputType.cpp,"{""sha"": ""d08fff37583d05b585cc69ff32455230aa952898"", ""filename"": ""third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp"", ""status"": ""modified"", ""additions"": 13, ""deletions"": 0, ""changes"": 13, ""blob_url"": ""https://github.com/chromium/chromium/blob/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/HTMLInputElementTest.cpp?ref=2386a6a49ea992a1e859eb0296c1cc53e5772cdb"", ""patch"": ""@@ -70,4 +70,17 @@ TEST(HTMLInputElementTest, DefaultToolTip)\n     EXPECT_EQ(String(), inputWithForm->defaultToolTip());\n }\n \n+// crbug.com/589838\n+TEST(HTMLInputElementTest, ImageTypeCrash)\n+{\n+    RefPtrWillBeRawPtr<Document> document = Document::create();\n+    RefPtrWillBeRawPtr<HTMLInputElement> input = HTMLInputElement::create(*document, nullptr, false);\n+    input->setAttribute(HTMLNames::typeAttr, \""image\"");\n+    input->ensureFallbackContent();\n+    // Make sure ensurePrimaryContent() recreates UA shadow tree, and updating\n+    // |value| doesn't crash.\n+    input->ensurePrimaryContent();\n+    input->setAttribute(HTMLNames::valueAttr, \""aaa\"");\n+}\n+\n } // namespace blink""}<_**next**_>{""sha"": ""e578147d818d6c5adfce99d7761876ee7ad4d738"", ""filename"": ""third_party/WebKit/Source/core/html/forms/ImageInputType.cpp"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 0, ""changes"": 3, ""blob_url"": ""https://github.com/chromium/chromium/blob/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/forms/ImageInputType.cpp"", ""raw_url"": ""https://github.com/chromium/chromium/raw/2386a6a49ea992a1e859eb0296c1cc53e5772cdb/third_party/WebKit/Source/core/html/forms/ImageInputType.cpp"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/third_party/WebKit/Source/core/html/forms/ImageInputType.cpp?ref=2386a6a49ea992a1e859eb0296c1cc53e5772cdb"", ""patch"": ""@@ -271,6 +271,9 @@ void ImageInputType::ensurePrimaryContent()\n     if (!m_useFallbackContent)\n         return;\n     m_useFallbackContent = false;\n+    if (ShadowRoot* root = element().userAgentShadowRoot())\n+        root->removeChildren();\n+    createShadowSubtree();\n     reattachFallbackContent();\n }\n ""}","void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+","void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+",C,,,,"@@ -271,6 +271,9 @@ void ImageInputType::ensurePrimaryContent()
+     if (!m_useFallbackContent)
+         return;
+     m_useFallbackContent = false;
++    if (ShadowRoot* root = element().userAgentShadowRoot())
++        root->removeChildren();
++    createShadowSubtree();
+     reattachFallbackContent();
+ }
+ ",Chrome,2386a6a49ea992a1e859eb0296c1cc53e5772cdb,480e2efb79e326b1bd940a795eda5f62711bfc5e,0,"void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+",145685,"void ImageInputType::ensurePrimaryContent()
+{
+     if (!m_useFallbackContent)
+         return;
+     m_useFallbackContent = false;
+     reattachFallbackContent();
+ }
+","void ImageInputType::ensureFallbackContent()
+{
+    if (m_useFallbackContent)
+        return;
+    setUseFallbackContent();
+    reattachFallbackContent();
+}
+"

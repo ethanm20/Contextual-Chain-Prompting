@@ -1,0 +1,180 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+554,"""NVD-CWE-Other""",openrc,bb8334104baf4d5a4a442a8647fb9204738f2204,bb8334104baf4d5a4a442a8647fb9204738f2204,0,522175,4.6465707499522e+37,,,other,"static char *clean_path(char *path)
+{
+	char *ch;
+	char *ch2;
+	char *str;
+	str = xmalloc(strlen(path));
+	ch = path;
+	ch2 = str;
+	while (true) {
+		*ch2 = *ch;
+		ch++;
+		ch2++;
+		if (!*(ch-1))
+			break;
+		while (*(ch - 1) == '/' && *ch == '/')
+			ch++;
+	}
+	/* get rid of trailing / characters */
+	while ((ch = strrchr(str, '/'))) {
+		if (ch == str)
+			break;
+		if (!*(ch+1))
+			*ch = 0;
+		else
+			break;
+	}
+	return str;
+}","static char *clean_path(char *path)
+{
+	char *ch;
+	char *ch2;
+	char *str;
+	str = xmalloc(strlen(path) + 1);
+	ch = path;
+	ch2 = str;
+	while (true) {
+		*ch2 = *ch;
+		ch++;
+		ch2++;
+		if (!*(ch-1))
+			break;
+		while (*(ch - 1) == '/' && *ch == '/')
+			ch++;
+	}
+	/* get rid of trailing / characters */
+	while ((ch = strrchr(str, '/'))) {
+		if (ch == str)
+			break;
+		if (!*(ch+1))
+			*ch = 0;
+		else
+			break;
+	}
+	return str;
+}",
+2685,"""NVD-CWE-Other""",kde1-kdebase,04906bd5de2f220bf100b605dad37b4a1d9a91a6,04906bd5de2f220bf100b605dad37b4a1d9a91a6,0,515830,1.397553038089332e+38,,,other,"void KPasswordDlg::keyPressed( QKeyEvent *e )
+{
+  static bool waitForAuthentication = false;
+  if (!waitForAuthentication) {
+	switch ( e->key() )
+	{
+		case Key_Backspace:
+			{
+				int len = password.length();
+				if ( len ) {
+					password.truncate( len - 1 );
+					if( stars )
+						showStars();
+				}
+			}
+			break;
+
+		case Key_Return:
+			waitForAuthentication = true;
+			if ( tryPassword() )
+				emit passOk();
+			else
+			{
+				label->setText( glocale->translate(""Failed"") );
+				password = """";
+				timerMode = 1;
+				timer.start( 1500, TRUE );
+			}
+			waitForAuthentication = false;
+			break;
+
+		case Key_Escape:
+			emit passCancel();
+			break;
+
+		default:
+			if ( password.length() < MAX_PASSWORD_LENGTH )
+			{
+				password += (char)e->ascii();
+				if( stars )
+					showStars();
+				timer.changeInterval( 10000 );
+			}
+	}
+  }
+}","void KPasswordDlg::keyPressed( QKeyEvent *e )
+{
+  static bool waitForAuthentication = false;
+  if (!waitForAuthentication) {
+	switch ( e->key() )
+	{
+		case Key_Backspace:
+			{
+				int len = password.length();
+				if ( len ) {
+					password.truncate( len - 1 );
+					if( stars )
+						showStars();
+				}
+			}
+			break;
+
+		case Key_Return:
+            timer.stop();
+			waitForAuthentication = true;
+			if ( tryPassword() )
+				emit passOk();
+			else
+			{
+				label->setText( glocale->translate(""Failed"") );
+				password = """";
+				timerMode = 1;
+				timer.start( 1500, TRUE );
+			}
+			waitForAuthentication = false;
+			break;
+
+		case Key_Escape:
+			emit passCancel();
+			break;
+
+		default:
+			if ( password.length() < MAX_PASSWORD_LENGTH )
+			{
+				password += (char)e->ascii();
+				if( stars )
+					showStars();
+				timer.changeInterval( 10000 );
+			}
+	}
+  }
+}",
+2692,"""NVD-CWE-Other""",k4dirstat,1ad2e96d73fa06cd9be0f3749b337c03575016aa,1ad2e96d73fa06cd9be0f3749b337c03575016aa,0,516494,9.745111594754518e+37,,,other,"KCleanup::expandVariables( const KFileInfo *	item,
+			   const QString &	unexpanded ) const
+{
+    QString expanded = unexpanded;
+
+    expanded.replace( QRegExp( ""%p"" ),
+		      ""'"" + QString::fromLocal8Bit( item->url() )  + ""'"" );
+    expanded.replace( QRegExp( ""%n"" ),
+		      ""'"" + QString::fromLocal8Bit( item->name() ) + ""'"" );
+
+   // if ( KDE::versionMajor() >= 3 && KDE::versionMinor() >= 4 )
+	expanded.replace( QRegExp( ""%t"" ), ""trash:/"" );
+    //else
+	//expanded.replace( QRegExp( ""%t"" ), KGlobalSettings::trashPath() );
+
+    return expanded;
+}","KCleanup::expandVariables( const KFileInfo *	item,
+			   const QString &	unexpanded ) const
+{
+    QString expanded = unexpanded;
+    QString url = QString::fromLocal8Bit( item->url() ).replace(""'"", ""'\\''"");
+    expanded.replace( QRegExp( ""%p"" ), ""'"" + url + ""'"" );
+    QString name = QString::fromLocal8Bit( item->name() ).replace(""'"", ""'\\''"");
+    expanded.replace( QRegExp( ""%n"" ), ""'"" + name + ""'"" );
+
+   // if ( KDE::versionMajor() >= 3 && KDE::versionMinor() >= 4 )
+	expanded.replace( QRegExp( ""%t"" ), ""trash:/"" );
+    //else
+	//expanded.replace( QRegExp( ""%t"" ), KGlobalSettings::trashPath() );
+
+    return expanded;
+}",

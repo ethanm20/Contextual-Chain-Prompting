@@ -1,0 +1,1610 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2444,"[""CWE-399""]",linux-2.6,36ca34cc3b8335eb1fe8bd9a1d0a2592980c3f02,36ca34cc3b8335eb1fe8bd9a1d0a2592980c3f02,0,487908,3.2882724212671024e+37,45.0,"sit: Add missing kfree_skb() on pskb_may_pull() failure.
+
+Noticed by Paul Marks <paul@pmarks.net>.
+
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int ipip6_rcv(struct sk_buff *skb)
+{
+	struct iphdr *iph;
+	struct ip_tunnel *tunnel;
+
+	if (!pskb_may_pull(skb, sizeof(struct ipv6hdr)))
+		goto out;
+
+	iph = ip_hdr(skb);
+
+	read_lock(&ipip6_lock);
+	if ((tunnel = ipip6_tunnel_lookup(dev_net(skb->dev),
+					iph->saddr, iph->daddr)) != NULL) {
+		secpath_reset(skb);
+		skb->mac_header = skb->network_header;
+		skb_reset_network_header(skb);
+		IPCB(skb)->flags = 0;
+		skb->protocol = htons(ETH_P_IPV6);
+		skb->pkt_type = PACKET_HOST;
+
+		if ((tunnel->dev->priv_flags & IFF_ISATAP) &&
+		    !isatap_chksrc(skb, iph, tunnel)) {
+			tunnel->stat.rx_errors++;
+			read_unlock(&ipip6_lock);
+			kfree_skb(skb);
+			return 0;
+		}
+		tunnel->stat.rx_packets++;
+		tunnel->stat.rx_bytes += skb->len;
+		skb->dev = tunnel->dev;
+		dst_release(skb->dst);
+		skb->dst = NULL;
+		nf_reset(skb);
+		ipip6_ecn_decapsulate(iph, skb);
+		netif_rx(skb);
+		read_unlock(&ipip6_lock);
+		return 0;
+	}
+
+	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
+	kfree_skb(skb);
+	read_unlock(&ipip6_lock);
+out:
+	return 0;
+}","static int ipip6_rcv(struct sk_buff *skb)
+{
+	struct iphdr *iph;
+	struct ip_tunnel *tunnel;
+
+	if (!pskb_may_pull(skb, sizeof(struct ipv6hdr)))
+		goto out;
+
+	iph = ip_hdr(skb);
+
+	read_lock(&ipip6_lock);
+	if ((tunnel = ipip6_tunnel_lookup(dev_net(skb->dev),
+					iph->saddr, iph->daddr)) != NULL) {
+		secpath_reset(skb);
+		skb->mac_header = skb->network_header;
+		skb_reset_network_header(skb);
+		IPCB(skb)->flags = 0;
+		skb->protocol = htons(ETH_P_IPV6);
+		skb->pkt_type = PACKET_HOST;
+
+		if ((tunnel->dev->priv_flags & IFF_ISATAP) &&
+		    !isatap_chksrc(skb, iph, tunnel)) {
+			tunnel->stat.rx_errors++;
+			read_unlock(&ipip6_lock);
+			kfree_skb(skb);
+			return 0;
+		}
+		tunnel->stat.rx_packets++;
+		tunnel->stat.rx_bytes += skb->len;
+		skb->dev = tunnel->dev;
+		dst_release(skb->dst);
+		skb->dst = NULL;
+		nf_reset(skb);
+		ipip6_ecn_decapsulate(iph, skb);
+		netif_rx(skb);
+		read_unlock(&ipip6_lock);
+		return 0;
+	}
+
+	icmp_send(skb, ICMP_DEST_UNREACH, ICMP_PORT_UNREACH, 0);
+	read_unlock(&ipip6_lock);
+out:
+	kfree_skb(skb);
+	return 0;
+}",
+2459,"[""CWE-399""]",linux-2.6,6a860c979b35469e4d77da781a96bdb2ca05ae64,6a860c979b35469e4d77da781a96bdb2ca05ae64,0,489059,1.7281641775392434e+38,100.0,"splice: fix bad unlock_page() in error case
+
+If add_to_page_cache_lru() fails, the page will not be locked. But
+splice jumps to an error path that does a page release and unlock,
+causing a BUG() in unlock_page().
+
+Fix this by adding one more label that just releases the page. This bug
+was actually triggered on EL5 by gurudas pai <gurudas.pai@oracle.com>
+using fio.
+
+Signed-off-by: Jens Axboe <jens.axboe@oracle.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"static int pipe_to_file(struct pipe_inode_info *pipe, struct pipe_buffer *buf,
+			struct splice_desc *sd)
+{
+	struct file *file = sd->u.file;
+	struct address_space *mapping = file->f_mapping;
+	unsigned int offset, this_len;
+	struct page *page;
+	pgoff_t index;
+	int ret;
+
+	/*
+	 * make sure the data in this buffer is uptodate
+	 */
+	ret = buf->ops->confirm(pipe, buf);
+	if (unlikely(ret))
+		return ret;
+
+	index = sd->pos >> PAGE_CACHE_SHIFT;
+	offset = sd->pos & ~PAGE_CACHE_MASK;
+
+	this_len = sd->len;
+	if (this_len + offset > PAGE_CACHE_SIZE)
+		this_len = PAGE_CACHE_SIZE - offset;
+
+find_page:
+	page = find_lock_page(mapping, index);
+	if (!page) {
+		ret = -ENOMEM;
+		page = page_cache_alloc_cold(mapping);
+		if (unlikely(!page))
+			goto out_ret;
+
+		/*
+		 * This will also lock the page
+		 */
+		ret = add_to_page_cache_lru(page, mapping, index,
+					    GFP_KERNEL);
+		if (unlikely(ret))
+			goto out;
+	}
+
+	ret = mapping->a_ops->prepare_write(file, page, offset, offset+this_len);
+	if (unlikely(ret)) {
+		loff_t isize = i_size_read(mapping->host);
+
+		if (ret != AOP_TRUNCATED_PAGE)
+			unlock_page(page);
+		page_cache_release(page);
+		if (ret == AOP_TRUNCATED_PAGE)
+			goto find_page;
+
+		/*
+		 * prepare_write() may have instantiated a few blocks
+		 * outside i_size.  Trim these off again.
+		 */
+		if (sd->pos + this_len > isize)
+			vmtruncate(mapping->host, isize);
+
+		goto out_ret;
+	}
+
+	if (buf->page != page) {
+		/*
+		 * Careful, ->map() uses KM_USER0!
+		 */
+		char *src = buf->ops->map(pipe, buf, 1);
+		char *dst = kmap_atomic(page, KM_USER1);
+
+		memcpy(dst + offset, src + buf->offset, this_len);
+		flush_dcache_page(page);
+		kunmap_atomic(dst, KM_USER1);
+		buf->ops->unmap(pipe, buf, src);
+	}
+
+	ret = mapping->a_ops->commit_write(file, page, offset, offset+this_len);
+	if (ret) {
+		if (ret == AOP_TRUNCATED_PAGE) {
+			page_cache_release(page);
+			goto find_page;
+		}
+		if (ret < 0)
+			goto out;
+		/*
+		 * Partial write has happened, so 'ret' already initialized by
+		 * number of bytes written, Where is nothing we have to do here.
+		 */
+	} else
+		ret = this_len;
+	/*
+	 * Return the number of bytes written and mark page as
+	 * accessed, we are now done!
+	 */
+	mark_page_accessed(page);
+out:
+	page_cache_release(page);
+	unlock_page(page);
+out_ret:
+	return ret;
+}","static int pipe_to_file(struct pipe_inode_info *pipe, struct pipe_buffer *buf,
+			struct splice_desc *sd)
+{
+	struct file *file = sd->u.file;
+	struct address_space *mapping = file->f_mapping;
+	unsigned int offset, this_len;
+	struct page *page;
+	pgoff_t index;
+	int ret;
+
+	/*
+	 * make sure the data in this buffer is uptodate
+	 */
+	ret = buf->ops->confirm(pipe, buf);
+	if (unlikely(ret))
+		return ret;
+
+	index = sd->pos >> PAGE_CACHE_SHIFT;
+	offset = sd->pos & ~PAGE_CACHE_MASK;
+
+	this_len = sd->len;
+	if (this_len + offset > PAGE_CACHE_SIZE)
+		this_len = PAGE_CACHE_SIZE - offset;
+
+find_page:
+	page = find_lock_page(mapping, index);
+	if (!page) {
+		ret = -ENOMEM;
+		page = page_cache_alloc_cold(mapping);
+		if (unlikely(!page))
+			goto out_ret;
+
+		/*
+		 * This will also lock the page
+		 */
+		ret = add_to_page_cache_lru(page, mapping, index,
+					    GFP_KERNEL);
+		if (unlikely(ret))
+			goto out_release;
+	}
+
+	ret = mapping->a_ops->prepare_write(file, page, offset, offset+this_len);
+	if (unlikely(ret)) {
+		loff_t isize = i_size_read(mapping->host);
+
+		if (ret != AOP_TRUNCATED_PAGE)
+			unlock_page(page);
+		page_cache_release(page);
+		if (ret == AOP_TRUNCATED_PAGE)
+			goto find_page;
+
+		/*
+		 * prepare_write() may have instantiated a few blocks
+		 * outside i_size.  Trim these off again.
+		 */
+		if (sd->pos + this_len > isize)
+			vmtruncate(mapping->host, isize);
+
+		goto out_ret;
+	}
+
+	if (buf->page != page) {
+		/*
+		 * Careful, ->map() uses KM_USER0!
+		 */
+		char *src = buf->ops->map(pipe, buf, 1);
+		char *dst = kmap_atomic(page, KM_USER1);
+
+		memcpy(dst + offset, src + buf->offset, this_len);
+		flush_dcache_page(page);
+		kunmap_atomic(dst, KM_USER1);
+		buf->ops->unmap(pipe, buf, src);
+	}
+
+	ret = mapping->a_ops->commit_write(file, page, offset, offset+this_len);
+	if (ret) {
+		if (ret == AOP_TRUNCATED_PAGE) {
+			page_cache_release(page);
+			goto find_page;
+		}
+		if (ret < 0)
+			goto out;
+		/*
+		 * Partial write has happened, so 'ret' already initialized by
+		 * number of bytes written, Where is nothing we have to do here.
+		 */
+	} else
+		ret = this_len;
+	/*
+	 * Return the number of bytes written and mark page as
+	 * accessed, we are now done!
+	 */
+	mark_page_accessed(page);
+out:
+	unlock_page(page);
+out_release:
+	page_cache_release(page);
+out_ret:
+	return ret;
+}",
+2467,"[""CWE-399""]",linux-2.6,01a1a3cc1e3fbe718bd06a2a5d4d1a2d0fb4d7d9,01a1a3cc1e3fbe718bd06a2a5d4d1a2d0fb4d7d9,0,489414,3.9700750793754413e+37,153.0,"V4L/DVB (9624): CVE-2008-5033: fix OOPS on tvaudio when controlling bass/treble
+
+This bug were supposed to be fixed by 5ba2f67afb02c5302b2898949ed6fc3b3d37dcf1,
+where a call to NULL happens.
+
+Not all tvaudio chips allow controlling bass/treble. So, the driver
+has a table with a flag to indicate if the chip does support it.
+
+Unfortunately, the handling of this logic were broken for a very long
+time (probably since the first module version). Due to that, an OOPS
+were generated for devices that don't support bass/treble.
+
+This were the resulting OOPS message before the patch, with debug messages
+enabled:
+
+tvaudio' 1-005b: VIDIOC_S_CTRL
+BUG: unable to handle kernel NULL pointer dereference at 00000000
+IP: [<00000000>]
+*pde = 22fda067 *pte = 00000000
+Oops: 0000 [#1] SMP
+Modules linked in: snd_hda_intel snd_seq_dummy snd_seq_oss snd_seq_midi_event snd_seq snd_seq_device
+snd_pcm_oss snd_mixer_oss snd_pcm snd_timer snd_hwdep snd soundcore tuner_simple tuner_types tea5767 tuner
+tvaudio bttv bridgebnep rfcomm l2cap bluetooth it87 hwmon_vid hwmon fuse sunrpc ipt_REJECT
+nf_conntrack_ipv4 iptable_filter ip_tables ip6t_REJECT xt_tcpudp nf_conntrack_ipv6 xt_state nf_conntrack
+ip6table_filter ip6_tables x_tables ipv6 dm_mirrordm_multipath dm_mod configfs videodev v4l1_compat
+ir_common 8139cp compat_ioctl32 v4l2_common 8139too videobuf_dma_sg videobuf_core mii btcx_risc tveeprom
+i915 button snd_page_alloc serio_raw drm pcspkr i2c_algo_bit i2c_i801 i2c_core iTCO_wdt
+iTCO_vendor_support sr_mod cdrom sg ata_generic pata_acpi ata_piix libata sd_mod scsi_mod ext3 jbdmbcache
+uhci_hcd ohci_hcd ehci_hcd [last unloaded: soundcore]
+
+Pid: 15413, comm: qv4l2 Not tainted (2.6.25.14-108.fc9.i686 #1)
+EIP: 0060:[<00000000>] EFLAGS: 00210246 CPU: 0
+EIP is at 0x0
+EAX: 00008000 EBX: ebd21600 ECX: e2fd9ec4 EDX: 00200046
+ESI: f8c0f0c4 EDI: f8c0f0c4 EBP: e2fd9d50 ESP: e2fd9d2c
+ DS: 007b ES: 007b FS: 00d8 GS: 0033 SS: 0068
+Process qv4l2 (pid: 15413, ti=e2fd9000 task=ebe44000 task.ti=e2fd9000)
+Stack: f8c0c6ae e2ff2a00 00000d00 e2fd9ec4 ebc4e000 e2fd9d5c f8c0c448 00000000
+       f899c12a e2fd9d5c f899c154 e2fd9d68 e2fd9d80 c0560185 e2fd9d88 f8f3e1d8
+       f8f3e1dc ebc4e034 f8f3e18c e2fd9ec4 00000000 e2fd9d90 f899c286 c008561c
+Call Trace:
+ [<f8c0c6ae>] ? chip_command+0x266/0x4b6 [tvaudio]
+ [<f8c0c448>] ? chip_command+0x0/0x4b6 [tvaudio]
+ [<f899c12a>] ? i2c_cmd+0x0/0x2f [i2c_core]
+ [<f899c154>] ? i2c_cmd+0x2a/0x2f [i2c_core]
+ [<c0560185>] ? device_for_each_child+0x21/0x49
+ [<f899c286>] ? i2c_clients_command+0x1c/0x1e [i2c_core]
+ [<f8f283d8>] ? bttv_call_i2c_clients+0x14/0x16 [bttv]
+ [<f8f23601>] ? bttv_s_ctrl+0x1bc/0x313 [bttv]
+ [<f8f23445>] ? bttv_s_ctrl+0x0/0x313 [bttv]
+ [<f8b6096d>] ? __video_do_ioctl+0x1f84/0x3726 [videodev]
+ [<c05abb4e>] ? sock_aio_write+0x100/0x10d
+ [<c041b23e>] ? kmap_atomic_prot+0x1dd/0x1df
+ [<c043a0c9>] ? enqueue_hrtimer+0xc2/0xcd
+ [<c04f4fa4>] ? copy_from_user+0x39/0x121
+ [<f8b622b9>] ? __video_ioctl2+0x1aa/0x24a [videodev]
+ [<c04054fd>] ? do_notify_resume+0x768/0x795
+ [<c043c0f7>] ? getnstimeofday+0x34/0xd1
+ [<c0437b77>] ? autoremove_wake_function+0x0/0x33
+ [<f8b62368>] ? video_ioctl2+0xf/0x13 [videodev]
+ [<c048c6f0>] ? vfs_ioctl+0x50/0x69
+ [<c048c942>] ? do_vfs_ioctl+0x239/0x24c
+ [<c048c995>] ? sys_ioctl+0x40/0x5b
+ [<c0405bf2>] ? syscall_call+0x7/0xb
+ [<c0620000>] ? cpuid4_cache_sysfs_exit+0x3d/0x69
+ =======================
+Code:  Bad EIP value.
+EIP: [<00000000>] 0x0 SS:ESP 0068:e2fd9d2c
+
+Signed-off-by: Mauro Carvalho Chehab <mchehab@redhat.com>",other,"static int chip_command(struct i2c_client *client,
+			unsigned int cmd, void *arg)
+{
+	struct CHIPSTATE *chip = i2c_get_clientdata(client);
+	struct CHIPDESC  *desc = chip->desc;
+
+	if (debug > 0) {
+		v4l_i2c_print_ioctl(chip->c, cmd);
+		printk(""\n"");
+	}
+
+	switch (cmd) {
+	case AUDC_SET_RADIO:
+		chip->radio = 1;
+		chip->watch_stereo = 0;
+		/* del_timer(&chip->wt); */
+		break;
+	/* --- v4l ioctls --- */
+	/* take care: bttv does userspace copying, we'll get a
+	kernel pointer here... */
+	case VIDIOC_QUERYCTRL:
+	{
+		struct v4l2_queryctrl *qc = arg;
+
+		switch (qc->id) {
+			case V4L2_CID_AUDIO_MUTE:
+				break;
+			case V4L2_CID_AUDIO_VOLUME:
+			case V4L2_CID_AUDIO_BALANCE:
+				if (!(desc->flags & CHIP_HAS_VOLUME))
+					return -EINVAL;
+				break;
+			case V4L2_CID_AUDIO_BASS:
+			case V4L2_CID_AUDIO_TREBLE:
+				if (desc->flags & CHIP_HAS_BASSTREBLE)
+					return -EINVAL;
+				break;
+			default:
+				return -EINVAL;
+		}
+		return v4l2_ctrl_query_fill_std(qc);
+	}
+	case VIDIOC_S_CTRL:
+		return tvaudio_set_ctrl(chip, arg);
+
+	case VIDIOC_G_CTRL:
+		return tvaudio_get_ctrl(chip, arg);
+	case VIDIOC_INT_G_AUDIO_ROUTING:
+	{
+		struct v4l2_routing *rt = arg;
+
+		rt->input = chip->input;
+		rt->output = 0;
+		break;
+	}
+	case VIDIOC_INT_S_AUDIO_ROUTING:
+	{
+		struct v4l2_routing *rt = arg;
+
+		if (!(desc->flags & CHIP_HAS_INPUTSEL) || rt->input >= 4)
+				return -EINVAL;
+		/* There are four inputs: tuner, radio, extern and intern. */
+		chip->input = rt->input;
+		if (chip->muted)
+			break;
+		chip_write_masked(chip, desc->inputreg,
+				desc->inputmap[chip->input], desc->inputmask);
+		break;
+	}
+	case VIDIOC_S_TUNER:
+	{
+		struct v4l2_tuner *vt = arg;
+		int mode = 0;
+
+		if (chip->radio)
+			break;
+		switch (vt->audmode) {
+		case V4L2_TUNER_MODE_MONO:
+		case V4L2_TUNER_MODE_STEREO:
+		case V4L2_TUNER_MODE_LANG1:
+		case V4L2_TUNER_MODE_LANG2:
+			mode = vt->audmode;
+			break;
+		case V4L2_TUNER_MODE_LANG1_LANG2:
+			mode = V4L2_TUNER_MODE_STEREO;
+			break;
+		default:
+			return -EINVAL;
+		}
+		chip->audmode = vt->audmode;
+
+		if (desc->setmode && mode) {
+			chip->watch_stereo = 0;
+			/* del_timer(&chip->wt); */
+			chip->mode = mode;
+			desc->setmode(chip, mode);
+		}
+		break;
+	}
+	case VIDIOC_G_TUNER:
+	{
+		struct v4l2_tuner *vt = arg;
+		int mode = V4L2_TUNER_MODE_MONO;
+
+		if (chip->radio)
+			break;
+		vt->audmode = chip->audmode;
+		vt->rxsubchans = 0;
+		vt->capability = V4L2_TUNER_CAP_STEREO |
+			V4L2_TUNER_CAP_LANG1 | V4L2_TUNER_CAP_LANG2;
+
+		if (desc->getmode)
+			mode = desc->getmode(chip);
+
+		if (mode & V4L2_TUNER_MODE_MONO)
+			vt->rxsubchans |= V4L2_TUNER_SUB_MONO;
+		if (mode & V4L2_TUNER_MODE_STEREO)
+			vt->rxsubchans |= V4L2_TUNER_SUB_STEREO;
+		/* Note: for SAP it should be mono/lang2 or stereo/lang2.
+		   When this module is converted fully to v4l2, then this
+		   should change for those chips that can detect SAP. */
+		if (mode & V4L2_TUNER_MODE_LANG1)
+			vt->rxsubchans = V4L2_TUNER_SUB_LANG1 |
+					 V4L2_TUNER_SUB_LANG2;
+		break;
+	}
+	case VIDIOC_S_STD:
+		chip->radio = 0;
+		break;
+	case VIDIOC_S_FREQUENCY:
+		chip->mode = 0; /* automatic */
+
+		/* For chips that provide getmode and setmode, and doesn't
+		   automatically follows the stereo carrier, a kthread is
+		   created to set the audio standard. In this case, when then
+		   the video channel is changed, tvaudio starts on MONO mode.
+		   After waiting for 2 seconds, the kernel thread is called,
+		   to follow whatever audio standard is pointed by the
+		   audio carrier.
+		 */
+		if (chip->thread) {
+			desc->setmode(chip,V4L2_TUNER_MODE_MONO);
+			if (chip->prevmode != V4L2_TUNER_MODE_MONO)
+				chip->prevmode = -1; /* reset previous mode */
+			mod_timer(&chip->wt, jiffies+msecs_to_jiffies(2000));
+		}
+		break;
+
+	case VIDIOC_G_CHIP_IDENT:
+		return v4l2_chip_ident_i2c_client(client, arg, V4L2_IDENT_TVAUDIO, 0);
+	}
+	return 0;
+}","static int chip_command(struct i2c_client *client,
+			unsigned int cmd, void *arg)
+{
+	struct CHIPSTATE *chip = i2c_get_clientdata(client);
+	struct CHIPDESC  *desc = chip->desc;
+
+	if (debug > 0) {
+		v4l_i2c_print_ioctl(chip->c, cmd);
+		printk(""\n"");
+	}
+
+	switch (cmd) {
+	case AUDC_SET_RADIO:
+		chip->radio = 1;
+		chip->watch_stereo = 0;
+		/* del_timer(&chip->wt); */
+		break;
+	/* --- v4l ioctls --- */
+	/* take care: bttv does userspace copying, we'll get a
+	kernel pointer here... */
+	case VIDIOC_QUERYCTRL:
+	{
+		struct v4l2_queryctrl *qc = arg;
+
+		switch (qc->id) {
+			case V4L2_CID_AUDIO_MUTE:
+				break;
+			case V4L2_CID_AUDIO_VOLUME:
+			case V4L2_CID_AUDIO_BALANCE:
+				if (!(desc->flags & CHIP_HAS_VOLUME))
+					return -EINVAL;
+				break;
+			case V4L2_CID_AUDIO_BASS:
+			case V4L2_CID_AUDIO_TREBLE:
+				if (!(desc->flags & CHIP_HAS_BASSTREBLE))
+					return -EINVAL;
+				break;
+			default:
+				return -EINVAL;
+		}
+		return v4l2_ctrl_query_fill_std(qc);
+	}
+	case VIDIOC_S_CTRL:
+		return tvaudio_set_ctrl(chip, arg);
+
+	case VIDIOC_G_CTRL:
+		return tvaudio_get_ctrl(chip, arg);
+	case VIDIOC_INT_G_AUDIO_ROUTING:
+	{
+		struct v4l2_routing *rt = arg;
+
+		rt->input = chip->input;
+		rt->output = 0;
+		break;
+	}
+	case VIDIOC_INT_S_AUDIO_ROUTING:
+	{
+		struct v4l2_routing *rt = arg;
+
+		if (!(desc->flags & CHIP_HAS_INPUTSEL) || rt->input >= 4)
+				return -EINVAL;
+		/* There are four inputs: tuner, radio, extern and intern. */
+		chip->input = rt->input;
+		if (chip->muted)
+			break;
+		chip_write_masked(chip, desc->inputreg,
+				desc->inputmap[chip->input], desc->inputmask);
+		break;
+	}
+	case VIDIOC_S_TUNER:
+	{
+		struct v4l2_tuner *vt = arg;
+		int mode = 0;
+
+		if (chip->radio)
+			break;
+		switch (vt->audmode) {
+		case V4L2_TUNER_MODE_MONO:
+		case V4L2_TUNER_MODE_STEREO:
+		case V4L2_TUNER_MODE_LANG1:
+		case V4L2_TUNER_MODE_LANG2:
+			mode = vt->audmode;
+			break;
+		case V4L2_TUNER_MODE_LANG1_LANG2:
+			mode = V4L2_TUNER_MODE_STEREO;
+			break;
+		default:
+			return -EINVAL;
+		}
+		chip->audmode = vt->audmode;
+
+		if (desc->setmode && mode) {
+			chip->watch_stereo = 0;
+			/* del_timer(&chip->wt); */
+			chip->mode = mode;
+			desc->setmode(chip, mode);
+		}
+		break;
+	}
+	case VIDIOC_G_TUNER:
+	{
+		struct v4l2_tuner *vt = arg;
+		int mode = V4L2_TUNER_MODE_MONO;
+
+		if (chip->radio)
+			break;
+		vt->audmode = chip->audmode;
+		vt->rxsubchans = 0;
+		vt->capability = V4L2_TUNER_CAP_STEREO |
+			V4L2_TUNER_CAP_LANG1 | V4L2_TUNER_CAP_LANG2;
+
+		if (desc->getmode)
+			mode = desc->getmode(chip);
+
+		if (mode & V4L2_TUNER_MODE_MONO)
+			vt->rxsubchans |= V4L2_TUNER_SUB_MONO;
+		if (mode & V4L2_TUNER_MODE_STEREO)
+			vt->rxsubchans |= V4L2_TUNER_SUB_STEREO;
+		/* Note: for SAP it should be mono/lang2 or stereo/lang2.
+		   When this module is converted fully to v4l2, then this
+		   should change for those chips that can detect SAP. */
+		if (mode & V4L2_TUNER_MODE_LANG1)
+			vt->rxsubchans = V4L2_TUNER_SUB_LANG1 |
+					 V4L2_TUNER_SUB_LANG2;
+		break;
+	}
+	case VIDIOC_S_STD:
+		chip->radio = 0;
+		break;
+	case VIDIOC_S_FREQUENCY:
+		chip->mode = 0; /* automatic */
+
+		/* For chips that provide getmode and setmode, and doesn't
+		   automatically follows the stereo carrier, a kthread is
+		   created to set the audio standard. In this case, when then
+		   the video channel is changed, tvaudio starts on MONO mode.
+		   After waiting for 2 seconds, the kernel thread is called,
+		   to follow whatever audio standard is pointed by the
+		   audio carrier.
+		 */
+		if (chip->thread) {
+			desc->setmode(chip,V4L2_TUNER_MODE_MONO);
+			if (chip->prevmode != V4L2_TUNER_MODE_MONO)
+				chip->prevmode = -1; /* reset previous mode */
+			mod_timer(&chip->wt, jiffies+msecs_to_jiffies(2000));
+		}
+		break;
+
+	case VIDIOC_G_CHIP_IDENT:
+		return v4l2_chip_ident_i2c_client(client, arg, V4L2_IDENT_TVAUDIO, 0);
+	}
+	return 0;
+}",
+2470,"[""CWE-399""]",linux-2.6,0d54ee1c7850a954026deec4cd4885f331da35cc,0d54ee1c7850a954026deec4cd4885f331da35cc,0,489765,1.807227605675219e+38,23.0,"security: introduce missing kfree
+
+Plug this leak.
+
+Acked-by: David Howells <dhowells@redhat.com>
+Cc: James Morris <jmorris@namei.org>
+Cc: <stable@kernel.org>
+Signed-off-by: Vegard Nossum <vegard.nossum@gmail.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"long keyctl_join_session_keyring(const char __user *_name)
+{
+	char *name;
+	long ret;
+
+	/* fetch the name from userspace */
+	name = NULL;
+	if (_name) {
+		name = strndup_user(_name, PAGE_SIZE);
+		if (IS_ERR(name)) {
+			ret = PTR_ERR(name);
+			goto error;
+		}
+	}
+
+	/* join the session */
+	ret = join_session_keyring(name);
+
+ error:
+	return ret;
+
+} /* end keyctl_join_session_keyring() */","long keyctl_join_session_keyring(const char __user *_name)
+{
+	char *name;
+	long ret;
+
+	/* fetch the name from userspace */
+	name = NULL;
+	if (_name) {
+		name = strndup_user(_name, PAGE_SIZE);
+		if (IS_ERR(name)) {
+			ret = PTR_ERR(name);
+			goto error;
+		}
+	}
+
+	/* join the session */
+	ret = join_session_keyring(name);
+	kfree(name);
+
+ error:
+	return ret;
+
+} /* end keyctl_join_session_keyring() */",
+2474,"[""CWE-399""]",linux-2.6,06a279d636734da32bb62dd2f7b0ade666f65d7c,06a279d636734da32bb62dd2f7b0ade666f65d7c,0,489935,1.9315101411447128e+38,8.0,"ext4: only use i_size_high for regular files
+
+Directories are not allowed to be bigger than 2GB, so don't use
+i_size_high for anything other than regular files.  E2fsck should
+complain about these inodes, but the simplest thing to do for the
+kernel is to only use i_size_high for regular files.
+
+This prevents an intentially corrupted filesystem from causing the
+kernel to burn a huge amount of CPU and issuing error messages such
+as:
+
+EXT4-fs warning (device loop0): ext4_block_to_path: block 135090028 > max
+
+Thanks to David Maciejak from Fortinet's FortiGuard Global Security
+Research Team for reporting this issue.
+
+http://bugzilla.kernel.org/show_bug.cgi?id=12375
+
+Signed-off-by: ""Theodore Ts'o"" <tytso@mit.edu>
+Cc: stable@kernel.org",other,"
+static inline loff_t ext4_isize(struct ext4_inode *raw_inode)
+{
+	return ((loff_t)le32_to_cpu(raw_inode->i_size_high) << 32) |
+		le32_to_cpu(raw_inode->i_size_lo);","
+static inline loff_t ext4_isize(struct ext4_inode *raw_inode)
+{
+	if (S_ISREG(le16_to_cpu(raw_inode->i_mode)))
+		return ((loff_t)le32_to_cpu(raw_inode->i_size_high) << 32) |
+			le32_to_cpu(raw_inode->i_size_lo);
+	else
+		return (loff_t) le32_to_cpu(raw_inode->i_size_lo);",
+2477,"[""CWE-399""]",linux-2.6,3632dee2f8b8a9720329f29eeaa4ec4669a3aff8,3632dee2f8b8a9720329f29eeaa4ec4669a3aff8,0,490129,8.86440270430171e+37,51.0,"inotify: clean up inotify_read and fix locking problems
+
+If userspace supplies an invalid pointer to a read() of an inotify
+instance, the inotify device's event list mutex is unlocked twice.
+This causes an unbalance which effectively leaves the data structure
+unprotected, and we can trigger oopses by accessing the inotify
+instance from different tasks concurrently.
+
+The best fix (contributed largely by Linus) is a total rewrite
+of the function in question:
+
+On Thu, Jan 22, 2009 at 7:05 AM, Linus Torvalds wrote:
+> The thing to notice is that:
+>
+>  - locking is done in just one place, and there is no question about it
+>   not having an unlock.
+>
+>  - that whole double-while(1)-loop thing is gone.
+>
+>  - use multiple functions to make nesting and error handling sane
+>
+>  - do error testing after doing the things you always need to do, ie do
+>   this:
+>
+>        mutex_lock(..)
+>        ret = function_call();
+>        mutex_unlock(..)
+>
+>        .. test ret here ..
+>
+>   instead of doing conditional exits with unlocking or freeing.
+>
+> So if the code is written in this way, it may still be buggy, but at least
+> it's not buggy because of subtle ""forgot to unlock"" or ""forgot to free""
+> issues.
+>
+> This _always_ unlocks if it locked, and it always frees if it got a
+> non-error kevent.
+
+Cc: John McCutchan <ttb@tentacle.dhs.org>
+Cc: Robert Love <rlove@google.com>
+Cc: <stable@kernel.org>
+Signed-off-by: Vegard Nossum <vegard.nossum@gmail.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"static ssize_t inotify_read(struct file *file, char __user *buf,
+			    size_t count, loff_t *pos)
+{
+	size_t event_size = sizeof (struct inotify_event);
+	struct inotify_device *dev;
+	char __user *start;
+	int ret;
+	DEFINE_WAIT(wait);
+
+	start = buf;
+	dev = file->private_data;
+
+	while (1) {
+
+		prepare_to_wait(&dev->wq, &wait, TASK_INTERRUPTIBLE);
+
+		mutex_lock(&dev->ev_mutex);
+		if (!list_empty(&dev->events)) {
+			ret = 0;
+			break;
+		}
+		mutex_unlock(&dev->ev_mutex);
+
+		if (file->f_flags & O_NONBLOCK) {
+			ret = -EAGAIN;
+			break;
+		}
+
+		if (signal_pending(current)) {
+			ret = -EINTR;
+			break;
+		}
+
+		schedule();
+	}
+
+	finish_wait(&dev->wq, &wait);
+	if (ret)
+		return ret;
+
+	while (1) {
+		struct inotify_kernel_event *kevent;
+
+		ret = buf - start;
+		if (list_empty(&dev->events))
+			break;
+
+		kevent = inotify_dev_get_event(dev);
+		if (event_size + kevent->event.len > count) {
+			if (ret == 0 && count > 0) {
+				/*
+				 * could not get a single event because we
+				 * didn't have enough buffer space.
+				 */
+				ret = -EINVAL;
+			}
+			break;
+		}
+		remove_kevent(dev, kevent);
+
+		/*
+		 * Must perform the copy_to_user outside the mutex in order
+		 * to avoid a lock order reversal with mmap_sem.
+		 */
+		mutex_unlock(&dev->ev_mutex);
+
+		if (copy_to_user(buf, &kevent->event, event_size)) {
+			ret = -EFAULT;
+			break;
+		}
+		buf += event_size;
+		count -= event_size;
+
+		if (kevent->name) {
+			if (copy_to_user(buf, kevent->name, kevent->event.len)){
+				ret = -EFAULT;
+				break;
+			}
+			buf += kevent->event.len;
+			count -= kevent->event.len;
+		}
+
+		free_kevent(kevent);
+
+		mutex_lock(&dev->ev_mutex);
+	}
+	mutex_unlock(&dev->ev_mutex);
+
+	return ret;
+}","static ssize_t inotify_read(struct file *file, char __user *buf,
+			    size_t count, loff_t *pos)
+{
+	struct inotify_device *dev;
+	char __user *start;
+	int ret;
+	DEFINE_WAIT(wait);
+
+	start = buf;
+	dev = file->private_data;
+
+	while (1) {
+		struct inotify_kernel_event *kevent;
+
+		prepare_to_wait(&dev->wq, &wait, TASK_INTERRUPTIBLE);
+
+		mutex_lock(&dev->ev_mutex);
+		kevent = get_one_event(dev, count);
+		mutex_unlock(&dev->ev_mutex);
+
+		if (kevent) {
+			ret = PTR_ERR(kevent);
+			if (IS_ERR(kevent))
+				break;
+			ret = copy_event_to_user(kevent, buf);
+			free_kevent(kevent);
+			if (ret < 0)
+				break;
+			buf += ret;
+			count -= ret;
+			continue;
+		}
+
+		ret = -EAGAIN;
+		if (file->f_flags & O_NONBLOCK)
+			break;
+		ret = -EINTR;
+		if (signal_pending(current))
+			break;
+
+		if (start != buf)
+			break;
+
+		schedule();
+	}
+
+	finish_wait(&dev->wq, &wait);
+	if (start != buf && ret != -EFAULT)
+		ret = buf - start;
+	return ret;
+}",
+2478,"[""CWE-399""]",linux-2.6,878b8619f711280fd05845e21956434b5e588cc4,878b8619f711280fd05845e21956434b5e588cc4,0,490220,3.0263617382445206e+38,166.0,"Fix memory corruption in console selection
+
+Fix an off-by-two memory error in console selection.
+
+The loop below goes from sel_start to sel_end (inclusive), so it writes
+one more character.  This one more character was added to the allocated
+size (+1), but it was not multiplied by an UTF-8 multiplier.
+
+This patch fixes a memory corruption when UTF-8 console is used and the
+user selects a few characters, all of them 3-byte in UTF-8 (for example
+a frame line).
+
+When memory redzones are enabled, a redzone corruption is reported.
+When they are not enabled, trashing of random memory occurs.
+
+Signed-off-by: Mikulas Patocka <mpatocka@redhat.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"int set_selection(const struct tiocl_selection __user *sel, struct tty_struct *tty)
+{
+	struct vc_data *vc = vc_cons[fg_console].d;
+	int sel_mode, new_sel_start, new_sel_end, spc;
+	char *bp, *obp;
+	int i, ps, pe, multiplier;
+	u16 c;
+	struct kbd_struct *kbd = kbd_table + fg_console;
+
+	poke_blanked_console();
+
+	{ unsigned short xs, ys, xe, ye;
+
+	  if (!access_ok(VERIFY_READ, sel, sizeof(*sel)))
+		return -EFAULT;
+	  __get_user(xs, &sel->xs);
+	  __get_user(ys, &sel->ys);
+	  __get_user(xe, &sel->xe);
+	  __get_user(ye, &sel->ye);
+	  __get_user(sel_mode, &sel->sel_mode);
+	  xs--; ys--; xe--; ye--;
+	  xs = limit(xs, vc->vc_cols - 1);
+	  ys = limit(ys, vc->vc_rows - 1);
+	  xe = limit(xe, vc->vc_cols - 1);
+	  ye = limit(ye, vc->vc_rows - 1);
+	  ps = ys * vc->vc_size_row + (xs << 1);
+	  pe = ye * vc->vc_size_row + (xe << 1);
+
+	  if (sel_mode == TIOCL_SELCLEAR) {
+	      /* useful for screendump without selection highlights */
+	      clear_selection();
+	      return 0;
+	  }
+
+	  if (mouse_reporting() && (sel_mode & TIOCL_SELMOUSEREPORT)) {
+	      mouse_report(tty, sel_mode & TIOCL_SELBUTTONMASK, xs, ys);
+	      return 0;
+	  }
+        }
+
+	if (ps > pe)	/* make sel_start <= sel_end */
+	{
+		int tmp = ps;
+		ps = pe;
+		pe = tmp;
+	}
+
+	if (sel_cons != vc_cons[fg_console].d) {
+		clear_selection();
+		sel_cons = vc_cons[fg_console].d;
+	}
+	use_unicode = kbd && kbd->kbdmode == VC_UNICODE;
+
+	switch (sel_mode)
+	{
+		case TIOCL_SELCHAR:	/* character-by-character selection */
+			new_sel_start = ps;
+			new_sel_end = pe;
+			break;
+		case TIOCL_SELWORD:	/* word-by-word selection */
+			spc = isspace(sel_pos(ps));
+			for (new_sel_start = ps; ; ps -= 2)
+			{
+				if ((spc && !isspace(sel_pos(ps))) ||
+				    (!spc && !inword(sel_pos(ps))))
+					break;
+				new_sel_start = ps;
+				if (!(ps % vc->vc_size_row))
+					break;
+			}
+			spc = isspace(sel_pos(pe));
+			for (new_sel_end = pe; ; pe += 2)
+			{
+				if ((spc && !isspace(sel_pos(pe))) ||
+				    (!spc && !inword(sel_pos(pe))))
+					break;
+				new_sel_end = pe;
+				if (!((pe + 2) % vc->vc_size_row))
+					break;
+			}
+			break;
+		case TIOCL_SELLINE:	/* line-by-line selection */
+			new_sel_start = ps - ps % vc->vc_size_row;
+			new_sel_end = pe + vc->vc_size_row
+				    - pe % vc->vc_size_row - 2;
+			break;
+		case TIOCL_SELPOINTER:
+			highlight_pointer(pe);
+			return 0;
+		default:
+			return -EINVAL;
+	}
+
+	/* remove the pointer */
+	highlight_pointer(-1);
+
+	/* select to end of line if on trailing space */
+	if (new_sel_end > new_sel_start &&
+		!atedge(new_sel_end, vc->vc_size_row) &&
+		isspace(sel_pos(new_sel_end))) {
+		for (pe = new_sel_end + 2; ; pe += 2)
+			if (!isspace(sel_pos(pe)) ||
+			    atedge(pe, vc->vc_size_row))
+				break;
+		if (isspace(sel_pos(pe)))
+			new_sel_end = pe;
+	}
+	if (sel_start == -1)	/* no current selection */
+		highlight(new_sel_start, new_sel_end);
+	else if (new_sel_start == sel_start)
+	{
+		if (new_sel_end == sel_end)	/* no action required */
+			return 0;
+		else if (new_sel_end > sel_end)	/* extend to right */
+			highlight(sel_end + 2, new_sel_end);
+		else				/* contract from right */
+			highlight(new_sel_end + 2, sel_end);
+	}
+	else if (new_sel_end == sel_end)
+	{
+		if (new_sel_start < sel_start)	/* extend to left */
+			highlight(new_sel_start, sel_start - 2);
+		else				/* contract from left */
+			highlight(sel_start, new_sel_start - 2);
+	}
+	else	/* some other case; start selection from scratch */
+	{
+		clear_selection();
+		highlight(new_sel_start, new_sel_end);
+	}
+	sel_start = new_sel_start;
+	sel_end = new_sel_end;
+
+	/* Allocate a new buffer before freeing the old one ... */
+	multiplier = use_unicode ? 3 : 1;  /* chars can take up to 3 bytes */
+	bp = kmalloc((sel_end-sel_start)/2*multiplier+1, GFP_KERNEL);
+	if (!bp) {
+		printk(KERN_WARNING ""selection: kmalloc() failed\n"");
+		clear_selection();
+		return -ENOMEM;
+	}
+	kfree(sel_buffer);
+	sel_buffer = bp;
+
+	obp = bp;
+	for (i = sel_start; i <= sel_end; i += 2) {
+		c = sel_pos(i);
+		if (use_unicode)
+			bp += store_utf8(c, bp);
+		else
+			*bp++ = c;
+		if (!isspace(c))
+			obp = bp;
+		if (! ((i + 2) % vc->vc_size_row)) {
+			/* strip trailing blanks from line and add newline,
+			   unless non-space at end of line. */
+			if (obp != bp) {
+				bp = obp;
+				*bp++ = '\r';
+			}
+			obp = bp;
+		}
+	}
+	sel_buffer_lth = bp - sel_buffer;
+	return 0;
+}","int set_selection(const struct tiocl_selection __user *sel, struct tty_struct *tty)
+{
+	struct vc_data *vc = vc_cons[fg_console].d;
+	int sel_mode, new_sel_start, new_sel_end, spc;
+	char *bp, *obp;
+	int i, ps, pe, multiplier;
+	u16 c;
+	struct kbd_struct *kbd = kbd_table + fg_console;
+
+	poke_blanked_console();
+
+	{ unsigned short xs, ys, xe, ye;
+
+	  if (!access_ok(VERIFY_READ, sel, sizeof(*sel)))
+		return -EFAULT;
+	  __get_user(xs, &sel->xs);
+	  __get_user(ys, &sel->ys);
+	  __get_user(xe, &sel->xe);
+	  __get_user(ye, &sel->ye);
+	  __get_user(sel_mode, &sel->sel_mode);
+	  xs--; ys--; xe--; ye--;
+	  xs = limit(xs, vc->vc_cols - 1);
+	  ys = limit(ys, vc->vc_rows - 1);
+	  xe = limit(xe, vc->vc_cols - 1);
+	  ye = limit(ye, vc->vc_rows - 1);
+	  ps = ys * vc->vc_size_row + (xs << 1);
+	  pe = ye * vc->vc_size_row + (xe << 1);
+
+	  if (sel_mode == TIOCL_SELCLEAR) {
+	      /* useful for screendump without selection highlights */
+	      clear_selection();
+	      return 0;
+	  }
+
+	  if (mouse_reporting() && (sel_mode & TIOCL_SELMOUSEREPORT)) {
+	      mouse_report(tty, sel_mode & TIOCL_SELBUTTONMASK, xs, ys);
+	      return 0;
+	  }
+        }
+
+	if (ps > pe)	/* make sel_start <= sel_end */
+	{
+		int tmp = ps;
+		ps = pe;
+		pe = tmp;
+	}
+
+	if (sel_cons != vc_cons[fg_console].d) {
+		clear_selection();
+		sel_cons = vc_cons[fg_console].d;
+	}
+	use_unicode = kbd && kbd->kbdmode == VC_UNICODE;
+
+	switch (sel_mode)
+	{
+		case TIOCL_SELCHAR:	/* character-by-character selection */
+			new_sel_start = ps;
+			new_sel_end = pe;
+			break;
+		case TIOCL_SELWORD:	/* word-by-word selection */
+			spc = isspace(sel_pos(ps));
+			for (new_sel_start = ps; ; ps -= 2)
+			{
+				if ((spc && !isspace(sel_pos(ps))) ||
+				    (!spc && !inword(sel_pos(ps))))
+					break;
+				new_sel_start = ps;
+				if (!(ps % vc->vc_size_row))
+					break;
+			}
+			spc = isspace(sel_pos(pe));
+			for (new_sel_end = pe; ; pe += 2)
+			{
+				if ((spc && !isspace(sel_pos(pe))) ||
+				    (!spc && !inword(sel_pos(pe))))
+					break;
+				new_sel_end = pe;
+				if (!((pe + 2) % vc->vc_size_row))
+					break;
+			}
+			break;
+		case TIOCL_SELLINE:	/* line-by-line selection */
+			new_sel_start = ps - ps % vc->vc_size_row;
+			new_sel_end = pe + vc->vc_size_row
+				    - pe % vc->vc_size_row - 2;
+			break;
+		case TIOCL_SELPOINTER:
+			highlight_pointer(pe);
+			return 0;
+		default:
+			return -EINVAL;
+	}
+
+	/* remove the pointer */
+	highlight_pointer(-1);
+
+	/* select to end of line if on trailing space */
+	if (new_sel_end > new_sel_start &&
+		!atedge(new_sel_end, vc->vc_size_row) &&
+		isspace(sel_pos(new_sel_end))) {
+		for (pe = new_sel_end + 2; ; pe += 2)
+			if (!isspace(sel_pos(pe)) ||
+			    atedge(pe, vc->vc_size_row))
+				break;
+		if (isspace(sel_pos(pe)))
+			new_sel_end = pe;
+	}
+	if (sel_start == -1)	/* no current selection */
+		highlight(new_sel_start, new_sel_end);
+	else if (new_sel_start == sel_start)
+	{
+		if (new_sel_end == sel_end)	/* no action required */
+			return 0;
+		else if (new_sel_end > sel_end)	/* extend to right */
+			highlight(sel_end + 2, new_sel_end);
+		else				/* contract from right */
+			highlight(new_sel_end + 2, sel_end);
+	}
+	else if (new_sel_end == sel_end)
+	{
+		if (new_sel_start < sel_start)	/* extend to left */
+			highlight(new_sel_start, sel_start - 2);
+		else				/* contract from left */
+			highlight(sel_start, new_sel_start - 2);
+	}
+	else	/* some other case; start selection from scratch */
+	{
+		clear_selection();
+		highlight(new_sel_start, new_sel_end);
+	}
+	sel_start = new_sel_start;
+	sel_end = new_sel_end;
+
+	/* Allocate a new buffer before freeing the old one ... */
+	multiplier = use_unicode ? 3 : 1;  /* chars can take up to 3 bytes */
+	bp = kmalloc(((sel_end-sel_start)/2+1)*multiplier, GFP_KERNEL);
+	if (!bp) {
+		printk(KERN_WARNING ""selection: kmalloc() failed\n"");
+		clear_selection();
+		return -ENOMEM;
+	}
+	kfree(sel_buffer);
+	sel_buffer = bp;
+
+	obp = bp;
+	for (i = sel_start; i <= sel_end; i += 2) {
+		c = sel_pos(i);
+		if (use_unicode)
+			bp += store_utf8(c, bp);
+		else
+			*bp++ = c;
+		if (!isspace(c))
+			obp = bp;
+		if (! ((i + 2) % vc->vc_size_row)) {
+			/* strip trailing blanks from line and add newline,
+			   unless non-space at end of line. */
+			if (obp != bp) {
+				bp = obp;
+				*bp++ = '\r';
+			}
+			obp = bp;
+		}
+	}
+	sel_buffer_lth = bp - sel_buffer;
+	return 0;
+}",
+2609,"[""CWE-399""]",openssl,380f18ed5f140e0ae1b68f3ab8f4f7c395658d9e,380f18ed5f140e0ae1b68f3ab8f4f7c395658d9e,0,503367,1.4981583882703542e+38,46.0,"CVE-2016-0798: avoid memory leak in SRP
+
+The SRP user database lookup method SRP_VBASE_get_by_user had confusing
+memory management semantics; the returned pointer was sometimes newly
+allocated, and sometimes owned by the callee. The calling code has no
+way of distinguishing these two cases.
+
+Specifically, SRP servers that configure a secret seed to hide valid
+login information are vulnerable to a memory leak: an attacker
+connecting with an invalid username can cause a memory leak of around
+300 bytes per connection.
+
+Servers that do not configure SRP, or configure SRP but do not configure
+a seed are not vulnerable.
+
+In Apache, the seed directive is known as SSLSRPUnknownUserSeed.
+
+To mitigate the memory leak, the seed handling in SRP_VBASE_get_by_user
+is now disabled even if the user has configured a seed.
+
+Applications are advised to migrate to SRP_VBASE_get1_by_user. However,
+note that OpenSSL makes no strong guarantees about the
+indistinguishability of valid and invalid logins. In particular,
+computations are currently not carried out in constant time.
+
+Reviewed-by: Rich Salz <rsalz@openssl.org>",other,"SRP_user_pwd *SRP_VBASE_get_by_user(SRP_VBASE *vb, char *username)
+{
+    int i;
+    SRP_user_pwd *user;
+    unsigned char digv[SHA_DIGEST_LENGTH];
+    unsigned char digs[SHA_DIGEST_LENGTH];
+    EVP_MD_CTX *ctxt = NULL;
+
+    if (vb == NULL)
+        return NULL;
+    for (i = 0; i < sk_SRP_user_pwd_num(vb->users_pwd); i++) {
+        user = sk_SRP_user_pwd_value(vb->users_pwd, i);
+        if (strcmp(user->id, username) == 0)
+            return user;
+    }
+    if ((vb->seed_key == NULL) ||
+        (vb->default_g == NULL) || (vb->default_N == NULL))
+        return NULL;
+
+/* if the user is unknown we set parameters as well if we have a seed_key */
+
+    if ((user = SRP_user_pwd_new()) == NULL)
+        return NULL;
+
+    SRP_user_pwd_set_gN(user, vb->default_g, vb->default_N);
+
+    if (!SRP_user_pwd_set_ids(user, username, NULL))
+        goto err;
+
+    if (RAND_bytes(digv, SHA_DIGEST_LENGTH) <= 0)
+        goto err;
+    ctxt = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctxt, EVP_sha1(), NULL);
+    EVP_DigestUpdate(ctxt, vb->seed_key, strlen(vb->seed_key));
+    EVP_DigestUpdate(ctxt, username, strlen(username));
+    EVP_DigestFinal_ex(ctxt, digs, NULL);
+    EVP_MD_CTX_free(ctxt);
+    ctxt = NULL;
+    if (SRP_user_pwd_set_sv_BN(user,
+                               BN_bin2bn(digs, SHA_DIGEST_LENGTH, NULL),
+                               BN_bin2bn(digv, SHA_DIGEST_LENGTH, NULL)))
+        return user;
+
+ err:
+    EVP_MD_CTX_free(ctxt);
+    SRP_user_pwd_free(user);
+    return NULL;
+}","SRP_user_pwd *SRP_VBASE_get1_by_user(SRP_VBASE *vb, char *username)
+{
+    SRP_user_pwd *user;
+    unsigned char digv[SHA_DIGEST_LENGTH];
+    unsigned char digs[SHA_DIGEST_LENGTH];
+    EVP_MD_CTX *ctxt = NULL;
+
+    if (vb == NULL)
+        return NULL;
+
+    if ((user = find_user(vb, username)) != NULL)
+        return srp_user_pwd_dup(user);
+
+    if ((vb->seed_key == NULL) ||
+        (vb->default_g == NULL) || (vb->default_N == NULL))
+        return NULL;
+
+/* if the user is unknown we set parameters as well if we have a seed_key */
+
+    if ((user = SRP_user_pwd_new()) == NULL)
+        return NULL;
+
+    SRP_user_pwd_set_gN(user, vb->default_g, vb->default_N);
+
+    if (!SRP_user_pwd_set_ids(user, username, NULL))
+        goto err;
+
+    if (RAND_bytes(digv, SHA_DIGEST_LENGTH) <= 0)
+        goto err;
+    ctxt = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctxt, EVP_sha1(), NULL);
+    EVP_DigestUpdate(ctxt, vb->seed_key, strlen(vb->seed_key));
+    EVP_DigestUpdate(ctxt, username, strlen(username));
+    EVP_DigestFinal_ex(ctxt, digs, NULL);
+    EVP_MD_CTX_free(ctxt);
+    ctxt = NULL;
+    if (SRP_user_pwd_set_sv_BN(user,
+                               BN_bin2bn(digs, SHA_DIGEST_LENGTH, NULL),
+                               BN_bin2bn(digv, SHA_DIGEST_LENGTH, NULL)))
+        return user;
+
+ err:
+    EVP_MD_CTX_free(ctxt);
+    SRP_user_pwd_free(user);
+    return NULL;
+}",
+2617,"[""CWE-399""]",openssl,cfd40fd39e69f5e3c654ae8fbf9acb1d2a051144,cfd40fd39e69f5e3c654ae8fbf9acb1d2a051144,0,503738,6.0797014542262695e+37,25.0,"Prevent DTLS Finished message injection
+
+Follow on from CVE-2016-2179
+
+The investigation and analysis of CVE-2016-2179 highlighted a related flaw.
+
+This commit fixes a security ""near miss"" in the buffered message handling
+code. Ultimately this is not currently believed to be exploitable due to
+the reasons outlined below, and therefore there is no CVE for this on its
+own.
+
+The issue this commit fixes is a MITM attack where the attacker can inject
+a Finished message into the handshake. In the description below it is
+assumed that the attacker injects the Finished message for the server to
+receive it. The attack could work equally well the other way around (i.e
+where the client receives the injected Finished message).
+
+The MITM requires the following capabilities:
+- The ability to manipulate the MTU that the client selects such that it
+is small enough for the client to fragment Finished messages.
+- The ability to selectively drop and modify records sent from the client
+- The ability to inject its own records and send them to the server
+
+The MITM forces the client to select a small MTU such that the client
+will fragment the Finished message. Ideally for the attacker the first
+fragment will contain all but the last byte of the Finished message,
+with the second fragment containing the final byte.
+
+During the handshake and prior to the client sending the CCS the MITM
+injects a plaintext Finished message fragment to the server containing
+all but the final byte of the Finished message. The message sequence
+number should be the one expected to be used for the real Finished message.
+
+OpenSSL will recognise that the received fragment is for the future and
+will buffer it for later use.
+
+After the client sends the CCS it then sends its own Finished message in
+two fragments. The MITM causes the first of these fragments to be
+dropped. The OpenSSL server will then receive the second of the fragments
+and reassemble the complete Finished message consisting of the MITM
+fragment and the final byte from the real client.
+
+The advantage to the attacker in injecting a Finished message is that
+this provides the capability to modify other handshake messages (e.g.
+the ClientHello) undetected. A difficulty for the attacker is knowing in
+advance what impact any of those changes might have on the final byte of
+the handshake hash that is going to be sent in the ""real"" Finished
+message. In the worst case for the attacker this means that only 1 in
+256 of such injection attempts will succeed.
+
+It may be possible in some situations for the attacker to improve this such
+that all attempts succeed. For example if the handshake includes client
+authentication then the final message flight sent by the client will
+include a Certificate. Certificates are ASN.1 objects where the signed
+portion is DER encoded. The non-signed portion could be BER encoded and so
+the attacker could re-encode the certificate such that the hash for the
+whole handshake comes to a different value. The certificate re-encoding
+would not be detectable because only the non-signed portion is changed. As
+this is the final flight of messages sent from the client the attacker
+knows what the complete hanshake hash value will be that the client will
+send - and therefore knows what the final byte will be. Through a process
+of trial and error the attacker can re-encode the certificate until the
+modified handhshake also has a hash with the same final byte. This means
+that when the Finished message is verified by the server it will be
+correct in all cases.
+
+In practice the MITM would need to be able to perform the same attack
+against both the client and the server. If the attack is only performed
+against the server (say) then the server will not detect the modified
+handshake, but the client will and will abort the connection.
+Fortunately, although OpenSSL is vulnerable to Finished message
+injection, it is not vulnerable if *both* client and server are OpenSSL.
+The reason is that OpenSSL has a hard ""floor"" for a minimum MTU size
+that it will never go below. This minimum means that a Finished message
+will never be sent in a fragmented form and therefore the MITM does not
+have one of its pre-requisites. Therefore this could only be exploited
+if using OpenSSL and some other DTLS peer that had its own and separate
+Finished message injection flaw.
+
+The fix is to ensure buffered messages are cleared on epoch change.
+
+Reviewed-by: Richard Levitte <levitte@openssl.org>",other,"void dtls1_reset_seq_numbers(SSL *s, int rw)
+{
+    unsigned char *seq;
+    unsigned int seq_bytes = sizeof(s->s3->read_sequence);
+
+    if (rw & SSL3_CC_READ) {
+        seq = s->s3->read_sequence;
+        s->d1->r_epoch++;
+        memcpy(&(s->d1->bitmap), &(s->d1->next_bitmap), sizeof(DTLS1_BITMAP));
+        memset(&(s->d1->next_bitmap), 0x00, sizeof(DTLS1_BITMAP));
+    } else {
+        seq = s->s3->write_sequence;
+        memcpy(s->d1->last_write_sequence, seq,
+               sizeof(s->s3->write_sequence));
+        s->d1->w_epoch++;
+    }
+
+    memset(seq, 0x00, seq_bytes);
+}","void dtls1_reset_seq_numbers(SSL *s, int rw)
+{
+    unsigned char *seq;
+    unsigned int seq_bytes = sizeof(s->s3->read_sequence);
+
+    if (rw & SSL3_CC_READ) {
+        seq = s->s3->read_sequence;
+        s->d1->r_epoch++;
+        memcpy(&(s->d1->bitmap), &(s->d1->next_bitmap), sizeof(DTLS1_BITMAP));
+        memset(&(s->d1->next_bitmap), 0x00, sizeof(DTLS1_BITMAP));
+
+        /*
+         * We must not use any buffered messages received from the previous
+         * epoch
+         */
+        dtls1_clear_received_buffer(s);
+    } else {
+        seq = s->s3->write_sequence;
+        memcpy(s->d1->last_write_sequence, seq,
+               sizeof(s->s3->write_sequence));
+        s->d1->w_epoch++;
+    }
+
+    memset(seq, 0x00, seq_bytes);
+}",
+3220,"[""CWE-399""]",linux-2.6,17b24b3c97498935a2ef9777370b1151dfed3f6f,17b24b3c97498935a2ef9777370b1151dfed3f6f,0,489598,1.2488073791768027e+38,38.0,"ATM: CVE-2008-5079: duplicate listen() on socket corrupts the vcc table
+
+As reported by Hugo Dias that it is possible to cause a local denial
+of service attack by calling the svc_listen function twice on the same
+socket and reading /proc/net/atm/*vc
+
+Signed-off-by: Chas Williams <chas@cmf.nrl.navy.mil>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int svc_listen(struct socket *sock,int backlog)
+{
+	DEFINE_WAIT(wait);
+	struct sock *sk = sock->sk;
+	struct atm_vcc *vcc = ATM_SD(sock);
+	int error;
+
+	pr_debug(""svc_listen %p\n"",vcc);
+	lock_sock(sk);
+	/* let server handle listen on unbound sockets */
+	if (test_bit(ATM_VF_SESSION,&vcc->flags)) {
+		error = -EINVAL;
+		goto out;
+	}
+	vcc_insert_socket(sk);
+	set_bit(ATM_VF_WAITING, &vcc->flags);
+	prepare_to_wait(sk->sk_sleep, &wait, TASK_UNINTERRUPTIBLE);
+	sigd_enq(vcc,as_listen,NULL,NULL,&vcc->local);
+	while (test_bit(ATM_VF_WAITING, &vcc->flags) && sigd) {
+		schedule();
+		prepare_to_wait(sk->sk_sleep, &wait, TASK_UNINTERRUPTIBLE);
+	}
+	finish_wait(sk->sk_sleep, &wait);
+	if (!sigd) {
+		error = -EUNATCH;
+		goto out;
+	}
+	set_bit(ATM_VF_LISTEN,&vcc->flags);
+	sk->sk_max_ack_backlog = backlog > 0 ? backlog : ATM_BACKLOG_DEFAULT;
+	error = -sk->sk_err;
+out:
+	release_sock(sk);
+	return error;
+}","static int svc_listen(struct socket *sock,int backlog)
+{
+	DEFINE_WAIT(wait);
+	struct sock *sk = sock->sk;
+	struct atm_vcc *vcc = ATM_SD(sock);
+	int error;
+
+	pr_debug(""svc_listen %p\n"",vcc);
+	lock_sock(sk);
+	/* let server handle listen on unbound sockets */
+	if (test_bit(ATM_VF_SESSION,&vcc->flags)) {
+		error = -EINVAL;
+		goto out;
+	}
+	if (test_bit(ATM_VF_LISTEN, &vcc->flags)) {
+		error = -EADDRINUSE;
+		goto out;
+        }
+	set_bit(ATM_VF_WAITING, &vcc->flags);
+	prepare_to_wait(sk->sk_sleep, &wait, TASK_UNINTERRUPTIBLE);
+	sigd_enq(vcc,as_listen,NULL,NULL,&vcc->local);
+	while (test_bit(ATM_VF_WAITING, &vcc->flags) && sigd) {
+		schedule();
+		prepare_to_wait(sk->sk_sleep, &wait, TASK_UNINTERRUPTIBLE);
+	}
+	finish_wait(sk->sk_sleep, &wait);
+	if (!sigd) {
+		error = -EUNATCH;
+		goto out;
+	}
+	set_bit(ATM_VF_LISTEN,&vcc->flags);
+	vcc_insert_socket(sk);
+	sk->sk_max_ack_backlog = backlog > 0 ? backlog : ATM_BACKLOG_DEFAULT;
+	error = -sk->sk_err;
+out:
+	release_sock(sk);
+	return error;
+}",

@@ -1,0 +1,3212 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+130,177866,,Remote,Not required,Partial,CVE-2018-16542,https://www.cvedetails.com/cve/CVE-2018-16542/,CWE-388,Medium,,,,2018-09-05,4.3,"In Artifex Ghostscript before 9.24, attackers able to supply crafted PostScript files could use insufficient interpreter stack-size checking during error handling to crash the interpreter.",2018-11-25,,6,http://git.ghostscript.com/?p=ghostpdl.git;a=commit;h=b575e1ec42cc86f6a58c603f2a88fcc2af699cc8,b575e1ec42cc86f6a58c603f2a88fcc2af699cc8,,1,,,"gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+        osp++;
+        if (osp >= ostop) {
+            *pexit_code = gs_error_Fatal;
+            return_error(gs_error_Fatal);
+        }
+        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+","gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+        *++osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+",C,"        osp++;
+        if (osp >= ostop) {
+            *pexit_code = gs_error_Fatal;
+            return_error(gs_error_Fatal);
+        }
+        *osp = *perror_object;
+","        *++osp = *perror_object;
+",d224b4abec1d0bd991028b7e38e95d47b7a834f4,"@@ -676,7 +676,12 @@ again:
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+-        *++osp = *perror_object;
++        osp++;
++        if (osp >= ostop) {
++            *pexit_code = gs_error_Fatal;
++            return_error(gs_error_Fatal);
++        }
++        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;",ghostscript,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=psi/interp.c;h=615083867e0725abb15bded4519a6b37873903e2;hb=615083867e0725abb15bded4519a6b37873903e2,http://git.ghostscript.com/?p=ghostpdl.git;a=blob;f=psi/interp.c;h=8b495569304883537de3fc1c4df91a28f9ad55da;hb=8b495569304883537de3fc1c4df91a28f9ad55da,1,"gs_call_interp(i_ctx_t **pi_ctx_p, ref * pref, int user_errors,
+               int *pexit_code, ref * perror_object)
+{
+    ref *epref = pref;
+    ref doref;
+    ref *perrordict;
+    ref error_name;
+    int code, ccode;
+    ref saref;
+    i_ctx_t *i_ctx_p = *pi_ctx_p;
+    int *gc_signal = &imemory_system->gs_lib_ctx->gcsignal;
+
+    *pexit_code = 0;
+    *gc_signal = 0;
+    ialloc_reset_requested(idmemory);
+again:
+    /* Avoid a dangling error object that might get traced by a future GC. */
+    make_null(perror_object);
+    o_stack.requested = e_stack.requested = d_stack.requested = 0;
+    while (*gc_signal) { /* Some routine below triggered a GC. */
+        gs_gc_root_t epref_root;
+
+        *gc_signal = 0;
+        /* Make sure that doref will get relocated properly if */
+        /* a garbage collection happens with epref == &doref. */
+        gs_register_ref_root(imemory_system, &epref_root,
+                             (void **)&epref, ""gs_call_interp(epref)"");
+        code = interp_reclaim(pi_ctx_p, -1);
+        i_ctx_p = *pi_ctx_p;
+        gs_unregister_root(imemory_system, &epref_root,
+                           ""gs_call_interp(epref)"");
+        if (code < 0)
+            return code;
+    }
+    code = interp(pi_ctx_p, epref, perror_object);
+    i_ctx_p = *pi_ctx_p;
+    if (!r_has_type(&i_ctx_p->error_object, t__invalid)) {
+        *perror_object = i_ctx_p->error_object;
+        make_t(&i_ctx_p->error_object, t__invalid);
+    }
+    /* Prevent a dangling reference to the GC signal in ticks_left */
+    /* in the frame of interp, but be prepared to do a GC if */
+    /* an allocation in this routine asks for it. */
+    *gc_signal = 0;
+    set_gc_signal(i_ctx_p, 1);
+    if (esp < esbot)            /* popped guard entry */
+        esp = esbot;
+    switch (code) {
+        case gs_error_Fatal:
+            *pexit_code = 255;
+            return code;
+        case gs_error_Quit:
+            *perror_object = osp[-1];
+            *pexit_code = code = osp->value.intval;
+            osp -= 2;
+            return
+                (code == 0 ? gs_error_Quit :
+                 code < 0 && code > -100 ? code : gs_error_Fatal);
+        case gs_error_InterpreterExit:
+            return 0;
+        case gs_error_ExecStackUnderflow:
+/****** WRONG -- must keep mark blocks intact ******/
+            ref_stack_pop_block(&e_stack);
+            doref = *perror_object;
+            epref = &doref;
+            goto again;
+        case gs_error_VMreclaim:
+            /* Do the GC and continue. */
+            /* We ignore the return value here, if it fails here
+             * we'll call it again having jumped to the ""again"" label.
+             * Where, assuming it fails again, we'll handle the error.
+             */
+            (void)interp_reclaim(pi_ctx_p,
+                                  (osp->value.intval == 2 ?
+                                   avm_global : avm_local));
+            i_ctx_p = *pi_ctx_p;
+            make_oper(&doref, 0, zpop);
+            epref = &doref;
+            goto again;
+        case gs_error_NeedInput:
+        case gs_error_interrupt:
+            return code;
+    }
+    /* Adjust osp in case of operand stack underflow */
+    if (osp < osbot - 1)
+        osp = osbot - 1;
+    /* We have to handle stack over/underflow specially, because */
+    /* we might be able to recover by adding or removing a block. */
+    switch (code) {
+        case gs_error_dictstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_dstack, which does a ref_stack_extend, */
+            /* so if` we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            /* Skip system dictionaries for CET 20-02-02 */
+            ccode = copy_stack(i_ctx_p, &d_stack, min_dstack_size, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_pop_to(&d_stack, min_dstack_size);
+            dict_set_top();
+            *++osp = saref;
+            break;
+        case gs_error_dictstackunderflow:
+            if (ref_stack_pop_block(&d_stack) >= 0) {
+                dict_set_top();
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+        case gs_error_execstackoverflow:
+            /* We don't have to handle this specially: */
+            /* The only places that could generate it */
+            /* use check_estack, which does a ref_stack_extend, */
+            /* so if we get this error, it's a real one. */
+            if (osp >= ostop) {
+                if ((ccode = ref_stack_extend(&o_stack, 1)) < 0)
+                    return ccode;
+            }
+            ccode = copy_stack(i_ctx_p, &e_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            {
+                uint count = ref_stack_count(&e_stack);
+                uint limit = ref_stack_max_count(&e_stack) - ES_HEADROOM;
+
+                if (count > limit) {
+                    /*
+                     * If there is an e-stack mark within MIN_BLOCK_ESTACK of
+                     * the new top, cut the stack back to remove the mark.
+                     */
+                    int skip = count - limit;
+                    int i;
+
+                    for (i = skip; i < skip + MIN_BLOCK_ESTACK; ++i) {
+                        const ref *ep = ref_stack_index(&e_stack, i);
+
+                        if (r_has_type_attrs(ep, t_null, a_executable)) {
+                            skip = i + 1;
+                            break;
+                        }
+                    }
+                    pop_estack(i_ctx_p, skip);
+                }
+            }
+            *++osp = saref;
+            break;
+        case gs_error_stackoverflow:
+            if (ref_stack_extend(&o_stack, o_stack.requested) >= 0) {   /* We can't just re-execute the object, because */
+                /* it might be a procedure being pushed as a */
+                /* literal.  We check for this case specially. */
+                doref = *perror_object;
+                if (r_is_proc(&doref)) {
+                    *++osp = doref;
+                    make_null_proc(&doref);
+                }
+                epref = &doref;
+                goto again;
+            }
+            ccode = copy_stack(i_ctx_p, &o_stack, 0, &saref);
+            if (ccode < 0)
+                return ccode;
+            ref_stack_clear(&o_stack);
+            *++osp = saref;
+            break;
+        case gs_error_stackunderflow:
+            if (ref_stack_pop_block(&o_stack) >= 0) {
+                doref = *perror_object;
+                epref = &doref;
+                goto again;
+            }
+            break;
+    }
+    if (user_errors < 0)
+        return code;
+    if (gs_errorname(i_ctx_p, code, &error_name) < 0)
+        return code;            /* out-of-range error code! */
+    /*
+     * For greater Adobe compatibility, only the standard PostScript errors
+     * are defined in errordict; the rest are in gserrordict.
+     */
+    if (dict_find_string(systemdict, ""errordict"", &perrordict) <= 0 ||
+        (dict_find(perrordict, &error_name, &epref) <= 0 &&
+         (dict_find_string(systemdict, ""gserrordict"", &perrordict) <= 0 ||
+          dict_find(perrordict, &error_name, &epref) <= 0))
+        )
+        return code;            /* error name not in errordict??? */
+    doref = *epref;
+    epref = &doref;
+     /* Push the error object on the operand stack if appropriate. */
+     if (!GS_ERROR_IS_INTERRUPT(code)) {
+         /* Replace the error object if within an oparray or .errorexec. */
+//flaw_line_below:
+        *++osp = *perror_object;
+//fix_flaw_line_below:
+//        osp++;
+//fix_flaw_line_below:
+//        if (osp >= ostop) {
+//fix_flaw_line_below:
+//            *pexit_code = gs_error_Fatal;
+//fix_flaw_line_below:
+//            return_error(gs_error_Fatal);
+//fix_flaw_line_below:
+//        }
+//fix_flaw_line_below:
+//        *osp = *perror_object;
+         errorexec_find(i_ctx_p, osp);
+     }
+     goto again;
+}
+"
+2290,180026,,Local,Not required,Partial,CVE-2016-9588,https://www.cvedetails.com/cve/CVE-2016-9588/,CWE-388,Low,,,,2016-12-28,2.1,"arch/x86/kvm/vmx.c in the Linux kernel through 4.9 mismanages the #BP and #OF exceptions, which allows guest OS users to cause a denial of service (guest OS crash) by declining to handle an exception thrown by an L2 guest.",2018-11-28,DoS ,1,https://github.com/torvalds/linux/commit/ef85b67385436ddc1998f45f1d6a210f935b3388,ef85b67385436ddc1998f45f1d6a210f935b3388,"kvm: nVMX: Allow L1 to intercept software exceptions (#BP and #OF)
+
+When L2 exits to L0 due to ""exception or NMI"", software exceptions
+(#BP and #OF) for which L1 has requested an intercept should be
+handled by L1 rather than L0. Previously, only hardware exceptions
+were forwarded to L1.
+
+Signed-off-by: Jim Mattson <jmattson@google.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>",1,arch/x86/kvm/vmx.c,"{""sha"": ""24db5fb6f575af27d3b61a67b15ce9996158ed8b"", ""filename"": ""arch/x86/kvm/vmx.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 6, ""changes"": 11, ""blob_url"": ""https://github.com/torvalds/linux/blob/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/arch/x86/kvm/vmx.c?ref=ef85b67385436ddc1998f45f1d6a210f935b3388"", ""patch"": ""@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)\n \treturn vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;\n }\n \n-static inline bool is_exception(u32 intr_info)\n+static inline bool is_nmi(u32 intr_info)\n {\n \treturn (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))\n-\t\t== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);\n+\t\t== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);\n }\n \n static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,\n@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)\n \tif (is_machine_check(intr_info))\n \t\treturn handle_machine_check(vcpu);\n \n-\tif ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)\n+\tif (is_nmi(intr_info))\n \t\treturn 1;  /* already handled by vmx_vcpu_run() */\n \n \tif (is_no_device(intr_info)) {\n@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)\n \n \tswitch (exit_reason) {\n \tcase EXIT_REASON_EXCEPTION_NMI:\n-\t\tif (!is_exception(intr_info))\n+\t\tif (is_nmi(intr_info))\n \t\t\treturn false;\n \t\telse if (is_page_fault(intr_info))\n \t\t\treturn enable_ept;\n@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)\n \t\tkvm_machine_check();\n \n \t/* We need to handle NMIs before interrupts are enabled */\n-\tif ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&\n-\t    (exit_intr_info & INTR_INFO_VALID_MASK)) {\n+\tif (is_nmi(exit_intr_info)) {\n \t\tkvm_before_handle_nmi(&vmx->vcpu);\n \t\tasm(\""int $2\"");\n \t\tkvm_after_handle_nmi(&vmx->vcpu);""}","static int handle_exception(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	struct kvm_run *kvm_run = vcpu->run;
+	u32 intr_info, ex_no, error_code;
+	unsigned long cr2, rip, dr6;
+	u32 vect_info;
+	enum emulation_result er;
+
+	vect_info = vmx->idt_vectoring_info;
+	intr_info = vmx->exit_intr_info;
+
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+	if (is_nmi(intr_info))
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+		vmx_fpu_activate(vcpu);
+		return 1;
+	}
+
+	if (is_invalid_opcode(intr_info)) {
+		if (is_guest_mode(vcpu)) {
+			kvm_queue_exception(vcpu, UD_VECTOR);
+			return 1;
+		}
+		er = emulate_instruction(vcpu, EMULTYPE_TRAP_UD);
+		if (er != EMULATE_DONE)
+			kvm_queue_exception(vcpu, UD_VECTOR);
+		return 1;
+	}
+
+	error_code = 0;
+	if (intr_info & INTR_INFO_DELIVER_CODE_MASK)
+		error_code = vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+
+	/*
+	 * The #PF with PFEC.RSVD = 1 indicates the guest is accessing
+	 * MMIO, it is better to report an internal error.
+	 * See the comments in vmx_handle_exit.
+	 */
+	if ((vect_info & VECTORING_INFO_VALID_MASK) &&
+	    !(is_page_fault(intr_info) && !(error_code & PFERR_RSVD_MASK))) {
+		vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+		vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_SIMUL_EX;
+		vcpu->run->internal.ndata = 3;
+		vcpu->run->internal.data[0] = vect_info;
+		vcpu->run->internal.data[1] = intr_info;
+		vcpu->run->internal.data[2] = error_code;
+		return 0;
+	}
+
+	if (is_page_fault(intr_info)) {
+		/* EPT won't cause page fault directly */
+		BUG_ON(enable_ept);
+		cr2 = vmcs_readl(EXIT_QUALIFICATION);
+		trace_kvm_page_fault(cr2, error_code);
+
+		if (kvm_event_needs_reinjection(vcpu))
+			kvm_mmu_unprotect_page_virt(vcpu, cr2);
+		return kvm_mmu_page_fault(vcpu, cr2, error_code, NULL, 0);
+	}
+
+	ex_no = intr_info & INTR_INFO_VECTOR_MASK;
+
+	if (vmx->rmode.vm86_active && rmode_exception(vcpu, ex_no))
+		return handle_rmode_exception(vcpu, ex_no, error_code);
+
+	switch (ex_no) {
+	case AC_VECTOR:
+		kvm_queue_exception_e(vcpu, AC_VECTOR, error_code);
+		return 1;
+	case DB_VECTOR:
+		dr6 = vmcs_readl(EXIT_QUALIFICATION);
+		if (!(vcpu->guest_debug &
+		      (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))) {
+			vcpu->arch.dr6 &= ~15;
+			vcpu->arch.dr6 |= dr6 | DR6_RTM;
+			if (!(dr6 & ~DR6_RESERVED)) /* icebp */
+				skip_emulated_instruction(vcpu);
+
+			kvm_queue_exception(vcpu, DB_VECTOR);
+			return 1;
+		}
+		kvm_run->debug.arch.dr6 = dr6 | DR6_FIXED_1;
+		kvm_run->debug.arch.dr7 = vmcs_readl(GUEST_DR7);
+		/* fall through */
+	case BP_VECTOR:
+		/*
+		 * Update instruction length as we may reinject #BP from
+		 * user space while in guest debugging mode. Reading it for
+		 * #DB as well causes no harm, it is not used in that case.
+		 */
+		vmx->vcpu.arch.event_exit_inst_len =
+			vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+		kvm_run->exit_reason = KVM_EXIT_DEBUG;
+		rip = kvm_rip_read(vcpu);
+		kvm_run->debug.arch.pc = vmcs_readl(GUEST_CS_BASE) + rip;
+		kvm_run->debug.arch.exception = ex_no;
+		break;
+	default:
+		kvm_run->exit_reason = KVM_EXIT_EXCEPTION;
+		kvm_run->ex.exception = ex_no;
+		kvm_run->ex.error_code = error_code;
+		break;
+	}
+	return 0;
+}
+","static int handle_exception(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	struct kvm_run *kvm_run = vcpu->run;
+	u32 intr_info, ex_no, error_code;
+	unsigned long cr2, rip, dr6;
+	u32 vect_info;
+	enum emulation_result er;
+
+	vect_info = vmx->idt_vectoring_info;
+	intr_info = vmx->exit_intr_info;
+
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+		vmx_fpu_activate(vcpu);
+		return 1;
+	}
+
+	if (is_invalid_opcode(intr_info)) {
+		if (is_guest_mode(vcpu)) {
+			kvm_queue_exception(vcpu, UD_VECTOR);
+			return 1;
+		}
+		er = emulate_instruction(vcpu, EMULTYPE_TRAP_UD);
+		if (er != EMULATE_DONE)
+			kvm_queue_exception(vcpu, UD_VECTOR);
+		return 1;
+	}
+
+	error_code = 0;
+	if (intr_info & INTR_INFO_DELIVER_CODE_MASK)
+		error_code = vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+
+	/*
+	 * The #PF with PFEC.RSVD = 1 indicates the guest is accessing
+	 * MMIO, it is better to report an internal error.
+	 * See the comments in vmx_handle_exit.
+	 */
+	if ((vect_info & VECTORING_INFO_VALID_MASK) &&
+	    !(is_page_fault(intr_info) && !(error_code & PFERR_RSVD_MASK))) {
+		vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+		vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_SIMUL_EX;
+		vcpu->run->internal.ndata = 3;
+		vcpu->run->internal.data[0] = vect_info;
+		vcpu->run->internal.data[1] = intr_info;
+		vcpu->run->internal.data[2] = error_code;
+		return 0;
+	}
+
+	if (is_page_fault(intr_info)) {
+		/* EPT won't cause page fault directly */
+		BUG_ON(enable_ept);
+		cr2 = vmcs_readl(EXIT_QUALIFICATION);
+		trace_kvm_page_fault(cr2, error_code);
+
+		if (kvm_event_needs_reinjection(vcpu))
+			kvm_mmu_unprotect_page_virt(vcpu, cr2);
+		return kvm_mmu_page_fault(vcpu, cr2, error_code, NULL, 0);
+	}
+
+	ex_no = intr_info & INTR_INFO_VECTOR_MASK;
+
+	if (vmx->rmode.vm86_active && rmode_exception(vcpu, ex_no))
+		return handle_rmode_exception(vcpu, ex_no, error_code);
+
+	switch (ex_no) {
+	case AC_VECTOR:
+		kvm_queue_exception_e(vcpu, AC_VECTOR, error_code);
+		return 1;
+	case DB_VECTOR:
+		dr6 = vmcs_readl(EXIT_QUALIFICATION);
+		if (!(vcpu->guest_debug &
+		      (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))) {
+			vcpu->arch.dr6 &= ~15;
+			vcpu->arch.dr6 |= dr6 | DR6_RTM;
+			if (!(dr6 & ~DR6_RESERVED)) /* icebp */
+				skip_emulated_instruction(vcpu);
+
+			kvm_queue_exception(vcpu, DB_VECTOR);
+			return 1;
+		}
+		kvm_run->debug.arch.dr6 = dr6 | DR6_FIXED_1;
+		kvm_run->debug.arch.dr7 = vmcs_readl(GUEST_DR7);
+		/* fall through */
+	case BP_VECTOR:
+		/*
+		 * Update instruction length as we may reinject #BP from
+		 * user space while in guest debugging mode. Reading it for
+		 * #DB as well causes no harm, it is not used in that case.
+		 */
+		vmx->vcpu.arch.event_exit_inst_len =
+			vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+		kvm_run->exit_reason = KVM_EXIT_DEBUG;
+		rip = kvm_rip_read(vcpu);
+		kvm_run->debug.arch.pc = vmcs_readl(GUEST_CS_BASE) + rip;
+		kvm_run->debug.arch.exception = ex_no;
+		break;
+	default:
+		kvm_run->exit_reason = KVM_EXIT_EXCEPTION;
+		kvm_run->ex.exception = ex_no;
+		kvm_run->ex.error_code = error_code;
+		break;
+	}
+	return 0;
+}
+",C,"	if (is_nmi(intr_info))
+","	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
+",,"@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)
+ 	return vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;
+ }
+ 
+-static inline bool is_exception(u32 intr_info)
++static inline bool is_nmi(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+-		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
++		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+ 
+ static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+-	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
++	if (is_nmi(intr_info))
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+-		if (!is_exception(intr_info))
++		if (is_nmi(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+-	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+-	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
++	if (is_nmi(exit_intr_info)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);",linux,ef85b67385436ddc1998f45f1d6a210f935b3388,cc0d907c0907561f108b2f4d4da24e85f18d0ca5,1,"static int handle_exception(struct kvm_vcpu *vcpu)
+{
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	struct kvm_run *kvm_run = vcpu->run;
+	u32 intr_info, ex_no, error_code;
+	unsigned long cr2, rip, dr6;
+	u32 vect_info;
+	enum emulation_result er;
+
+	vect_info = vmx->idt_vectoring_info;
+	intr_info = vmx->exit_intr_info;
+
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+//flaw_line_below:
+	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
+//fix_flaw_line_below:
+//	if (is_nmi(intr_info))
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+		vmx_fpu_activate(vcpu);
+		return 1;
+	}
+
+	if (is_invalid_opcode(intr_info)) {
+		if (is_guest_mode(vcpu)) {
+			kvm_queue_exception(vcpu, UD_VECTOR);
+			return 1;
+		}
+		er = emulate_instruction(vcpu, EMULTYPE_TRAP_UD);
+		if (er != EMULATE_DONE)
+			kvm_queue_exception(vcpu, UD_VECTOR);
+		return 1;
+	}
+
+	error_code = 0;
+	if (intr_info & INTR_INFO_DELIVER_CODE_MASK)
+		error_code = vmcs_read32(VM_EXIT_INTR_ERROR_CODE);
+
+	/*
+	 * The #PF with PFEC.RSVD = 1 indicates the guest is accessing
+	 * MMIO, it is better to report an internal error.
+	 * See the comments in vmx_handle_exit.
+	 */
+	if ((vect_info & VECTORING_INFO_VALID_MASK) &&
+	    !(is_page_fault(intr_info) && !(error_code & PFERR_RSVD_MASK))) {
+		vcpu->run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
+		vcpu->run->internal.suberror = KVM_INTERNAL_ERROR_SIMUL_EX;
+		vcpu->run->internal.ndata = 3;
+		vcpu->run->internal.data[0] = vect_info;
+		vcpu->run->internal.data[1] = intr_info;
+		vcpu->run->internal.data[2] = error_code;
+		return 0;
+	}
+
+	if (is_page_fault(intr_info)) {
+		/* EPT won't cause page fault directly */
+		BUG_ON(enable_ept);
+		cr2 = vmcs_readl(EXIT_QUALIFICATION);
+		trace_kvm_page_fault(cr2, error_code);
+
+		if (kvm_event_needs_reinjection(vcpu))
+			kvm_mmu_unprotect_page_virt(vcpu, cr2);
+		return kvm_mmu_page_fault(vcpu, cr2, error_code, NULL, 0);
+	}
+
+	ex_no = intr_info & INTR_INFO_VECTOR_MASK;
+
+	if (vmx->rmode.vm86_active && rmode_exception(vcpu, ex_no))
+		return handle_rmode_exception(vcpu, ex_no, error_code);
+
+	switch (ex_no) {
+	case AC_VECTOR:
+		kvm_queue_exception_e(vcpu, AC_VECTOR, error_code);
+		return 1;
+	case DB_VECTOR:
+		dr6 = vmcs_readl(EXIT_QUALIFICATION);
+		if (!(vcpu->guest_debug &
+		      (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))) {
+			vcpu->arch.dr6 &= ~15;
+			vcpu->arch.dr6 |= dr6 | DR6_RTM;
+			if (!(dr6 & ~DR6_RESERVED)) /* icebp */
+				skip_emulated_instruction(vcpu);
+
+			kvm_queue_exception(vcpu, DB_VECTOR);
+			return 1;
+		}
+		kvm_run->debug.arch.dr6 = dr6 | DR6_FIXED_1;
+		kvm_run->debug.arch.dr7 = vmcs_readl(GUEST_DR7);
+		/* fall through */
+	case BP_VECTOR:
+		/*
+		 * Update instruction length as we may reinject #BP from
+		 * user space while in guest debugging mode. Reading it for
+		 * #DB as well causes no harm, it is not used in that case.
+		 */
+		vmx->vcpu.arch.event_exit_inst_len =
+			vmcs_read32(VM_EXIT_INSTRUCTION_LEN);
+		kvm_run->exit_reason = KVM_EXIT_DEBUG;
+		rip = kvm_rip_read(vcpu);
+		kvm_run->debug.arch.pc = vmcs_readl(GUEST_CS_BASE) + rip;
+		kvm_run->debug.arch.exception = ex_no;
+		break;
+	default:
+		kvm_run->exit_reason = KVM_EXIT_EXCEPTION;
+		kvm_run->ex.exception = ex_no;
+		kvm_run->ex.error_code = error_code;
+		break;
+	}
+	return 0;
+}
+"
+2291,180027,,Local,Not required,Partial,CVE-2016-9588,https://www.cvedetails.com/cve/CVE-2016-9588/,CWE-388,Low,,,,2016-12-28,2.1,"arch/x86/kvm/vmx.c in the Linux kernel through 4.9 mismanages the #BP and #OF exceptions, which allows guest OS users to cause a denial of service (guest OS crash) by declining to handle an exception thrown by an L2 guest.",2018-11-28,DoS ,2,https://github.com/torvalds/linux/commit/ef85b67385436ddc1998f45f1d6a210f935b3388,ef85b67385436ddc1998f45f1d6a210f935b3388,"kvm: nVMX: Allow L1 to intercept software exceptions (#BP and #OF)
+
+When L2 exits to L0 due to ""exception or NMI"", software exceptions
+(#BP and #OF) for which L1 has requested an intercept should be
+handled by L1 rather than L0. Previously, only hardware exceptions
+were forwarded to L1.
+
+Signed-off-by: Jim Mattson <jmattson@google.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>",1,arch/x86/kvm/vmx.c,"{""sha"": ""24db5fb6f575af27d3b61a67b15ce9996158ed8b"", ""filename"": ""arch/x86/kvm/vmx.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 6, ""changes"": 11, ""blob_url"": ""https://github.com/torvalds/linux/blob/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/arch/x86/kvm/vmx.c?ref=ef85b67385436ddc1998f45f1d6a210f935b3388"", ""patch"": ""@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)\n \treturn vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;\n }\n \n-static inline bool is_exception(u32 intr_info)\n+static inline bool is_nmi(u32 intr_info)\n {\n \treturn (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))\n-\t\t== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);\n+\t\t== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);\n }\n \n static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,\n@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)\n \tif (is_machine_check(intr_info))\n \t\treturn handle_machine_check(vcpu);\n \n-\tif ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)\n+\tif (is_nmi(intr_info))\n \t\treturn 1;  /* already handled by vmx_vcpu_run() */\n \n \tif (is_no_device(intr_info)) {\n@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)\n \n \tswitch (exit_reason) {\n \tcase EXIT_REASON_EXCEPTION_NMI:\n-\t\tif (!is_exception(intr_info))\n+\t\tif (is_nmi(intr_info))\n \t\t\treturn false;\n \t\telse if (is_page_fault(intr_info))\n \t\t\treturn enable_ept;\n@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)\n \t\tkvm_machine_check();\n \n \t/* We need to handle NMIs before interrupts are enabled */\n-\tif ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&\n-\t    (exit_intr_info & INTR_INFO_VALID_MASK)) {\n+\tif (is_nmi(exit_intr_info)) {\n \t\tkvm_before_handle_nmi(&vmx->vcpu);\n \t\tasm(\""int $2\"");\n \t\tkvm_after_handle_nmi(&vmx->vcpu);""}","static inline bool is_exception(u32 intr_info)
+static inline bool is_nmi(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+","static inline bool is_exception(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
+ }
+",C,"static inline bool is_nmi(u32 intr_info)
+		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+","		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
+",,"@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)
+ 	return vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;
+ }
+ 
+-static inline bool is_exception(u32 intr_info)
++static inline bool is_nmi(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+-		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
++		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+ 
+ static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+-	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
++	if (is_nmi(intr_info))
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+-		if (!is_exception(intr_info))
++		if (is_nmi(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+-	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+-	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
++	if (is_nmi(exit_intr_info)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);",linux,ef85b67385436ddc1998f45f1d6a210f935b3388,cc0d907c0907561f108b2f4d4da24e85f18d0ca5,1,"static inline bool is_exception(u32 intr_info)
+//fix_flaw_line_below:
+//static inline bool is_nmi(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+//flaw_line_below:
+		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
+//fix_flaw_line_below:
+//		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+"
+2292,180028,,Local,Not required,Partial,CVE-2016-9588,https://www.cvedetails.com/cve/CVE-2016-9588/,CWE-388,Low,,,,2016-12-28,2.1,"arch/x86/kvm/vmx.c in the Linux kernel through 4.9 mismanages the #BP and #OF exceptions, which allows guest OS users to cause a denial of service (guest OS crash) by declining to handle an exception thrown by an L2 guest.",2018-11-28,DoS ,1,https://github.com/torvalds/linux/commit/ef85b67385436ddc1998f45f1d6a210f935b3388,ef85b67385436ddc1998f45f1d6a210f935b3388,"kvm: nVMX: Allow L1 to intercept software exceptions (#BP and #OF)
+
+When L2 exits to L0 due to ""exception or NMI"", software exceptions
+(#BP and #OF) for which L1 has requested an intercept should be
+handled by L1 rather than L0. Previously, only hardware exceptions
+were forwarded to L1.
+
+Signed-off-by: Jim Mattson <jmattson@google.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>",1,arch/x86/kvm/vmx.c,"{""sha"": ""24db5fb6f575af27d3b61a67b15ce9996158ed8b"", ""filename"": ""arch/x86/kvm/vmx.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 6, ""changes"": 11, ""blob_url"": ""https://github.com/torvalds/linux/blob/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/arch/x86/kvm/vmx.c?ref=ef85b67385436ddc1998f45f1d6a210f935b3388"", ""patch"": ""@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)\n \treturn vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;\n }\n \n-static inline bool is_exception(u32 intr_info)\n+static inline bool is_nmi(u32 intr_info)\n {\n \treturn (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))\n-\t\t== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);\n+\t\t== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);\n }\n \n static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,\n@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)\n \tif (is_machine_check(intr_info))\n \t\treturn handle_machine_check(vcpu);\n \n-\tif ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)\n+\tif (is_nmi(intr_info))\n \t\treturn 1;  /* already handled by vmx_vcpu_run() */\n \n \tif (is_no_device(intr_info)) {\n@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)\n \n \tswitch (exit_reason) {\n \tcase EXIT_REASON_EXCEPTION_NMI:\n-\t\tif (!is_exception(intr_info))\n+\t\tif (is_nmi(intr_info))\n \t\t\treturn false;\n \t\telse if (is_page_fault(intr_info))\n \t\t\treturn enable_ept;\n@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)\n \t\tkvm_machine_check();\n \n \t/* We need to handle NMIs before interrupts are enabled */\n-\tif ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&\n-\t    (exit_intr_info & INTR_INFO_VALID_MASK)) {\n+\tif (is_nmi(exit_intr_info)) {\n \t\tkvm_before_handle_nmi(&vmx->vcpu);\n \t\tasm(\""int $2\"");\n \t\tkvm_after_handle_nmi(&vmx->vcpu);""}","static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+{
+	u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+	u32 exit_reason = vmx->exit_reason;
+
+	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), exit_reason,
+				vmcs_readl(EXIT_QUALIFICATION),
+				vmx->idt_vectoring_info,
+				intr_info,
+				vmcs_read32(VM_EXIT_INTR_ERROR_CODE),
+				KVM_ISA_VMX);
+
+	if (vmx->nested.nested_run_pending)
+		return false;
+
+	if (unlikely(vmx->fail)) {
+		pr_info_ratelimited(""%s failed vm entry %x\n"", __func__,
+				    vmcs_read32(VM_INSTRUCTION_ERROR));
+		return true;
+	}
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+		if (is_nmi(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+		else if (is_no_device(intr_info) &&
+			 !(vmcs12->guest_cr0 & X86_CR0_TS))
+			return false;
+		else if (is_debug(intr_info) &&
+			 vcpu->guest_debug &
+			 (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))
+			return false;
+		else if (is_breakpoint(intr_info) &&
+			 vcpu->guest_debug & KVM_GUESTDBG_USE_SW_BP)
+			return false;
+		return vmcs12->exception_bitmap &
+				(1u << (intr_info & INTR_INFO_VECTOR_MASK));
+	case EXIT_REASON_EXTERNAL_INTERRUPT:
+		return false;
+	case EXIT_REASON_TRIPLE_FAULT:
+		return true;
+	case EXIT_REASON_PENDING_INTERRUPT:
+		return nested_cpu_has(vmcs12, CPU_BASED_VIRTUAL_INTR_PENDING);
+	case EXIT_REASON_NMI_WINDOW:
+		return nested_cpu_has(vmcs12, CPU_BASED_VIRTUAL_NMI_PENDING);
+	case EXIT_REASON_TASK_SWITCH:
+		return true;
+	case EXIT_REASON_CPUID:
+		if (kvm_register_read(vcpu, VCPU_REGS_RAX) == 0xa)
+			return false;
+		return true;
+	case EXIT_REASON_HLT:
+		return nested_cpu_has(vmcs12, CPU_BASED_HLT_EXITING);
+	case EXIT_REASON_INVD:
+		return true;
+	case EXIT_REASON_INVLPG:
+		return nested_cpu_has(vmcs12, CPU_BASED_INVLPG_EXITING);
+	case EXIT_REASON_RDPMC:
+		return nested_cpu_has(vmcs12, CPU_BASED_RDPMC_EXITING);
+	case EXIT_REASON_RDTSC: case EXIT_REASON_RDTSCP:
+		return nested_cpu_has(vmcs12, CPU_BASED_RDTSC_EXITING);
+	case EXIT_REASON_VMCALL: case EXIT_REASON_VMCLEAR:
+	case EXIT_REASON_VMLAUNCH: case EXIT_REASON_VMPTRLD:
+	case EXIT_REASON_VMPTRST: case EXIT_REASON_VMREAD:
+	case EXIT_REASON_VMRESUME: case EXIT_REASON_VMWRITE:
+	case EXIT_REASON_VMOFF: case EXIT_REASON_VMON:
+	case EXIT_REASON_INVEPT: case EXIT_REASON_INVVPID:
+		/*
+		 * VMX instructions trap unconditionally. This allows L1 to
+		 * emulate them for its L2 guest, i.e., allows 3-level nesting!
+		 */
+		return true;
+	case EXIT_REASON_CR_ACCESS:
+		return nested_vmx_exit_handled_cr(vcpu, vmcs12);
+	case EXIT_REASON_DR_ACCESS:
+		return nested_cpu_has(vmcs12, CPU_BASED_MOV_DR_EXITING);
+	case EXIT_REASON_IO_INSTRUCTION:
+		return nested_vmx_exit_handled_io(vcpu, vmcs12);
+	case EXIT_REASON_GDTR_IDTR: case EXIT_REASON_LDTR_TR:
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_DESC);
+	case EXIT_REASON_MSR_READ:
+	case EXIT_REASON_MSR_WRITE:
+		return nested_vmx_exit_handled_msr(vcpu, vmcs12, exit_reason);
+	case EXIT_REASON_INVALID_STATE:
+		return true;
+	case EXIT_REASON_MWAIT_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_MWAIT_EXITING);
+	case EXIT_REASON_MONITOR_TRAP_FLAG:
+		return nested_cpu_has(vmcs12, CPU_BASED_MONITOR_TRAP_FLAG);
+	case EXIT_REASON_MONITOR_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_MONITOR_EXITING);
+	case EXIT_REASON_PAUSE_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_PAUSE_EXITING) ||
+			nested_cpu_has2(vmcs12,
+				SECONDARY_EXEC_PAUSE_LOOP_EXITING);
+	case EXIT_REASON_MCE_DURING_VMENTRY:
+		return false;
+	case EXIT_REASON_TPR_BELOW_THRESHOLD:
+		return nested_cpu_has(vmcs12, CPU_BASED_TPR_SHADOW);
+	case EXIT_REASON_APIC_ACCESS:
+		return nested_cpu_has2(vmcs12,
+			SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES);
+	case EXIT_REASON_APIC_WRITE:
+	case EXIT_REASON_EOI_INDUCED:
+		/* apic_write and eoi_induced should exit unconditionally. */
+		return true;
+	case EXIT_REASON_EPT_VIOLATION:
+		/*
+		 * L0 always deals with the EPT violation. If nested EPT is
+		 * used, and the nested mmu code discovers that the address is
+		 * missing in the guest EPT table (EPT12), the EPT violation
+		 * will be injected with nested_ept_inject_page_fault()
+		 */
+		return false;
+	case EXIT_REASON_EPT_MISCONFIG:
+		/*
+		 * L2 never uses directly L1's EPT, but rather L0's own EPT
+		 * table (shadow on EPT) or a merged EPT table that L0 built
+		 * (EPT on EPT). So any problems with the structure of the
+		 * table is L0's fault.
+		 */
+		return false;
+	case EXIT_REASON_WBINVD:
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_WBINVD_EXITING);
+	case EXIT_REASON_XSETBV:
+		return true;
+	case EXIT_REASON_XSAVES: case EXIT_REASON_XRSTORS:
+		/*
+		 * This should never happen, since it is not possible to
+		 * set XSS to a non-zero value---neither in L1 nor in L2.
+		 * If if it were, XSS would have to be checked against
+		 * the XSS exit bitmap in vmcs12.
+		 */
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_XSAVES);
+	case EXIT_REASON_PREEMPTION_TIMER:
+		return false;
+	default:
+		return true;
+	}
+}
+","static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+{
+	u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+	u32 exit_reason = vmx->exit_reason;
+
+	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), exit_reason,
+				vmcs_readl(EXIT_QUALIFICATION),
+				vmx->idt_vectoring_info,
+				intr_info,
+				vmcs_read32(VM_EXIT_INTR_ERROR_CODE),
+				KVM_ISA_VMX);
+
+	if (vmx->nested.nested_run_pending)
+		return false;
+
+	if (unlikely(vmx->fail)) {
+		pr_info_ratelimited(""%s failed vm entry %x\n"", __func__,
+				    vmcs_read32(VM_INSTRUCTION_ERROR));
+		return true;
+	}
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+		if (!is_exception(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+		else if (is_no_device(intr_info) &&
+			 !(vmcs12->guest_cr0 & X86_CR0_TS))
+			return false;
+		else if (is_debug(intr_info) &&
+			 vcpu->guest_debug &
+			 (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))
+			return false;
+		else if (is_breakpoint(intr_info) &&
+			 vcpu->guest_debug & KVM_GUESTDBG_USE_SW_BP)
+			return false;
+		return vmcs12->exception_bitmap &
+				(1u << (intr_info & INTR_INFO_VECTOR_MASK));
+	case EXIT_REASON_EXTERNAL_INTERRUPT:
+		return false;
+	case EXIT_REASON_TRIPLE_FAULT:
+		return true;
+	case EXIT_REASON_PENDING_INTERRUPT:
+		return nested_cpu_has(vmcs12, CPU_BASED_VIRTUAL_INTR_PENDING);
+	case EXIT_REASON_NMI_WINDOW:
+		return nested_cpu_has(vmcs12, CPU_BASED_VIRTUAL_NMI_PENDING);
+	case EXIT_REASON_TASK_SWITCH:
+		return true;
+	case EXIT_REASON_CPUID:
+		if (kvm_register_read(vcpu, VCPU_REGS_RAX) == 0xa)
+			return false;
+		return true;
+	case EXIT_REASON_HLT:
+		return nested_cpu_has(vmcs12, CPU_BASED_HLT_EXITING);
+	case EXIT_REASON_INVD:
+		return true;
+	case EXIT_REASON_INVLPG:
+		return nested_cpu_has(vmcs12, CPU_BASED_INVLPG_EXITING);
+	case EXIT_REASON_RDPMC:
+		return nested_cpu_has(vmcs12, CPU_BASED_RDPMC_EXITING);
+	case EXIT_REASON_RDTSC: case EXIT_REASON_RDTSCP:
+		return nested_cpu_has(vmcs12, CPU_BASED_RDTSC_EXITING);
+	case EXIT_REASON_VMCALL: case EXIT_REASON_VMCLEAR:
+	case EXIT_REASON_VMLAUNCH: case EXIT_REASON_VMPTRLD:
+	case EXIT_REASON_VMPTRST: case EXIT_REASON_VMREAD:
+	case EXIT_REASON_VMRESUME: case EXIT_REASON_VMWRITE:
+	case EXIT_REASON_VMOFF: case EXIT_REASON_VMON:
+	case EXIT_REASON_INVEPT: case EXIT_REASON_INVVPID:
+		/*
+		 * VMX instructions trap unconditionally. This allows L1 to
+		 * emulate them for its L2 guest, i.e., allows 3-level nesting!
+		 */
+		return true;
+	case EXIT_REASON_CR_ACCESS:
+		return nested_vmx_exit_handled_cr(vcpu, vmcs12);
+	case EXIT_REASON_DR_ACCESS:
+		return nested_cpu_has(vmcs12, CPU_BASED_MOV_DR_EXITING);
+	case EXIT_REASON_IO_INSTRUCTION:
+		return nested_vmx_exit_handled_io(vcpu, vmcs12);
+	case EXIT_REASON_GDTR_IDTR: case EXIT_REASON_LDTR_TR:
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_DESC);
+	case EXIT_REASON_MSR_READ:
+	case EXIT_REASON_MSR_WRITE:
+		return nested_vmx_exit_handled_msr(vcpu, vmcs12, exit_reason);
+	case EXIT_REASON_INVALID_STATE:
+		return true;
+	case EXIT_REASON_MWAIT_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_MWAIT_EXITING);
+	case EXIT_REASON_MONITOR_TRAP_FLAG:
+		return nested_cpu_has(vmcs12, CPU_BASED_MONITOR_TRAP_FLAG);
+	case EXIT_REASON_MONITOR_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_MONITOR_EXITING);
+	case EXIT_REASON_PAUSE_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_PAUSE_EXITING) ||
+			nested_cpu_has2(vmcs12,
+				SECONDARY_EXEC_PAUSE_LOOP_EXITING);
+	case EXIT_REASON_MCE_DURING_VMENTRY:
+		return false;
+	case EXIT_REASON_TPR_BELOW_THRESHOLD:
+		return nested_cpu_has(vmcs12, CPU_BASED_TPR_SHADOW);
+	case EXIT_REASON_APIC_ACCESS:
+		return nested_cpu_has2(vmcs12,
+			SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES);
+	case EXIT_REASON_APIC_WRITE:
+	case EXIT_REASON_EOI_INDUCED:
+		/* apic_write and eoi_induced should exit unconditionally. */
+		return true;
+	case EXIT_REASON_EPT_VIOLATION:
+		/*
+		 * L0 always deals with the EPT violation. If nested EPT is
+		 * used, and the nested mmu code discovers that the address is
+		 * missing in the guest EPT table (EPT12), the EPT violation
+		 * will be injected with nested_ept_inject_page_fault()
+		 */
+		return false;
+	case EXIT_REASON_EPT_MISCONFIG:
+		/*
+		 * L2 never uses directly L1's EPT, but rather L0's own EPT
+		 * table (shadow on EPT) or a merged EPT table that L0 built
+		 * (EPT on EPT). So any problems with the structure of the
+		 * table is L0's fault.
+		 */
+		return false;
+	case EXIT_REASON_WBINVD:
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_WBINVD_EXITING);
+	case EXIT_REASON_XSETBV:
+		return true;
+	case EXIT_REASON_XSAVES: case EXIT_REASON_XRSTORS:
+		/*
+		 * This should never happen, since it is not possible to
+		 * set XSS to a non-zero value---neither in L1 nor in L2.
+		 * If if it were, XSS would have to be checked against
+		 * the XSS exit bitmap in vmcs12.
+		 */
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_XSAVES);
+	case EXIT_REASON_PREEMPTION_TIMER:
+		return false;
+	default:
+		return true;
+	}
+}
+",C,"		if (is_nmi(intr_info))
+","		if (!is_exception(intr_info))
+",,"@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)
+ 	return vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;
+ }
+ 
+-static inline bool is_exception(u32 intr_info)
++static inline bool is_nmi(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+-		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
++		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+ 
+ static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+-	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
++	if (is_nmi(intr_info))
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+-		if (!is_exception(intr_info))
++		if (is_nmi(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+-	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+-	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
++	if (is_nmi(exit_intr_info)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);",linux,ef85b67385436ddc1998f45f1d6a210f935b3388,cc0d907c0907561f108b2f4d4da24e85f18d0ca5,1,"static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+{
+	u32 intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	struct vcpu_vmx *vmx = to_vmx(vcpu);
+	struct vmcs12 *vmcs12 = get_vmcs12(vcpu);
+	u32 exit_reason = vmx->exit_reason;
+
+	trace_kvm_nested_vmexit(kvm_rip_read(vcpu), exit_reason,
+				vmcs_readl(EXIT_QUALIFICATION),
+				vmx->idt_vectoring_info,
+				intr_info,
+				vmcs_read32(VM_EXIT_INTR_ERROR_CODE),
+				KVM_ISA_VMX);
+
+	if (vmx->nested.nested_run_pending)
+		return false;
+
+	if (unlikely(vmx->fail)) {
+		pr_info_ratelimited(""%s failed vm entry %x\n"", __func__,
+				    vmcs_read32(VM_INSTRUCTION_ERROR));
+		return true;
+	}
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+//flaw_line_below:
+		if (!is_exception(intr_info))
+//fix_flaw_line_below:
+//		if (is_nmi(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+		else if (is_no_device(intr_info) &&
+			 !(vmcs12->guest_cr0 & X86_CR0_TS))
+			return false;
+		else if (is_debug(intr_info) &&
+			 vcpu->guest_debug &
+			 (KVM_GUESTDBG_SINGLESTEP | KVM_GUESTDBG_USE_HW_BP))
+			return false;
+		else if (is_breakpoint(intr_info) &&
+			 vcpu->guest_debug & KVM_GUESTDBG_USE_SW_BP)
+			return false;
+		return vmcs12->exception_bitmap &
+				(1u << (intr_info & INTR_INFO_VECTOR_MASK));
+	case EXIT_REASON_EXTERNAL_INTERRUPT:
+		return false;
+	case EXIT_REASON_TRIPLE_FAULT:
+		return true;
+	case EXIT_REASON_PENDING_INTERRUPT:
+		return nested_cpu_has(vmcs12, CPU_BASED_VIRTUAL_INTR_PENDING);
+	case EXIT_REASON_NMI_WINDOW:
+		return nested_cpu_has(vmcs12, CPU_BASED_VIRTUAL_NMI_PENDING);
+	case EXIT_REASON_TASK_SWITCH:
+		return true;
+	case EXIT_REASON_CPUID:
+		if (kvm_register_read(vcpu, VCPU_REGS_RAX) == 0xa)
+			return false;
+		return true;
+	case EXIT_REASON_HLT:
+		return nested_cpu_has(vmcs12, CPU_BASED_HLT_EXITING);
+	case EXIT_REASON_INVD:
+		return true;
+	case EXIT_REASON_INVLPG:
+		return nested_cpu_has(vmcs12, CPU_BASED_INVLPG_EXITING);
+	case EXIT_REASON_RDPMC:
+		return nested_cpu_has(vmcs12, CPU_BASED_RDPMC_EXITING);
+	case EXIT_REASON_RDTSC: case EXIT_REASON_RDTSCP:
+		return nested_cpu_has(vmcs12, CPU_BASED_RDTSC_EXITING);
+	case EXIT_REASON_VMCALL: case EXIT_REASON_VMCLEAR:
+	case EXIT_REASON_VMLAUNCH: case EXIT_REASON_VMPTRLD:
+	case EXIT_REASON_VMPTRST: case EXIT_REASON_VMREAD:
+	case EXIT_REASON_VMRESUME: case EXIT_REASON_VMWRITE:
+	case EXIT_REASON_VMOFF: case EXIT_REASON_VMON:
+	case EXIT_REASON_INVEPT: case EXIT_REASON_INVVPID:
+		/*
+		 * VMX instructions trap unconditionally. This allows L1 to
+		 * emulate them for its L2 guest, i.e., allows 3-level nesting!
+		 */
+		return true;
+	case EXIT_REASON_CR_ACCESS:
+		return nested_vmx_exit_handled_cr(vcpu, vmcs12);
+	case EXIT_REASON_DR_ACCESS:
+		return nested_cpu_has(vmcs12, CPU_BASED_MOV_DR_EXITING);
+	case EXIT_REASON_IO_INSTRUCTION:
+		return nested_vmx_exit_handled_io(vcpu, vmcs12);
+	case EXIT_REASON_GDTR_IDTR: case EXIT_REASON_LDTR_TR:
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_DESC);
+	case EXIT_REASON_MSR_READ:
+	case EXIT_REASON_MSR_WRITE:
+		return nested_vmx_exit_handled_msr(vcpu, vmcs12, exit_reason);
+	case EXIT_REASON_INVALID_STATE:
+		return true;
+	case EXIT_REASON_MWAIT_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_MWAIT_EXITING);
+	case EXIT_REASON_MONITOR_TRAP_FLAG:
+		return nested_cpu_has(vmcs12, CPU_BASED_MONITOR_TRAP_FLAG);
+	case EXIT_REASON_MONITOR_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_MONITOR_EXITING);
+	case EXIT_REASON_PAUSE_INSTRUCTION:
+		return nested_cpu_has(vmcs12, CPU_BASED_PAUSE_EXITING) ||
+			nested_cpu_has2(vmcs12,
+				SECONDARY_EXEC_PAUSE_LOOP_EXITING);
+	case EXIT_REASON_MCE_DURING_VMENTRY:
+		return false;
+	case EXIT_REASON_TPR_BELOW_THRESHOLD:
+		return nested_cpu_has(vmcs12, CPU_BASED_TPR_SHADOW);
+	case EXIT_REASON_APIC_ACCESS:
+		return nested_cpu_has2(vmcs12,
+			SECONDARY_EXEC_VIRTUALIZE_APIC_ACCESSES);
+	case EXIT_REASON_APIC_WRITE:
+	case EXIT_REASON_EOI_INDUCED:
+		/* apic_write and eoi_induced should exit unconditionally. */
+		return true;
+	case EXIT_REASON_EPT_VIOLATION:
+		/*
+		 * L0 always deals with the EPT violation. If nested EPT is
+		 * used, and the nested mmu code discovers that the address is
+		 * missing in the guest EPT table (EPT12), the EPT violation
+		 * will be injected with nested_ept_inject_page_fault()
+		 */
+		return false;
+	case EXIT_REASON_EPT_MISCONFIG:
+		/*
+		 * L2 never uses directly L1's EPT, but rather L0's own EPT
+		 * table (shadow on EPT) or a merged EPT table that L0 built
+		 * (EPT on EPT). So any problems with the structure of the
+		 * table is L0's fault.
+		 */
+		return false;
+	case EXIT_REASON_WBINVD:
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_WBINVD_EXITING);
+	case EXIT_REASON_XSETBV:
+		return true;
+	case EXIT_REASON_XSAVES: case EXIT_REASON_XRSTORS:
+		/*
+		 * This should never happen, since it is not possible to
+		 * set XSS to a non-zero value---neither in L1 nor in L2.
+		 * If if it were, XSS would have to be checked against
+		 * the XSS exit bitmap in vmcs12.
+		 */
+		return nested_cpu_has2(vmcs12, SECONDARY_EXEC_XSAVES);
+	case EXIT_REASON_PREEMPTION_TIMER:
+		return false;
+	default:
+		return true;
+	}
+}
+"
+2293,180029,,Local,Not required,Partial,CVE-2016-9588,https://www.cvedetails.com/cve/CVE-2016-9588/,CWE-388,Low,,,,2016-12-28,2.1,"arch/x86/kvm/vmx.c in the Linux kernel through 4.9 mismanages the #BP and #OF exceptions, which allows guest OS users to cause a denial of service (guest OS crash) by declining to handle an exception thrown by an L2 guest.",2018-11-28,DoS ,1,https://github.com/torvalds/linux/commit/ef85b67385436ddc1998f45f1d6a210f935b3388,ef85b67385436ddc1998f45f1d6a210f935b3388,"kvm: nVMX: Allow L1 to intercept software exceptions (#BP and #OF)
+
+When L2 exits to L0 due to ""exception or NMI"", software exceptions
+(#BP and #OF) for which L1 has requested an intercept should be
+handled by L1 rather than L0. Previously, only hardware exceptions
+were forwarded to L1.
+
+Signed-off-by: Jim Mattson <jmattson@google.com>
+Cc: stable@vger.kernel.org
+Signed-off-by: Paolo Bonzini <pbonzini@redhat.com>",2,arch/x86/kvm/vmx.c,"{""sha"": ""24db5fb6f575af27d3b61a67b15ce9996158ed8b"", ""filename"": ""arch/x86/kvm/vmx.c"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 6, ""changes"": 11, ""blob_url"": ""https://github.com/torvalds/linux/blob/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/ef85b67385436ddc1998f45f1d6a210f935b3388/arch/x86/kvm/vmx.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/arch/x86/kvm/vmx.c?ref=ef85b67385436ddc1998f45f1d6a210f935b3388"", ""patch"": ""@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)\n \treturn vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;\n }\n \n-static inline bool is_exception(u32 intr_info)\n+static inline bool is_nmi(u32 intr_info)\n {\n \treturn (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))\n-\t\t== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);\n+\t\t== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);\n }\n \n static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,\n@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)\n \tif (is_machine_check(intr_info))\n \t\treturn handle_machine_check(vcpu);\n \n-\tif ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)\n+\tif (is_nmi(intr_info))\n \t\treturn 1;  /* already handled by vmx_vcpu_run() */\n \n \tif (is_no_device(intr_info)) {\n@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)\n \n \tswitch (exit_reason) {\n \tcase EXIT_REASON_EXCEPTION_NMI:\n-\t\tif (!is_exception(intr_info))\n+\t\tif (is_nmi(intr_info))\n \t\t\treturn false;\n \t\telse if (is_page_fault(intr_info))\n \t\t\treturn enable_ept;\n@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)\n \t\tkvm_machine_check();\n \n \t/* We need to handle NMIs before interrupts are enabled */\n-\tif ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&\n-\t    (exit_intr_info & INTR_INFO_VALID_MASK)) {\n+\tif (is_nmi(exit_intr_info)) {\n \t\tkvm_before_handle_nmi(&vmx->vcpu);\n \t\tasm(\""int $2\"");\n \t\tkvm_after_handle_nmi(&vmx->vcpu);""}","static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+{
+	u32 exit_intr_info;
+
+	if (!(vmx->exit_reason == EXIT_REASON_MCE_DURING_VMENTRY
+	      || vmx->exit_reason == EXIT_REASON_EXCEPTION_NMI))
+		return;
+
+	vmx->exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	exit_intr_info = vmx->exit_intr_info;
+
+	/* Handle machine checks before interrupts are enabled */
+	if (is_machine_check(exit_intr_info))
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+	if (is_nmi(exit_intr_info)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);
+	}
+}
+","static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+{
+	u32 exit_intr_info;
+
+	if (!(vmx->exit_reason == EXIT_REASON_MCE_DURING_VMENTRY
+	      || vmx->exit_reason == EXIT_REASON_EXCEPTION_NMI))
+		return;
+
+	vmx->exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	exit_intr_info = vmx->exit_intr_info;
+
+	/* Handle machine checks before interrupts are enabled */
+	if (is_machine_check(exit_intr_info))
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);
+	}
+}
+",C,"	if (is_nmi(exit_intr_info)) {
+","	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
+",,"@@ -1389,10 +1389,10 @@ static inline bool nested_cpu_has_posted_intr(struct vmcs12 *vmcs12)
+ 	return vmcs12->pin_based_vm_exec_control & PIN_BASED_POSTED_INTR;
+ }
+ 
+-static inline bool is_exception(u32 intr_info)
++static inline bool is_nmi(u32 intr_info)
+ {
+ 	return (intr_info & (INTR_INFO_INTR_TYPE_MASK | INTR_INFO_VALID_MASK))
+-		== (INTR_TYPE_HARD_EXCEPTION | INTR_INFO_VALID_MASK);
++		== (INTR_TYPE_NMI_INTR | INTR_INFO_VALID_MASK);
+ }
+ 
+ static void nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 exit_reason,
+@@ -5728,7 +5728,7 @@ static int handle_exception(struct kvm_vcpu *vcpu)
+ 	if (is_machine_check(intr_info))
+ 		return handle_machine_check(vcpu);
+ 
+-	if ((intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR)
++	if (is_nmi(intr_info))
+ 		return 1;  /* already handled by vmx_vcpu_run() */
+ 
+ 	if (is_no_device(intr_info)) {
+@@ -8170,7 +8170,7 @@ static bool nested_vmx_exit_handled(struct kvm_vcpu *vcpu)
+ 
+ 	switch (exit_reason) {
+ 	case EXIT_REASON_EXCEPTION_NMI:
+-		if (!is_exception(intr_info))
++		if (is_nmi(intr_info))
+ 			return false;
+ 		else if (is_page_fault(intr_info))
+ 			return enable_ept;
+@@ -8765,8 +8765,7 @@ static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+-	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+-	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
++	if (is_nmi(exit_intr_info)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);",linux,ef85b67385436ddc1998f45f1d6a210f935b3388,cc0d907c0907561f108b2f4d4da24e85f18d0ca5,1,"static void vmx_complete_atomic_exit(struct vcpu_vmx *vmx)
+{
+	u32 exit_intr_info;
+
+	if (!(vmx->exit_reason == EXIT_REASON_MCE_DURING_VMENTRY
+	      || vmx->exit_reason == EXIT_REASON_EXCEPTION_NMI))
+		return;
+
+	vmx->exit_intr_info = vmcs_read32(VM_EXIT_INTR_INFO);
+	exit_intr_info = vmx->exit_intr_info;
+
+	/* Handle machine checks before interrupts are enabled */
+	if (is_machine_check(exit_intr_info))
+ 		kvm_machine_check();
+ 
+ 	/* We need to handle NMIs before interrupts are enabled */
+//flaw_line_below:
+	if ((exit_intr_info & INTR_INFO_INTR_TYPE_MASK) == INTR_TYPE_NMI_INTR &&
+//flaw_line_below:
+	    (exit_intr_info & INTR_INFO_VALID_MASK)) {
+//fix_flaw_line_below:
+//	if (is_nmi(exit_intr_info)) {
+ 		kvm_before_handle_nmi(&vmx->vcpu);
+ 		asm(""int $2"");
+ 		kvm_after_handle_nmi(&vmx->vcpu);
+	}
+}
+"
+3643,181379,,Local,Not required,Complete,CVE-2017-8072,https://www.cvedetails.com/cve/CVE-2017-8072/,CWE-388,Low,Complete,Complete,,2017-04-23,7.2,"The cp2112_gpio_direction_input function in drivers/hid/hid-cp2112.c in the Linux kernel 4.9.x before 4.9.9 does not have the expected EIO error status for a zero-length report, which allows local users to have an unspecified impact via unknown vectors.",2017-04-27,,1,https://github.com/torvalds/linux/commit/8e9faa15469ed7c7467423db4c62aeed3ff4cae3,8e9faa15469ed7c7467423db4c62aeed3ff4cae3,"HID: cp2112: fix gpio-callback error handling
+
+In case of a zero-length report, the gpio direction_input callback would
+currently return success instead of an errno.
+
+Fixes: 1ffb3c40ffb5 (""HID: cp2112: make transfer buffers DMA capable"")
+Cc: stable <stable@vger.kernel.org>     # 4.9
+Signed-off-by: Johan Hovold <johan@kernel.org>
+Reviewed-by: Benjamin Tissoires <benjamin.tissoires@redhat.com>
+Signed-off-by: Jiri Kosina <jkosina@suse.cz>",1,drivers/hid/hid-cp2112.c,"{""sha"": ""b22d0f83f8e38a9ee0d0eb7381e95d6b90442b61"", ""filename"": ""drivers/hid/hid-cp2112.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/torvalds/linux/blob/8e9faa15469ed7c7467423db4c62aeed3ff4cae3/drivers/hid/hid-cp2112.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/8e9faa15469ed7c7467423db4c62aeed3ff4cae3/drivers/hid/hid-cp2112.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/hid/hid-cp2112.c?ref=8e9faa15469ed7c7467423db4c62aeed3ff4cae3"", ""patch"": ""@@ -213,7 +213,7 @@ static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)\n \n exit:\n \tmutex_unlock(&dev->lock);\n-\treturn ret <= 0 ? ret : -EIO;\n+\treturn ret < 0 ? ret : -EIO;\n }\n \n static void cp2112_gpio_set(struct gpio_chip *chip, unsigned offset, int value)""}","static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+	return ret < 0 ? ret : -EIO;
+ }
+","static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+	return ret <= 0 ? ret : -EIO;
+ }
+",C,"	return ret < 0 ? ret : -EIO;
+","	return ret <= 0 ? ret : -EIO;
+",,"@@ -213,7 +213,7 @@ static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+-	return ret <= 0 ? ret : -EIO;
++	return ret < 0 ? ret : -EIO;
+ }
+ 
+ static void cp2112_gpio_set(struct gpio_chip *chip, unsigned offset, int value)",linux,8e9faa15469ed7c7467423db4c62aeed3ff4cae3,7a7b5df84b6b4e5d599c7289526eed96541a0654,1,"static int cp2112_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
+{
+	struct cp2112_device *dev = gpiochip_get_data(chip);
+	struct hid_device *hdev = dev->hdev;
+	u8 *buf = dev->in_out_buffer;
+	int ret;
+
+	mutex_lock(&dev->lock);
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_GET_REPORT);
+	if (ret != CP2112_GPIO_CONFIG_LENGTH) {
+		hid_err(hdev, ""error requesting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	buf[1] &= ~(1 << offset);
+	buf[2] = gpio_push_pull;
+
+	ret = hid_hw_raw_request(hdev, CP2112_GPIO_CONFIG, buf,
+				 CP2112_GPIO_CONFIG_LENGTH, HID_FEATURE_REPORT,
+				 HID_REQ_SET_REPORT);
+	if (ret < 0) {
+		hid_err(hdev, ""error setting GPIO config: %d\n"", ret);
+		goto exit;
+	}
+
+	ret = 0;
+ 
+ exit:
+ 	mutex_unlock(&dev->lock);
+//flaw_line_below:
+	return ret <= 0 ? ret : -EIO;
+//fix_flaw_line_below:
+//	return ret < 0 ? ret : -EIO;
+ }
+"
+3693,181429,,Local,Not required,,CVE-2017-7616,https://www.cvedetails.com/cve/CVE-2017-7616/,CWE-388,Low,Partial,,,2017-04-10,2.1,Incorrect error handling in the set_mempolicy and mbind compat syscalls in mm/mempolicy.c in the Linux kernel through 4.10.9 allows local users to obtain sensitive information from uninitialized stack data by triggering failure of a certain bitmap operation.,2018-06-19,+Info ,4,https://github.com/torvalds/linux/commit/cf01fb9985e8deb25ccf0ea54d916b8871ae0e62,cf01fb9985e8deb25ccf0ea54d916b8871ae0e62,"mm/mempolicy.c: fix error handling in set_mempolicy and mbind.
+
+In the case that compat_get_bitmap fails we do not want to copy the
+bitmap to the user as it will contain uninitialized stack data and leak
+sensitive data.
+
+Signed-off-by: Chris Salls <salls@cs.ucsb.edu>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",5,mm/mempolicy.c,"{""sha"": ""37d0b334bfe9f09222a9626a99b91f4bfca9d784"", ""filename"": ""mm/mempolicy.c"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 12, ""changes"": 20, ""blob_url"": ""https://github.com/torvalds/linux/blob/cf01fb9985e8deb25ccf0ea54d916b8871ae0e62/mm/mempolicy.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/cf01fb9985e8deb25ccf0ea54d916b8871ae0e62/mm/mempolicy.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/mm/mempolicy.c?ref=cf01fb9985e8deb25ccf0ea54d916b8871ae0e62"", ""patch"": ""@@ -1529,7 +1529,6 @@ COMPAT_SYSCALL_DEFINE5(get_mempolicy, int __user *, policy,\n COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,\n \t\t       compat_ulong_t, maxnode)\n {\n-\tlong err = 0;\n \tunsigned long __user *nm = NULL;\n \tunsigned long nr_bits, alloc_size;\n \tDECLARE_BITMAP(bm, MAX_NUMNODES);\n@@ -1538,22 +1537,20 @@ COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,\n \talloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;\n \n \tif (nmask) {\n-\t\terr = compat_get_bitmap(bm, nmask, nr_bits);\n+\t\tif (compat_get_bitmap(bm, nmask, nr_bits))\n+\t\t\treturn -EFAULT;\n \t\tnm = compat_alloc_user_space(alloc_size);\n-\t\terr |= copy_to_user(nm, bm, alloc_size);\n+\t\tif (copy_to_user(nm, bm, alloc_size))\n+\t\t\treturn -EFAULT;\n \t}\n \n-\tif (err)\n-\t\treturn -EFAULT;\n-\n \treturn sys_set_mempolicy(mode, nm, nr_bits+1);\n }\n \n COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,\n \t\t       compat_ulong_t, mode, compat_ulong_t __user *, nmask,\n \t\t       compat_ulong_t, maxnode, compat_ulong_t, flags)\n {\n-\tlong err = 0;\n \tunsigned long __user *nm = NULL;\n \tunsigned long nr_bits, alloc_size;\n \tnodemask_t bm;\n@@ -1562,14 +1559,13 @@ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,\n \talloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;\n \n \tif (nmask) {\n-\t\terr = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);\n+\t\tif (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))\n+\t\t\treturn -EFAULT;\n \t\tnm = compat_alloc_user_space(alloc_size);\n-\t\terr |= copy_to_user(nm, nodes_addr(bm), alloc_size);\n+\t\tif (copy_to_user(nm, nodes_addr(bm), alloc_size))\n+\t\t\treturn -EFAULT;\n \t}\n \n-\tif (err)\n-\t\treturn -EFAULT;\n-\n \treturn sys_mbind(start, len, mode, nm, nr_bits+1, flags);\n }\n ""}"," COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode)
+ {
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	DECLARE_BITMAP(bm, MAX_NUMNODES);
+
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+		if (compat_get_bitmap(bm, nmask, nr_bits))
+			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+		if (copy_to_user(nm, bm, alloc_size))
+			return -EFAULT;
+ 	}
+ 
+ 	return sys_set_mempolicy(mode, nm, nr_bits+1);
+ }
+"," COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode)
+ {
+	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	DECLARE_BITMAP(bm, MAX_NUMNODES);
+
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+		err = compat_get_bitmap(bm, nmask, nr_bits);
+ 		nm = compat_alloc_user_space(alloc_size);
+		err |= copy_to_user(nm, bm, alloc_size);
+ 	}
+ 
+	if (err)
+		return -EFAULT;
+ 	return sys_set_mempolicy(mode, nm, nr_bits+1);
+ }
+",C,"		if (compat_get_bitmap(bm, nmask, nr_bits))
+			return -EFAULT;
+		if (copy_to_user(nm, bm, alloc_size))
+			return -EFAULT;
+","	long err = 0;
+		err = compat_get_bitmap(bm, nmask, nr_bits);
+		err |= copy_to_user(nm, bm, alloc_size);
+	if (err)
+		return -EFAULT;
+",,"@@ -1529,7 +1529,6 @@ COMPAT_SYSCALL_DEFINE5(get_mempolicy, int __user *, policy,
+ COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode)
+ {
+-	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	DECLARE_BITMAP(bm, MAX_NUMNODES);
+@@ -1538,22 +1537,20 @@ COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+-		err = compat_get_bitmap(bm, nmask, nr_bits);
++		if (compat_get_bitmap(bm, nmask, nr_bits))
++			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+-		err |= copy_to_user(nm, bm, alloc_size);
++		if (copy_to_user(nm, bm, alloc_size))
++			return -EFAULT;
+ 	}
+ 
+-	if (err)
+-		return -EFAULT;
+-
+ 	return sys_set_mempolicy(mode, nm, nr_bits+1);
+ }
+ 
+ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 		       compat_ulong_t, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode, compat_ulong_t, flags)
+ {
+-	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	nodemask_t bm;
+@@ -1562,14 +1559,13 @@ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+-		err = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);
++		if (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))
++			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+-		err |= copy_to_user(nm, nodes_addr(bm), alloc_size);
++		if (copy_to_user(nm, nodes_addr(bm), alloc_size))
++			return -EFAULT;
+ 	}
+ 
+-	if (err)
+-		return -EFAULT;
+-
+ 	return sys_mbind(start, len, mode, nm, nr_bits+1, flags);
+ }
+ ",linux,cf01fb9985e8deb25ccf0ea54d916b8871ae0e62,425fffd886bae3d127a08fa6a17f2e31e24ed7ff,1," COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode)
+ {
+//flaw_line_below:
+	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	DECLARE_BITMAP(bm, MAX_NUMNODES);
+
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+//flaw_line_below:
+		err = compat_get_bitmap(bm, nmask, nr_bits);
+//fix_flaw_line_below:
+//		if (compat_get_bitmap(bm, nmask, nr_bits))
+//fix_flaw_line_below:
+//			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+//flaw_line_below:
+		err |= copy_to_user(nm, bm, alloc_size);
+//fix_flaw_line_below:
+//		if (copy_to_user(nm, bm, alloc_size))
+//fix_flaw_line_below:
+//			return -EFAULT;
+ 	}
+ 
+//flaw_line_below:
+	if (err)
+//flaw_line_below:
+		return -EFAULT;
+//flaw_line_below:
+
+ 	return sys_set_mempolicy(mode, nm, nr_bits+1);
+ }
+"
+3694,181430,,Local,Not required,,CVE-2017-7616,https://www.cvedetails.com/cve/CVE-2017-7616/,CWE-388,Low,Partial,,,2017-04-10,2.1,Incorrect error handling in the set_mempolicy and mbind compat syscalls in mm/mempolicy.c in the Linux kernel through 4.10.9 allows local users to obtain sensitive information from uninitialized stack data by triggering failure of a certain bitmap operation.,2018-06-19,+Info ,4,https://github.com/torvalds/linux/commit/cf01fb9985e8deb25ccf0ea54d916b8871ae0e62,cf01fb9985e8deb25ccf0ea54d916b8871ae0e62,"mm/mempolicy.c: fix error handling in set_mempolicy and mbind.
+
+In the case that compat_get_bitmap fails we do not want to copy the
+bitmap to the user as it will contain uninitialized stack data and leak
+sensitive data.
+
+Signed-off-by: Chris Salls <salls@cs.ucsb.edu>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",5,mm/mempolicy.c,"{""sha"": ""37d0b334bfe9f09222a9626a99b91f4bfca9d784"", ""filename"": ""mm/mempolicy.c"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 12, ""changes"": 20, ""blob_url"": ""https://github.com/torvalds/linux/blob/cf01fb9985e8deb25ccf0ea54d916b8871ae0e62/mm/mempolicy.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/cf01fb9985e8deb25ccf0ea54d916b8871ae0e62/mm/mempolicy.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/mm/mempolicy.c?ref=cf01fb9985e8deb25ccf0ea54d916b8871ae0e62"", ""patch"": ""@@ -1529,7 +1529,6 @@ COMPAT_SYSCALL_DEFINE5(get_mempolicy, int __user *, policy,\n COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,\n \t\t       compat_ulong_t, maxnode)\n {\n-\tlong err = 0;\n \tunsigned long __user *nm = NULL;\n \tunsigned long nr_bits, alloc_size;\n \tDECLARE_BITMAP(bm, MAX_NUMNODES);\n@@ -1538,22 +1537,20 @@ COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,\n \talloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;\n \n \tif (nmask) {\n-\t\terr = compat_get_bitmap(bm, nmask, nr_bits);\n+\t\tif (compat_get_bitmap(bm, nmask, nr_bits))\n+\t\t\treturn -EFAULT;\n \t\tnm = compat_alloc_user_space(alloc_size);\n-\t\terr |= copy_to_user(nm, bm, alloc_size);\n+\t\tif (copy_to_user(nm, bm, alloc_size))\n+\t\t\treturn -EFAULT;\n \t}\n \n-\tif (err)\n-\t\treturn -EFAULT;\n-\n \treturn sys_set_mempolicy(mode, nm, nr_bits+1);\n }\n \n COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,\n \t\t       compat_ulong_t, mode, compat_ulong_t __user *, nmask,\n \t\t       compat_ulong_t, maxnode, compat_ulong_t, flags)\n {\n-\tlong err = 0;\n \tunsigned long __user *nm = NULL;\n \tunsigned long nr_bits, alloc_size;\n \tnodemask_t bm;\n@@ -1562,14 +1559,13 @@ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,\n \talloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;\n \n \tif (nmask) {\n-\t\terr = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);\n+\t\tif (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))\n+\t\t\treturn -EFAULT;\n \t\tnm = compat_alloc_user_space(alloc_size);\n-\t\terr |= copy_to_user(nm, nodes_addr(bm), alloc_size);\n+\t\tif (copy_to_user(nm, nodes_addr(bm), alloc_size))\n+\t\t\treturn -EFAULT;\n \t}\n \n-\tif (err)\n-\t\treturn -EFAULT;\n-\n \treturn sys_mbind(start, len, mode, nm, nr_bits+1, flags);\n }\n ""}"," COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 		       compat_ulong_t, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode, compat_ulong_t, flags)
+ {
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	nodemask_t bm;
+
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+		if (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))
+			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+		if (copy_to_user(nm, nodes_addr(bm), alloc_size))
+			return -EFAULT;
+ 	}
+ 
+ 	return sys_mbind(start, len, mode, nm, nr_bits+1, flags);
+ }
+"," COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 		       compat_ulong_t, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode, compat_ulong_t, flags)
+ {
+	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	nodemask_t bm;
+
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+		err = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);
+ 		nm = compat_alloc_user_space(alloc_size);
+		err |= copy_to_user(nm, nodes_addr(bm), alloc_size);
+ 	}
+ 
+	if (err)
+		return -EFAULT;
+ 	return sys_mbind(start, len, mode, nm, nr_bits+1, flags);
+ }
+",C,"		if (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))
+			return -EFAULT;
+		if (copy_to_user(nm, nodes_addr(bm), alloc_size))
+			return -EFAULT;
+","	long err = 0;
+		err = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);
+		err |= copy_to_user(nm, nodes_addr(bm), alloc_size);
+	if (err)
+		return -EFAULT;
+",,"@@ -1529,7 +1529,6 @@ COMPAT_SYSCALL_DEFINE5(get_mempolicy, int __user *, policy,
+ COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode)
+ {
+-	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	DECLARE_BITMAP(bm, MAX_NUMNODES);
+@@ -1538,22 +1537,20 @@ COMPAT_SYSCALL_DEFINE3(set_mempolicy, int, mode, compat_ulong_t __user *, nmask,
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+-		err = compat_get_bitmap(bm, nmask, nr_bits);
++		if (compat_get_bitmap(bm, nmask, nr_bits))
++			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+-		err |= copy_to_user(nm, bm, alloc_size);
++		if (copy_to_user(nm, bm, alloc_size))
++			return -EFAULT;
+ 	}
+ 
+-	if (err)
+-		return -EFAULT;
+-
+ 	return sys_set_mempolicy(mode, nm, nr_bits+1);
+ }
+ 
+ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 		       compat_ulong_t, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode, compat_ulong_t, flags)
+ {
+-	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	nodemask_t bm;
+@@ -1562,14 +1559,13 @@ COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+-		err = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);
++		if (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))
++			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+-		err |= copy_to_user(nm, nodes_addr(bm), alloc_size);
++		if (copy_to_user(nm, nodes_addr(bm), alloc_size))
++			return -EFAULT;
+ 	}
+ 
+-	if (err)
+-		return -EFAULT;
+-
+ 	return sys_mbind(start, len, mode, nm, nr_bits+1, flags);
+ }
+ ",linux,cf01fb9985e8deb25ccf0ea54d916b8871ae0e62,425fffd886bae3d127a08fa6a17f2e31e24ed7ff,1," COMPAT_SYSCALL_DEFINE6(mbind, compat_ulong_t, start, compat_ulong_t, len,
+ 		       compat_ulong_t, mode, compat_ulong_t __user *, nmask,
+ 		       compat_ulong_t, maxnode, compat_ulong_t, flags)
+ {
+//flaw_line_below:
+	long err = 0;
+ 	unsigned long __user *nm = NULL;
+ 	unsigned long nr_bits, alloc_size;
+ 	nodemask_t bm;
+
+	nr_bits = min_t(unsigned long, maxnode-1, MAX_NUMNODES);
+ 	alloc_size = ALIGN(nr_bits, BITS_PER_LONG) / 8;
+ 
+ 	if (nmask) {
+//flaw_line_below:
+		err = compat_get_bitmap(nodes_addr(bm), nmask, nr_bits);
+//fix_flaw_line_below:
+//		if (compat_get_bitmap(nodes_addr(bm), nmask, nr_bits))
+//fix_flaw_line_below:
+//			return -EFAULT;
+ 		nm = compat_alloc_user_space(alloc_size);
+//flaw_line_below:
+		err |= copy_to_user(nm, nodes_addr(bm), alloc_size);
+//fix_flaw_line_below:
+//		if (copy_to_user(nm, nodes_addr(bm), alloc_size))
+//fix_flaw_line_below:
+//			return -EFAULT;
+ 	}
+ 
+//flaw_line_below:
+	if (err)
+//flaw_line_below:
+		return -EFAULT;
+//flaw_line_below:
+
+ 	return sys_mbind(start, len, mode, nm, nr_bits+1, flags);
+ }
+"
+3820,181556,,Local,Not required,Complete,CVE-2017-5577,https://www.cvedetails.com/cve/CVE-2017-5577/,CWE-388,Low,,,,2017-02-06,4.9,"The vc4_get_bcl function in drivers/gpu/drm/vc4/vc4_gem.c in the VideoCore DRM driver in the Linux kernel before 4.9.7 does not set an errno value upon certain overflow detections, which allows local users to cause a denial of service (incorrect pointer dereference and OOPS) via inconsistent size values in a VC4_SUBMIT_CL ioctl call.",2017-02-08,DoS Overflow ,1,https://github.com/torvalds/linux/commit/6b8ac63847bc2f958dd93c09edc941a0118992d9,6b8ac63847bc2f958dd93c09edc941a0118992d9,"drm/vc4: Return -EINVAL on the overflow checks failing.
+
+By failing to set the errno, we'd continue on to trying to set up the
+RCL, and then oops on trying to dereference the tile_bo that binning
+validation should have set up.
+
+Reported-by: Ingo Molnar <mingo@kernel.org>
+Signed-off-by: Eric Anholt <eric@anholt.net>
+Fixes: d5b1a78a772f (""drm/vc4: Add support for drawing 3D frames."")",0,drivers/gpu/drm/vc4/vc4_gem.c,"{""sha"": ""ab3016982466c3ca35ba479050ee107d26eb50ac"", ""filename"": ""drivers/gpu/drm/vc4/vc4_gem.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/torvalds/linux/blob/6b8ac63847bc2f958dd93c09edc941a0118992d9/drivers/gpu/drm/vc4/vc4_gem.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/6b8ac63847bc2f958dd93c09edc941a0118992d9/drivers/gpu/drm/vc4/vc4_gem.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/gpu/drm/vc4/vc4_gem.c?ref=6b8ac63847bc2f958dd93c09edc941a0118992d9"", ""patch"": ""@@ -601,6 +601,7 @@ vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)\n \t\t\t\t\t  sizeof(struct vc4_shader_state)) ||\n \t    temp_size < exec_size) {\n \t\tDRM_ERROR(\""overflow in exec arguments\\n\"");\n+\t\tret = -EINVAL;\n \t\tgoto fail;\n \t}\n ""}","vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+","vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+",C,"		ret = -EINVAL;
+",,,"@@ -601,6 +601,7 @@ vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
++		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ ",linux,6b8ac63847bc2f958dd93c09edc941a0118992d9,0f2ff82e11c86c05d051cae32b58226392d33bbf,1,"vc4_get_bcl(struct drm_device *dev, struct vc4_exec_info *exec)
+{
+	struct drm_vc4_submit_cl *args = exec->args;
+	void *temp = NULL;
+	void *bin;
+	int ret = 0;
+	uint32_t bin_offset = 0;
+	uint32_t shader_rec_offset = roundup(bin_offset + args->bin_cl_size,
+					     16);
+	uint32_t uniforms_offset = shader_rec_offset + args->shader_rec_size;
+	uint32_t exec_size = uniforms_offset + args->uniforms_size;
+	uint32_t temp_size = exec_size + (sizeof(struct vc4_shader_state) *
+					  args->shader_rec_count);
+	struct vc4_bo *bo;
+
+	if (shader_rec_offset < args->bin_cl_size ||
+	    uniforms_offset < shader_rec_offset ||
+	    exec_size < uniforms_offset ||
+	    args->shader_rec_count >= (UINT_MAX /
+ 					  sizeof(struct vc4_shader_state)) ||
+ 	    temp_size < exec_size) {
+ 		DRM_ERROR(""overflow in exec arguments\n"");
+//fix_flaw_line_below:
+//		ret = -EINVAL;
+ 		goto fail;
+ 	}
+ 
+	/* Allocate space where we'll store the copied in user command lists
+	 * and shader records.
+	 *
+	 * We don't just copy directly into the BOs because we need to
+	 * read the contents back for validation, and I think the
+	 * bo->vaddr is uncached access.
+	 */
+	temp = drm_malloc_ab(temp_size, 1);
+	if (!temp) {
+		DRM_ERROR(""Failed to allocate storage for copying ""
+			  ""in bin/render CLs.\n"");
+		ret = -ENOMEM;
+		goto fail;
+	}
+	bin = temp + bin_offset;
+	exec->shader_rec_u = temp + shader_rec_offset;
+	exec->uniforms_u = temp + uniforms_offset;
+	exec->shader_state = temp + exec_size;
+	exec->shader_state_size = args->shader_rec_count;
+
+	if (copy_from_user(bin,
+			   (void __user *)(uintptr_t)args->bin_cl,
+			   args->bin_cl_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->shader_rec_u,
+			   (void __user *)(uintptr_t)args->shader_rec,
+			   args->shader_rec_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	if (copy_from_user(exec->uniforms_u,
+			   (void __user *)(uintptr_t)args->uniforms,
+			   args->uniforms_size)) {
+		ret = -EFAULT;
+		goto fail;
+	}
+
+	bo = vc4_bo_create(dev, exec_size, true);
+	if (IS_ERR(bo)) {
+		DRM_ERROR(""Couldn't allocate BO for binning\n"");
+		ret = PTR_ERR(bo);
+		goto fail;
+	}
+	exec->exec_bo = &bo->base;
+
+	list_add_tail(&to_vc4_bo(&exec->exec_bo->base)->unref_head,
+		      &exec->unref_list);
+
+	exec->ct0ca = exec->exec_bo->paddr + bin_offset;
+
+	exec->bin_u = bin;
+
+	exec->shader_rec_v = exec->exec_bo->vaddr + shader_rec_offset;
+	exec->shader_rec_p = exec->exec_bo->paddr + shader_rec_offset;
+	exec->shader_rec_size = args->shader_rec_size;
+
+	exec->uniforms_v = exec->exec_bo->vaddr + uniforms_offset;
+	exec->uniforms_p = exec->exec_bo->paddr + uniforms_offset;
+	exec->uniforms_size = args->uniforms_size;
+
+	ret = vc4_validate_bin_cl(dev,
+				  exec->exec_bo->vaddr + bin_offset,
+				  bin,
+				  exec);
+	if (ret)
+		goto fail;
+
+	ret = vc4_validate_shader_recs(dev, exec);
+	if (ret)
+		goto fail;
+
+	/* Block waiting on any previous rendering into the CS's VBO,
+	 * IB, or textures, so that pixels are actually written by the
+	 * time we try to read them.
+	 */
+	ret = vc4_wait_for_seqno(dev, exec->bin_dep_seqno, ~0ull, true);
+
+fail:
+	drm_free_large(temp);
+	return ret;
+}
+"
+4279,182015,,Local,Not required,Partial,CVE-2016-3179,https://www.cvedetails.com/cve/CVE-2016-3179/,CWE-388,Low,,,,2017-03-24,2.1,The processRequest function in minissdpd.c in MiniSSDPd 1.2.20130907-3 allows local users to cause a denial of service (invalid free and daemon crash) via vectors related to error handling.,2017-03-27,DoS ,1,https://github.com/miniupnp/miniupnp/commit/140ee8d2204b383279f854802b27bdb41c1d5d1a,140ee8d2204b383279f854802b27bdb41c1d5d1a,minissdpd.c: Initialize pointers to NULL (fix),0,minissdpd/minissdpd.c,"{""sha"": ""5e79293e015c46bddd3fcf3247db9ec4214d78c7"", ""filename"": ""minissdpd/minissdpd.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/miniupnp/miniupnp/blob/140ee8d2204b383279f854802b27bdb41c1d5d1a/minissdpd/minissdpd.c"", ""raw_url"": ""https://github.com/miniupnp/miniupnp/raw/140ee8d2204b383279f854802b27bdb41c1d5d1a/minissdpd/minissdpd.c"", ""contents_url"": ""https://api.github.com/repos/miniupnp/miniupnp/contents/minissdpd/minissdpd.c?ref=140ee8d2204b383279f854802b27bdb41c1d5d1a"", ""patch"": ""@@ -658,6 +658,7 @@ void processRequest(struct reqelem * req)\n \t\t\tsyslog(LOG_ERR, \""cannot allocate memory\"");\n \t\t\tgoto error;\n \t\t}\n+\t\tmemset(newserv, 0, sizeof(struct service));\t/* set pointers to NULL */\n \t\tif(containsForbiddenChars(p, l)) {\n \t\t\tsyslog(LOG_ERR, \""bad request (st contains forbidden chars)\"");\n \t\t\tgoto error;""}","void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+","void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+",C,"		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+",,,"@@ -658,6 +658,7 @@ void processRequest(struct reqelem * req)
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
++		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;",miniupnp,140ee8d2204b383279f854802b27bdb41c1d5d1a,4f230c809b3b66fafa34d387eead32fe242c49ee,1,"void processRequest(struct reqelem * req)
+{
+	ssize_t n;
+	unsigned int l, m;
+	unsigned char buf[2048];
+	const unsigned char * p;
+	int type;
+	struct device * d = devlist;
+	unsigned char rbuf[4096];
+	unsigned char * rp = rbuf+1;
+	unsigned char nrep = 0;
+	time_t t;
+	struct service * newserv = NULL;
+	struct service * serv;
+
+	n = read(req->socket, buf, sizeof(buf));
+	if(n<0) {
+		if(errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)
+			return;	/* try again later */
+		syslog(LOG_ERR, ""(s=%d) processRequest(): read(): %m"", req->socket);
+		goto error;
+	}
+	if(n==0) {
+		syslog(LOG_INFO, ""(s=%d) request connection closed"", req->socket);
+		goto error;
+	}
+	t = time(NULL);
+	type = buf[0];
+	p = buf + 1;
+	DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+	if(p+l > buf+n) {
+		syslog(LOG_WARNING, ""bad request (length encoding)"");
+		goto error;
+	}
+	if(l == 0 && type != 3) {
+		syslog(LOG_WARNING, ""bad request (length=0)"");
+		goto error;
+	}
+	syslog(LOG_INFO, ""(s=%d) request type=%d str='%.*s'"",
+	       req->socket, type, l, p);
+	switch(type) {
+	case 1:	/* request by type */
+	case 2:	/* request by USN (unique id) */
+	case 3:	/* everything */
+		while(d && (nrep < 255)) {
+			if(d->t < t) {
+				syslog(LOG_INFO, ""outdated device"");
+			} else {
+				/* test if we can put more responses in the buffer */
+				if(d->headers[HEADER_LOCATION].l + d->headers[HEADER_NT].l
+				  + d->headers[HEADER_USN].l + 6
+				  + (rp - rbuf) >= (int)sizeof(rbuf))
+					break;
+				if( (type==1 && 0==memcmp(d->headers[HEADER_NT].p, p, l))
+				  ||(type==2 && 0==memcmp(d->headers[HEADER_USN].p, p, l))
+				  ||(type==3) ) {
+					/* response :
+					 * 1 - Location
+					 * 2 - NT (device/service type)
+					 * 3 - usn */
+					m = d->headers[HEADER_LOCATION].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_LOCATION].p, d->headers[HEADER_LOCATION].l);
+					rp += d->headers[HEADER_LOCATION].l;
+					m = d->headers[HEADER_NT].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_NT].p, d->headers[HEADER_NT].l);
+					rp += d->headers[HEADER_NT].l;
+					m = d->headers[HEADER_USN].l;
+					CODELENGTH(m, rp);
+					memcpy(rp, d->headers[HEADER_USN].p, d->headers[HEADER_USN].l);
+					rp += d->headers[HEADER_USN].l;
+					nrep++;
+				}
+			}
+			d = d->next;
+		}
+		/* Also look in service list */
+		for(serv = servicelisthead.lh_first;
+		    serv && (nrep < 255);
+		    serv = serv->entries.le_next) {
+			/* test if we can put more responses in the buffer */
+			if(strlen(serv->location) + strlen(serv->st)
+			  + strlen(serv->usn) + 6 + (rp - rbuf) >= sizeof(rbuf))
+			  	break;
+			if( (type==1 && 0==strncmp(serv->st, (const char *)p, l))
+			  ||(type==2 && 0==strncmp(serv->usn, (const char *)p, l))
+			  ||(type==3) ) {
+				/* response :
+				 * 1 - Location
+				 * 2 - NT (device/service type)
+				 * 3 - usn */
+				m = strlen(serv->location);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->location, m);
+				rp += m;
+				m = strlen(serv->st);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->st, m);
+				rp += m;
+				m = strlen(serv->usn);
+				CODELENGTH(m, rp);
+				memcpy(rp, serv->usn, m);
+				rp += m;
+				nrep++;
+			}
+		}
+		rbuf[0] = nrep;
+		syslog(LOG_DEBUG, ""(s=%d) response : %d device%s"",
+		       req->socket, nrep, (nrep > 1) ? ""s"" : """");
+		if(write(req->socket, rbuf, rp - rbuf) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+		break;
+	case 4:	/* submit service */
+		newserv = malloc(sizeof(struct service));
+		if(!newserv) {
+ 			syslog(LOG_ERR, ""cannot allocate memory"");
+ 			goto error;
+ 		}
+//fix_flaw_line_below:
+//		memset(newserv, 0, sizeof(struct service));	/* set pointers to NULL */
+ 		if(containsForbiddenChars(p, l)) {
+ 			syslog(LOG_ERR, ""bad request (st contains forbidden chars)"");
+ 			goto error;
+		}
+		newserv->st = malloc(l + 1);
+		if(!newserv->st) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->st, p, l);
+		newserv->st[l] = '\0';
+		p += l;
+		if(p >= buf + n) {
+			syslog(LOG_WARNING, ""bad request (missing usn)"");
+			goto error;
+		}
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (usn contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""usn='%.*s'"", l, p);
+		newserv->usn = malloc(l + 1);
+		if(!newserv->usn) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->usn, p, l);
+		newserv->usn[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (server contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""server='%.*s'"", l, p);
+		newserv->server = malloc(l + 1);
+		if(!newserv->server) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->server, p, l);
+		newserv->server[l] = '\0';
+		p += l;
+		DECODELENGTH_CHECKLIMIT(l, p, buf + n);
+		if(p+l > buf+n) {
+			syslog(LOG_WARNING, ""bad request (length encoding)"");
+			goto error;
+		}
+		if(containsForbiddenChars(p, l)) {
+			syslog(LOG_ERR, ""bad request (location contains forbidden chars)"");
+			goto error;
+		}
+		syslog(LOG_INFO, ""location='%.*s'"", l, p);
+		newserv->location = malloc(l + 1);
+		if(!newserv->location) {
+			syslog(LOG_ERR, ""cannot allocate memory"");
+			goto error;
+		}
+		memcpy(newserv->location, p, l);
+		newserv->location[l] = '\0';
+		/* look in service list for duplicate */
+		for(serv = servicelisthead.lh_first;
+		    serv;
+		    serv = serv->entries.le_next) {
+			if(0 == strcmp(newserv->usn, serv->usn)
+			  && 0 == strcmp(newserv->st, serv->st)) {
+				syslog(LOG_INFO, ""Service allready in the list. Updating..."");
+				free(newserv->st);
+				free(newserv->usn);
+				free(serv->server);
+				serv->server = newserv->server;
+				free(serv->location);
+				serv->location = newserv->location;
+				free(newserv);
+				newserv = NULL;
+				return;
+			}
+		}
+		/* Inserting new service */
+		LIST_INSERT_HEAD(&servicelisthead, newserv, entries);
+		newserv = NULL;
+		/*rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0)
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+		*/
+		break;
+	default:
+		syslog(LOG_WARNING, ""Unknown request type %d"", type);
+		rbuf[0] = '\0';
+		if(write(req->socket, rbuf, 1) < 0) {
+			syslog(LOG_ERR, ""(s=%d) write: %m"", req->socket);
+			goto error;
+		}
+	}
+	return;
+error:
+	if(newserv) {
+		free(newserv->st);
+		free(newserv->usn);
+		free(newserv->server);
+		free(newserv->location);
+		free(newserv);
+		newserv = NULL;
+	}
+	close(req->socket);
+	req->socket = -1;
+	return;
+}
+"

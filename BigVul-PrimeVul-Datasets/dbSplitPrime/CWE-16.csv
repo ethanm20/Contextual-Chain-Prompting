@@ -1,0 +1,199 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix
+178819,178819,,Local,Not required,,CVE-2012-0957,https://www.cvedetails.com/cve/CVE-2012-0957/,CWE-16,Low,Complete,,,2012-12-21,4.9,The override_release function in kernel/sys.c in the Linux kernel before 3.4.16 allows local users to obtain sensitive information from kernel stack memory via a uname system call in conjunction with a UNAME26 personality.,2013-08-21,+Info ,7,https://github.com/torvalds/linux/commit/2702b1526c7278c4d65d78de209a465d4de2885e,2702b1526c7278c4d65d78de209a465d4de2885e,"kernel/sys.c: fix stack memory content leak via UNAME26
+
+Calling uname() with the UNAME26 personality set allows a leak of kernel
+stack contents.  This fixes it by defensively calculating the length of
+copy_to_user() call, making the len argument unsigned, and initializing
+the stack buffer to zero (now technically unneeded, but hey, overkill).
+
+CVE-2012-0957
+
+Reported-by: PaX Team <pageexec@freemail.hu>
+Signed-off-by: Kees Cook <keescook@chromium.org>
+Cc: Andi Kleen <ak@linux.intel.com>
+Cc: PaX Team <pageexec@freemail.hu>
+Cc: Brad Spengler <spender@grsecurity.net>
+Cc: <stable@vger.kernel.org>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",4,kernel/sys.c,"{""sha"": ""01865c6fb6a0c4739a18a5f4b746a5b8da038680"", ""filename"": ""kernel/sys.c"", ""status"": ""modified"", ""additions"": 7, ""deletions"": 5, ""changes"": 12, ""blob_url"": ""https://github.com/torvalds/linux/blob/2702b1526c7278c4d65d78de209a465d4de2885e/kernel/sys.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/2702b1526c7278c4d65d78de209a465d4de2885e/kernel/sys.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/kernel/sys.c?ref=2702b1526c7278c4d65d78de209a465d4de2885e"", ""patch"": ""@@ -1265,15 +1265,16 @@ DECLARE_RWSEM(uts_sem);\n  * Work around broken programs that cannot handle \""Linux 3.0\"".\n  * Instead we map 3.x to 2.6.40+x, so e.g. 3.0 would be 2.6.40\n  */\n-static int override_release(char __user *release, int len)\n+static int override_release(char __user *release, size_t len)\n {\n \tint ret = 0;\n-\tchar buf[65];\n \n \tif (current->personality & UNAME26) {\n-\t\tchar *rest = UTS_RELEASE;\n+\t\tconst char *rest = UTS_RELEASE;\n+\t\tchar buf[65] = { 0 };\n \t\tint ndots = 0;\n \t\tunsigned v;\n+\t\tsize_t copy;\n \n \t\twhile (*rest) {\n \t\t\tif (*rest == '.' && ++ndots >= 3)\n@@ -1283,8 +1284,9 @@ static int override_release(char __user *release, int len)\n \t\t\trest++;\n \t\t}\n \t\tv = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;\n-\t\tsnprintf(buf, len, \""2.6.%u%s\"", v, rest);\n-\t\tret = copy_to_user(release, buf, len);\n+\t\tcopy = min(sizeof(buf), max_t(size_t, 1, len));\n+\t\tcopy = scnprintf(buf, copy, \""2.6.%u%s\"", v, rest);\n+\t\tret = copy_to_user(release, buf, copy + 1);\n \t}\n \treturn ret;\n }""}","static int override_release(char __user *release, int len)
+static int override_release(char __user *release, size_t len)
+ {
+ 	int ret = 0;
+ 
+ 	if (current->personality & UNAME26) {
+		const char *rest = UTS_RELEASE;
+		char buf[65] = { 0 };
+ 		int ndots = 0;
+ 		unsigned v;
+		size_t copy;
+ 
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+				break;
+			if (!isdigit(*rest) && *rest != '.')
+				break;
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+		copy = min(sizeof(buf), max_t(size_t, 1, len));
+		copy = scnprintf(buf, copy, ""2.6.%u%s"", v, rest);
+		ret = copy_to_user(release, buf, copy + 1);
+ 	}
+ 	return ret;
+ }
+","static int override_release(char __user *release, int len)
+ {
+ 	int ret = 0;
+	char buf[65];
+ 
+ 	if (current->personality & UNAME26) {
+		char *rest = UTS_RELEASE;
+ 		int ndots = 0;
+ 		unsigned v;
+ 
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+				break;
+			if (!isdigit(*rest) && *rest != '.')
+				break;
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+		snprintf(buf, len, ""2.6.%u%s"", v, rest);
+		ret = copy_to_user(release, buf, len);
+ 	}
+ 	return ret;
+ }
+",C,"static int override_release(char __user *release, size_t len)
+		const char *rest = UTS_RELEASE;
+		char buf[65] = { 0 };
+		size_t copy;
+		copy = min(sizeof(buf), max_t(size_t, 1, len));
+		copy = scnprintf(buf, copy, ""2.6.%u%s"", v, rest);
+		ret = copy_to_user(release, buf, copy + 1);
+","	char buf[65];
+		char *rest = UTS_RELEASE;
+		snprintf(buf, len, ""2.6.%u%s"", v, rest);
+		ret = copy_to_user(release, buf, len);
+",,"@@ -1265,15 +1265,16 @@ DECLARE_RWSEM(uts_sem);
+  * Work around broken programs that cannot handle ""Linux 3.0"".
+  * Instead we map 3.x to 2.6.40+x, so e.g. 3.0 would be 2.6.40
+  */
+-static int override_release(char __user *release, int len)
++static int override_release(char __user *release, size_t len)
+ {
+ 	int ret = 0;
+-	char buf[65];
+ 
+ 	if (current->personality & UNAME26) {
+-		char *rest = UTS_RELEASE;
++		const char *rest = UTS_RELEASE;
++		char buf[65] = { 0 };
+ 		int ndots = 0;
+ 		unsigned v;
++		size_t copy;
+ 
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+@@ -1283,8 +1284,9 @@ static int override_release(char __user *release, int len)
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+-		snprintf(buf, len, ""2.6.%u%s"", v, rest);
+-		ret = copy_to_user(release, buf, len);
++		copy = min(sizeof(buf), max_t(size_t, 1, len));
++		copy = scnprintf(buf, copy, ""2.6.%u%s"", v, rest);
++		ret = copy_to_user(release, buf, copy + 1);
+ 	}
+ 	return ret;
+ }",linux,2702b1526c7278c4d65d78de209a465d4de2885e,1d46e232f8637f31f8df2e50b27fd20d8135bd93,1,"static int override_release(char __user *release, int len)
+//fix_flaw_line_below:
+//static int override_release(char __user *release, size_t len)
+ {
+ 	int ret = 0;
+//flaw_line_below:
+	char buf[65];
+ 
+ 	if (current->personality & UNAME26) {
+//flaw_line_below:
+		char *rest = UTS_RELEASE;
+//fix_flaw_line_below:
+//		const char *rest = UTS_RELEASE;
+//fix_flaw_line_below:
+//		char buf[65] = { 0 };
+ 		int ndots = 0;
+ 		unsigned v;
+//fix_flaw_line_below:
+//		size_t copy;
+ 
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+				break;
+			if (!isdigit(*rest) && *rest != '.')
+				break;
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+//flaw_line_below:
+		snprintf(buf, len, ""2.6.%u%s"", v, rest);
+//flaw_line_below:
+		ret = copy_to_user(release, buf, len);
+//fix_flaw_line_below:
+//		copy = min(sizeof(buf), max_t(size_t, 1, len));
+//fix_flaw_line_below:
+//		copy = scnprintf(buf, copy, ""2.6.%u%s"", v, rest);
+//fix_flaw_line_below:
+//		ret = copy_to_user(release, buf, copy + 1);
+ 	}
+ 	return ret;
+ }
+",178819,"static int override_release(char __user *release, int len)
+ {
+ 	int ret = 0;
+	char buf[65];
+ 
+ 	if (current->personality & UNAME26) {
+		char *rest = UTS_RELEASE;
+ 		int ndots = 0;
+ 		unsigned v;
+ 
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+				break;
+			if (!isdigit(*rest) && *rest != '.')
+				break;
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+		snprintf(buf, len, ""2.6.%u%s"", v, rest);
+		ret = copy_to_user(release, buf, len);
+ 	}
+ 	return ret;
+ }
+","static int override_release(char __user *release, int len)
+static int override_release(char __user *release, size_t len)
+ {
+ 	int ret = 0;
+ 
+ 	if (current->personality & UNAME26) {
+		const char *rest = UTS_RELEASE;
+		char buf[65] = { 0 };
+ 		int ndots = 0;
+ 		unsigned v;
+		size_t copy;
+ 
+ 		while (*rest) {
+ 			if (*rest == '.' && ++ndots >= 3)
+				break;
+			if (!isdigit(*rest) && *rest != '.')
+				break;
+ 			rest++;
+ 		}
+ 		v = ((LINUX_VERSION_CODE >> 8) & 0xff) + 40;
+		copy = min(sizeof(buf), max_t(size_t, 1, len));
+		copy = scnprintf(buf, copy, ""2.6.%u%s"", v, rest);
+		ret = copy_to_user(release, buf, copy + 1);
+ 	}
+ 	return ret;
+ }
+"

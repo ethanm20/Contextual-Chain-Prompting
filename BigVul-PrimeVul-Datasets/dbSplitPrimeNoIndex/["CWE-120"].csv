@@ -1,0 +1,1326 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2449,"[""CWE-120""]",linux-2.6,d70b67c8bc72ee23b55381bd6a884f4796692f77,d70b67c8bc72ee23b55381bd6a884f4796692f77,0,488697,1.6549261588680402e+38,55.0,"[patch] vfs: fix lookup on deleted directory
+
+Lookup can install a child dentry for a deleted directory.  This keeps
+the directory dentry alive, and the inode pinned in the cache and on
+disk, even after all external references have gone away.
+
+This isn't a big problem normally, since memory pressure or umount
+will clear out the directory dentry and its children, releasing the
+inode.  But for UBIFS this causes problems because its orphan area can
+overflow.
+
+Fix this by returning ENOENT for all lookups on a S_DEAD directory
+before creating a child dentry.
+
+Thanks to Zoltan Sogor for noticing this while testing UBIFS, and
+Artem for the excellent analysis of the problem and testing.
+
+Reported-by: Artem Bityutskiy <Artem.Bityutskiy@nokia.com>
+Tested-by: Artem Bityutskiy <Artem.Bityutskiy@nokia.com>
+Signed-off-by: Miklos Szeredi <mszeredi@suse.cz>
+Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>",other,"static struct dentry * real_lookup(struct dentry * parent, struct qstr * name, struct nameidata *nd)
+{
+	struct dentry * result;
+	struct inode *dir = parent->d_inode;
+
+	mutex_lock(&dir->i_mutex);
+	/*
+	 * First re-do the cached lookup just in case it was created
+	 * while we waited for the directory semaphore..
+	 *
+	 * FIXME! This could use version numbering or similar to
+	 * avoid unnecessary cache lookups.
+	 *
+	 * The ""dcache_lock"" is purely to protect the RCU list walker
+	 * from concurrent renames at this point (we mustn't get false
+	 * negatives from the RCU list walk here, unlike the optimistic
+	 * fast walk).
+	 *
+	 * so doing d_lookup() (with seqlock), instead of lockfree __d_lookup
+	 */
+	result = d_lookup(parent, name);
+	if (!result) {
+		struct dentry * dentry = d_alloc(parent, name);
+		result = ERR_PTR(-ENOMEM);
+		if (dentry) {
+			result = dir->i_op->lookup(dir, dentry, nd);
+			if (result)
+				dput(dentry);
+			else
+				result = dentry;
+		}
+		mutex_unlock(&dir->i_mutex);
+		return result;
+	}
+
+	/*
+	 * Uhhuh! Nasty case: the cache was re-populated while
+	 * we waited on the semaphore. Need to revalidate.
+	 */
+	mutex_unlock(&dir->i_mutex);
+	if (result->d_op && result->d_op->d_revalidate) {
+		result = do_revalidate(result, nd);
+		if (!result)
+			result = ERR_PTR(-ENOENT);
+	}
+	return result;
+}","static struct dentry * real_lookup(struct dentry * parent, struct qstr * name, struct nameidata *nd)
+{
+	struct dentry * result;
+	struct inode *dir = parent->d_inode;
+
+	mutex_lock(&dir->i_mutex);
+	/*
+	 * First re-do the cached lookup just in case it was created
+	 * while we waited for the directory semaphore..
+	 *
+	 * FIXME! This could use version numbering or similar to
+	 * avoid unnecessary cache lookups.
+	 *
+	 * The ""dcache_lock"" is purely to protect the RCU list walker
+	 * from concurrent renames at this point (we mustn't get false
+	 * negatives from the RCU list walk here, unlike the optimistic
+	 * fast walk).
+	 *
+	 * so doing d_lookup() (with seqlock), instead of lockfree __d_lookup
+	 */
+	result = d_lookup(parent, name);
+	if (!result) {
+		struct dentry *dentry;
+
+		/* Don't create child dentry for a dead directory. */
+		result = ERR_PTR(-ENOENT);
+		if (IS_DEADDIR(dir))
+			goto out_unlock;
+
+		dentry = d_alloc(parent, name);
+		result = ERR_PTR(-ENOMEM);
+		if (dentry) {
+			result = dir->i_op->lookup(dir, dentry, nd);
+			if (result)
+				dput(dentry);
+			else
+				result = dentry;
+		}
+out_unlock:
+		mutex_unlock(&dir->i_mutex);
+		return result;
+	}
+
+	/*
+	 * Uhhuh! Nasty case: the cache was re-populated while
+	 * we waited on the semaphore. Need to revalidate.
+	 */
+	mutex_unlock(&dir->i_mutex);
+	if (result->d_op && result->d_op->d_revalidate) {
+		result = do_revalidate(result, nd);
+		if (!result)
+			result = ERR_PTR(-ENOENT);
+	}
+	return result;
+}",
+2450,"[""CWE-120""]",linux-2.6,d70b67c8bc72ee23b55381bd6a884f4796692f77,d70b67c8bc72ee23b55381bd6a884f4796692f77,0,488740,2.6057488370681852e+38,42.0,"[patch] vfs: fix lookup on deleted directory
+
+Lookup can install a child dentry for a deleted directory.  This keeps
+the directory dentry alive, and the inode pinned in the cache and on
+disk, even after all external references have gone away.
+
+This isn't a big problem normally, since memory pressure or umount
+will clear out the directory dentry and its children, releasing the
+inode.  But for UBIFS this causes problems because its orphan area can
+overflow.
+
+Fix this by returning ENOENT for all lookups on a S_DEAD directory
+before creating a child dentry.
+
+Thanks to Zoltan Sogor for noticing this while testing UBIFS, and
+Artem for the excellent analysis of the problem and testing.
+
+Reported-by: Artem Bityutskiy <Artem.Bityutskiy@nokia.com>
+Tested-by: Artem Bityutskiy <Artem.Bityutskiy@nokia.com>
+Signed-off-by: Miklos Szeredi <mszeredi@suse.cz>
+Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>",other,"static struct dentry *__lookup_hash(struct qstr *name,
+		struct dentry *base, struct nameidata *nd)
+{
+	struct dentry *dentry;
+	struct inode *inode;
+	int err;
+
+	inode = base->d_inode;
+
+	/*
+	 * See if the low-level filesystem might want
+	 * to use its own hash..
+	 */
+	if (base->d_op && base->d_op->d_hash) {
+		err = base->d_op->d_hash(base, name);
+		dentry = ERR_PTR(err);
+		if (err < 0)
+			goto out;
+	}
+
+	dentry = cached_lookup(base, name, nd);
+	if (!dentry) {
+		struct dentry *new = d_alloc(base, name);
+		dentry = ERR_PTR(-ENOMEM);
+		if (!new)
+			goto out;
+		dentry = inode->i_op->lookup(inode, new, nd);
+		if (!dentry)
+			dentry = new;
+		else
+			dput(new);
+	}
+out:
+	return dentry;
+}","static struct dentry *__lookup_hash(struct qstr *name,
+		struct dentry *base, struct nameidata *nd)
+{
+	struct dentry *dentry;
+	struct inode *inode;
+	int err;
+
+	inode = base->d_inode;
+
+	/*
+	 * See if the low-level filesystem might want
+	 * to use its own hash..
+	 */
+	if (base->d_op && base->d_op->d_hash) {
+		err = base->d_op->d_hash(base, name);
+		dentry = ERR_PTR(err);
+		if (err < 0)
+			goto out;
+	}
+
+	dentry = cached_lookup(base, name, nd);
+	if (!dentry) {
+		struct dentry *new;
+
+		/* Don't create child dentry for a dead directory. */
+		dentry = ERR_PTR(-ENOENT);
+		if (IS_DEADDIR(inode))
+			goto out;
+
+		new = d_alloc(base, name);
+		dentry = ERR_PTR(-ENOMEM);
+		if (!new)
+			goto out;
+		dentry = inode->i_op->lookup(inode, new, nd);
+		if (!dentry)
+			dentry = new;
+		else
+			dput(new);
+	}
+out:
+	return dentry;
+}",
+2465,"[""CWE-120""]",linux-2.6,233548a2fd934a0220db8b1521c0bc88c82e5e53,233548a2fd934a0220db8b1521c0bc88c82e5e53,0,489332,1.5011908800257582e+38,234.0,"V4L/DVB (8207): uvcvideo: Fix a buffer overflow in format descriptor parsing
+
+Thanks to Oliver Neukum for catching and reporting this bug.
+
+Signed-off-by: Laurent Pinchart <laurent.pinchart@skynet.be>
+Signed-off-by: Mauro Carvalho Chehab <mchehab@infradead.org>",other,"static int uvc_parse_format(struct uvc_device *dev,
+	struct uvc_streaming *streaming, struct uvc_format *format,
+	__u32 **intervals, unsigned char *buffer, int buflen)
+{
+	struct usb_interface *intf = streaming->intf;
+	struct usb_host_interface *alts = intf->cur_altsetting;
+	struct uvc_format_desc *fmtdesc;
+	struct uvc_frame *frame;
+	const unsigned char *start = buffer;
+	unsigned int interval;
+	unsigned int i, n;
+	__u8 ftype;
+
+	format->type = buffer[2];
+	format->index = buffer[3];
+
+	switch (buffer[2]) {
+	case VS_FORMAT_UNCOMPRESSED:
+	case VS_FORMAT_FRAME_BASED:
+		if (buflen < 27) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		/* Find the format descriptor from its GUID. */
+		fmtdesc = uvc_format_by_guid(&buffer[5]);
+
+		if (fmtdesc != NULL) {
+			strncpy(format->name, fmtdesc->name,
+				sizeof format->name);
+			format->fcc = fmtdesc->fcc;
+		} else {
+			uvc_printk(KERN_INFO, ""Unknown video format ""
+				UVC_GUID_FORMAT ""\n"",
+				UVC_GUID_ARGS(&buffer[5]));
+			snprintf(format->name, sizeof format->name,
+				UVC_GUID_FORMAT, UVC_GUID_ARGS(&buffer[5]));
+			format->fcc = 0;
+		}
+
+		format->bpp = buffer[21];
+		if (buffer[2] == VS_FORMAT_UNCOMPRESSED) {
+			ftype = VS_FRAME_UNCOMPRESSED;
+		} else {
+			ftype = VS_FRAME_FRAME_BASED;
+			if (buffer[27])
+				format->flags = UVC_FMT_FLAG_COMPRESSED;
+		}
+		break;
+
+	case VS_FORMAT_MJPEG:
+		if (buflen < 11) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		strncpy(format->name, ""MJPEG"", sizeof format->name);
+		format->fcc = V4L2_PIX_FMT_MJPEG;
+		format->flags = UVC_FMT_FLAG_COMPRESSED;
+		format->bpp = 0;
+		ftype = VS_FRAME_MJPEG;
+		break;
+
+	case VS_FORMAT_DV:
+		if (buflen < 9) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		switch (buffer[8] & 0x7f) {
+		case 0:
+			strncpy(format->name, ""SD-DV"", sizeof format->name);
+			break;
+		case 1:
+			strncpy(format->name, ""SDL-DV"", sizeof format->name);
+			break;
+		case 2:
+			strncpy(format->name, ""HD-DV"", sizeof format->name);
+			break;
+		default:
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d: unknown DV format %u\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber, buffer[8]);
+			return -EINVAL;
+		}
+
+		strncat(format->name, buffer[8] & (1 << 7) ? "" 60Hz"" : "" 50Hz"",
+			sizeof format->name);
+
+		format->fcc = V4L2_PIX_FMT_DV;
+		format->flags = UVC_FMT_FLAG_COMPRESSED | UVC_FMT_FLAG_STREAM;
+		format->bpp = 0;
+		ftype = 0;
+
+		/* Create a dummy frame descriptor. */
+		frame = &format->frame[0];
+		memset(&format->frame[0], 0, sizeof format->frame[0]);
+		frame->bFrameIntervalType = 1;
+		frame->dwDefaultFrameInterval = 1;
+		frame->dwFrameInterval = *intervals;
+		*(*intervals)++ = 1;
+		format->nframes = 1;
+		break;
+
+	case VS_FORMAT_MPEG2TS:
+	case VS_FORMAT_STREAM_BASED:
+		/* Not supported yet. */
+	default:
+		uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+		       ""interface %d unsupported format %u\n"",
+		       dev->udev->devnum, alts->desc.bInterfaceNumber,
+		       buffer[2]);
+		return -EINVAL;
+	}
+
+	uvc_trace(UVC_TRACE_DESCR, ""Found format %s.\n"", format->name);
+
+	buflen -= buffer[0];
+	buffer += buffer[0];
+
+	/* Parse the frame descriptors. Only uncompressed, MJPEG and frame
+	 * based formats have frame descriptors.
+	 */
+	while (buflen > 2 && buffer[2] == ftype) {
+		frame = &format->frame[format->nframes];
+
+		if (ftype != VS_FRAME_FRAME_BASED)
+			n = buflen > 25 ? buffer[25] : 0;
+		else
+			n = buflen > 21 ? buffer[21] : 0;
+
+		n = n ? n : 3;
+
+		if (buflen < 26 + 4*n) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FRAME error\n"", dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		frame->bFrameIndex = buffer[3];
+		frame->bmCapabilities = buffer[4];
+		frame->wWidth = le16_to_cpup((__le16 *)&buffer[5]);
+		frame->wHeight = le16_to_cpup((__le16 *)&buffer[7]);
+		frame->dwMinBitRate = le32_to_cpup((__le32 *)&buffer[9]);
+		frame->dwMaxBitRate = le32_to_cpup((__le32 *)&buffer[13]);
+		if (ftype != VS_FRAME_FRAME_BASED) {
+			frame->dwMaxVideoFrameBufferSize =
+				le32_to_cpup((__le32 *)&buffer[17]);
+			frame->dwDefaultFrameInterval =
+				le32_to_cpup((__le32 *)&buffer[21]);
+			frame->bFrameIntervalType = buffer[25];
+		} else {
+			frame->dwMaxVideoFrameBufferSize = 0;
+			frame->dwDefaultFrameInterval =
+				le32_to_cpup((__le32 *)&buffer[17]);
+			frame->bFrameIntervalType = buffer[21];
+		}
+		frame->dwFrameInterval = *intervals;
+
+		/* Several UVC chipsets screw up dwMaxVideoFrameBufferSize
+		 * completely. Observed behaviours range from setting the
+		 * value to 1.1x the actual frame size of hardwiring the
+		 * 16 low bits to 0. This results in a higher than necessary
+		 * memory usage as well as a wrong image size information. For
+		 * uncompressed formats this can be fixed by computing the
+		 * value from the frame size.
+		 */
+		if (!(format->flags & UVC_FMT_FLAG_COMPRESSED))
+			frame->dwMaxVideoFrameBufferSize = format->bpp
+				* frame->wWidth * frame->wHeight / 8;
+
+		/* Some bogus devices report dwMinFrameInterval equal to
+		 * dwMaxFrameInterval and have dwFrameIntervalStep set to
+		 * zero. Setting all null intervals to 1 fixes the problem and
+		 * some other divisions by zero which could happen.
+		 */
+		for (i = 0; i < n; ++i) {
+			interval = le32_to_cpup((__le32 *)&buffer[26+4*i]);
+			*(*intervals)++ = interval ? interval : 1;
+		}
+
+		/* Make sure that the default frame interval stays between
+		 * the boundaries.
+		 */
+		n -= frame->bFrameIntervalType ? 1 : 2;
+		frame->dwDefaultFrameInterval =
+			min(frame->dwFrameInterval[n],
+			    max(frame->dwFrameInterval[0],
+				frame->dwDefaultFrameInterval));
+
+		uvc_trace(UVC_TRACE_DESCR, ""- %ux%u (%u.%u fps)\n"",
+			frame->wWidth, frame->wHeight,
+			10000000/frame->dwDefaultFrameInterval,
+			(100000000/frame->dwDefaultFrameInterval)%10);
+
+		format->nframes++;
+		buflen -= buffer[0];
+		buffer += buffer[0];
+	}
+
+	if (buflen > 2 && buffer[2] == VS_STILL_IMAGE_FRAME) {
+		buflen -= buffer[0];
+		buffer += buffer[0];
+	}
+
+	if (buflen > 2 && buffer[2] == VS_COLORFORMAT) {
+		if (buflen < 6) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d COLORFORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		format->colorspace = uvc_colorspace(buffer[3]);
+
+		buflen -= buffer[0];
+		buffer += buffer[0];
+	}
+
+	return buffer - start;
+}","static int uvc_parse_format(struct uvc_device *dev,
+	struct uvc_streaming *streaming, struct uvc_format *format,
+	__u32 **intervals, unsigned char *buffer, int buflen)
+{
+	struct usb_interface *intf = streaming->intf;
+	struct usb_host_interface *alts = intf->cur_altsetting;
+	struct uvc_format_desc *fmtdesc;
+	struct uvc_frame *frame;
+	const unsigned char *start = buffer;
+	unsigned int interval;
+	unsigned int i, n;
+	__u8 ftype;
+
+	format->type = buffer[2];
+	format->index = buffer[3];
+
+	switch (buffer[2]) {
+	case VS_FORMAT_UNCOMPRESSED:
+	case VS_FORMAT_FRAME_BASED:
+		n = buffer[2] == VS_FORMAT_UNCOMPRESSED ? 27 : 28;
+		if (buflen < n) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		/* Find the format descriptor from its GUID. */
+		fmtdesc = uvc_format_by_guid(&buffer[5]);
+
+		if (fmtdesc != NULL) {
+			strncpy(format->name, fmtdesc->name,
+				sizeof format->name);
+			format->fcc = fmtdesc->fcc;
+		} else {
+			uvc_printk(KERN_INFO, ""Unknown video format ""
+				UVC_GUID_FORMAT ""\n"",
+				UVC_GUID_ARGS(&buffer[5]));
+			snprintf(format->name, sizeof format->name,
+				UVC_GUID_FORMAT, UVC_GUID_ARGS(&buffer[5]));
+			format->fcc = 0;
+		}
+
+		format->bpp = buffer[21];
+		if (buffer[2] == VS_FORMAT_UNCOMPRESSED) {
+			ftype = VS_FRAME_UNCOMPRESSED;
+		} else {
+			ftype = VS_FRAME_FRAME_BASED;
+			if (buffer[27])
+				format->flags = UVC_FMT_FLAG_COMPRESSED;
+		}
+		break;
+
+	case VS_FORMAT_MJPEG:
+		if (buflen < 11) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		strncpy(format->name, ""MJPEG"", sizeof format->name);
+		format->fcc = V4L2_PIX_FMT_MJPEG;
+		format->flags = UVC_FMT_FLAG_COMPRESSED;
+		format->bpp = 0;
+		ftype = VS_FRAME_MJPEG;
+		break;
+
+	case VS_FORMAT_DV:
+		if (buflen < 9) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		switch (buffer[8] & 0x7f) {
+		case 0:
+			strncpy(format->name, ""SD-DV"", sizeof format->name);
+			break;
+		case 1:
+			strncpy(format->name, ""SDL-DV"", sizeof format->name);
+			break;
+		case 2:
+			strncpy(format->name, ""HD-DV"", sizeof format->name);
+			break;
+		default:
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d: unknown DV format %u\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber, buffer[8]);
+			return -EINVAL;
+		}
+
+		strncat(format->name, buffer[8] & (1 << 7) ? "" 60Hz"" : "" 50Hz"",
+			sizeof format->name);
+
+		format->fcc = V4L2_PIX_FMT_DV;
+		format->flags = UVC_FMT_FLAG_COMPRESSED | UVC_FMT_FLAG_STREAM;
+		format->bpp = 0;
+		ftype = 0;
+
+		/* Create a dummy frame descriptor. */
+		frame = &format->frame[0];
+		memset(&format->frame[0], 0, sizeof format->frame[0]);
+		frame->bFrameIntervalType = 1;
+		frame->dwDefaultFrameInterval = 1;
+		frame->dwFrameInterval = *intervals;
+		*(*intervals)++ = 1;
+		format->nframes = 1;
+		break;
+
+	case VS_FORMAT_MPEG2TS:
+	case VS_FORMAT_STREAM_BASED:
+		/* Not supported yet. */
+	default:
+		uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+		       ""interface %d unsupported format %u\n"",
+		       dev->udev->devnum, alts->desc.bInterfaceNumber,
+		       buffer[2]);
+		return -EINVAL;
+	}
+
+	uvc_trace(UVC_TRACE_DESCR, ""Found format %s.\n"", format->name);
+
+	buflen -= buffer[0];
+	buffer += buffer[0];
+
+	/* Parse the frame descriptors. Only uncompressed, MJPEG and frame
+	 * based formats have frame descriptors.
+	 */
+	while (buflen > 2 && buffer[2] == ftype) {
+		frame = &format->frame[format->nframes];
+
+		if (ftype != VS_FRAME_FRAME_BASED)
+			n = buflen > 25 ? buffer[25] : 0;
+		else
+			n = buflen > 21 ? buffer[21] : 0;
+
+		n = n ? n : 3;
+
+		if (buflen < 26 + 4*n) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d FRAME error\n"", dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		frame->bFrameIndex = buffer[3];
+		frame->bmCapabilities = buffer[4];
+		frame->wWidth = le16_to_cpup((__le16 *)&buffer[5]);
+		frame->wHeight = le16_to_cpup((__le16 *)&buffer[7]);
+		frame->dwMinBitRate = le32_to_cpup((__le32 *)&buffer[9]);
+		frame->dwMaxBitRate = le32_to_cpup((__le32 *)&buffer[13]);
+		if (ftype != VS_FRAME_FRAME_BASED) {
+			frame->dwMaxVideoFrameBufferSize =
+				le32_to_cpup((__le32 *)&buffer[17]);
+			frame->dwDefaultFrameInterval =
+				le32_to_cpup((__le32 *)&buffer[21]);
+			frame->bFrameIntervalType = buffer[25];
+		} else {
+			frame->dwMaxVideoFrameBufferSize = 0;
+			frame->dwDefaultFrameInterval =
+				le32_to_cpup((__le32 *)&buffer[17]);
+			frame->bFrameIntervalType = buffer[21];
+		}
+		frame->dwFrameInterval = *intervals;
+
+		/* Several UVC chipsets screw up dwMaxVideoFrameBufferSize
+		 * completely. Observed behaviours range from setting the
+		 * value to 1.1x the actual frame size of hardwiring the
+		 * 16 low bits to 0. This results in a higher than necessary
+		 * memory usage as well as a wrong image size information. For
+		 * uncompressed formats this can be fixed by computing the
+		 * value from the frame size.
+		 */
+		if (!(format->flags & UVC_FMT_FLAG_COMPRESSED))
+			frame->dwMaxVideoFrameBufferSize = format->bpp
+				* frame->wWidth * frame->wHeight / 8;
+
+		/* Some bogus devices report dwMinFrameInterval equal to
+		 * dwMaxFrameInterval and have dwFrameIntervalStep set to
+		 * zero. Setting all null intervals to 1 fixes the problem and
+		 * some other divisions by zero which could happen.
+		 */
+		for (i = 0; i < n; ++i) {
+			interval = le32_to_cpup((__le32 *)&buffer[26+4*i]);
+			*(*intervals)++ = interval ? interval : 1;
+		}
+
+		/* Make sure that the default frame interval stays between
+		 * the boundaries.
+		 */
+		n -= frame->bFrameIntervalType ? 1 : 2;
+		frame->dwDefaultFrameInterval =
+			min(frame->dwFrameInterval[n],
+			    max(frame->dwFrameInterval[0],
+				frame->dwDefaultFrameInterval));
+
+		uvc_trace(UVC_TRACE_DESCR, ""- %ux%u (%u.%u fps)\n"",
+			frame->wWidth, frame->wHeight,
+			10000000/frame->dwDefaultFrameInterval,
+			(100000000/frame->dwDefaultFrameInterval)%10);
+
+		format->nframes++;
+		buflen -= buffer[0];
+		buffer += buffer[0];
+	}
+
+	if (buflen > 2 && buffer[2] == VS_STILL_IMAGE_FRAME) {
+		buflen -= buffer[0];
+		buffer += buffer[0];
+	}
+
+	if (buflen > 2 && buffer[2] == VS_COLORFORMAT) {
+		if (buflen < 6) {
+			uvc_trace(UVC_TRACE_DESCR, ""device %d videostreaming""
+			       ""interface %d COLORFORMAT error\n"",
+			       dev->udev->devnum,
+			       alts->desc.bInterfaceNumber);
+			return -EINVAL;
+		}
+
+		format->colorspace = uvc_colorspace(buffer[3]);
+
+		buflen -= buffer[0];
+		buffer += buffer[0];
+	}
+
+	return buffer - start;
+}",
+2523,"[""CWE-120""]",linux-2.6,961ed183a9fd080cf306c659b8736007e44065a5,961ed183a9fd080cf306c659b8736007e44065a5,0,493317,3.2396767173936314e+38,27.0,"netfilter: ipt_CLUSTERIP: fix buffer overflow
+
+'buffer' string is copied from userspace.  It is not checked whether it is
+zero terminated.  This may lead to overflow inside of simple_strtoul().
+Changli Gao suggested to copy not more than user supplied 'size' bytes.
+
+It was introduced before the git epoch.  Files ""ipt_CLUSTERIP/*"" are
+root writable only by default, however, on some setups permissions might be
+relaxed to e.g. network admin user.
+
+Signed-off-by: Vasiliy Kulikov <segoon@openwall.com>
+Acked-by: Changli Gao <xiaosuo@gmail.com>
+Signed-off-by: Patrick McHardy <kaber@trash.net>",other,"static ssize_t clusterip_proc_write(struct file *file, const char __user *input,
+				size_t size, loff_t *ofs)
+{
+	struct clusterip_config *c = PDE(file->f_path.dentry->d_inode)->data;
+#define PROC_WRITELEN	10
+	char buffer[PROC_WRITELEN+1];
+	unsigned long nodenum;
+
+	if (copy_from_user(buffer, input, PROC_WRITELEN))
+		return -EFAULT;
+
+	if (*buffer == '+') {
+		nodenum = simple_strtoul(buffer+1, NULL, 10);
+		if (clusterip_add_node(c, nodenum))
+			return -ENOMEM;
+	} else if (*buffer == '-') {
+		nodenum = simple_strtoul(buffer+1, NULL,10);
+		if (clusterip_del_node(c, nodenum))
+			return -ENOENT;
+	} else
+		return -EIO;
+
+	return size;
+}","static ssize_t clusterip_proc_write(struct file *file, const char __user *input,
+				size_t size, loff_t *ofs)
+{
+	struct clusterip_config *c = PDE(file->f_path.dentry->d_inode)->data;
+#define PROC_WRITELEN	10
+	char buffer[PROC_WRITELEN+1];
+	unsigned long nodenum;
+
+	if (size > PROC_WRITELEN)
+		return -EIO;
+	if (copy_from_user(buffer, input, size))
+		return -EFAULT;
+	buffer[size] = 0;
+
+	if (*buffer == '+') {
+		nodenum = simple_strtoul(buffer+1, NULL, 10);
+		if (clusterip_add_node(c, nodenum))
+			return -ENOMEM;
+	} else if (*buffer == '-') {
+		nodenum = simple_strtoul(buffer+1, NULL,10);
+		if (clusterip_del_node(c, nodenum))
+			return -ENOENT;
+	} else
+		return -EIO;
+
+	return size;
+}",
+2575,"[""CWE-120""]",libmicrohttpd,a110ae6276660bee3caab30e9ff3f12f85cf3241,a110ae6276660bee3caab30e9ff3f12f85cf3241,0,499530,3.308522233004829e+37,218.0,fix buffer overflow and add test,other,"post_process_urlencoded (struct MHD_PostProcessor *pp,
+                         const char *post_data,
+                         size_t post_data_len)
+{
+  char *kbuf = (char *) &pp[1];
+  size_t poff;
+  const char *start_key = NULL;
+  const char *end_key = NULL;
+  const char *start_value = NULL;
+  const char *end_value = NULL;
+  const char *last_escape = NULL;
+
+  poff = 0;
+  while ( ( (poff < post_data_len) ||
+            (pp->state == PP_Callback) ) &&
+          (pp->state != PP_Error) )
+  {
+    switch (pp->state)
+    {
+    case PP_Error:
+      /* clearly impossible as per while loop invariant */
+      abort ();
+      break;
+    case PP_Init:
+      /* key phase */
+      if (NULL == start_key)
+        start_key = &post_data[poff];
+      pp->must_ikvi = true;
+      switch (post_data[poff])
+      {
+      case '=':
+        /* Case: 'key=' */
+        end_key = &post_data[poff];
+        poff++;
+        pp->state = PP_ProcessValue;
+        break;
+      case '&':
+        /* Case: 'key&' */
+        end_key = &post_data[poff];
+        mhd_assert (NULL == start_value);
+        mhd_assert (NULL == end_value);
+        poff++;
+        pp->state = PP_Callback;
+        break;
+      case '\n':
+      case '\r':
+        /* Case: 'key\n' or 'key\r' */
+        end_key = &post_data[poff];
+        poff++;
+        pp->state = PP_Done;
+        break;
+      default:
+        /* normal character, advance! */
+        poff++;
+        continue;
+      }
+      break; /* end PP_Init */
+    case PP_ProcessValue:
+      if (NULL == start_value)
+        start_value = &post_data[poff];
+      switch (post_data[poff])
+      {
+      case '=':
+        /* case 'key==' */
+        pp->state = PP_Error;
+        continue;
+      case '&':
+        /* case 'value&' */
+        end_value = &post_data[poff];
+        poff++;
+        if (pp->must_ikvi ||
+            (start_value != end_value) )
+        {
+          pp->state = PP_Callback;
+        }
+        else
+        {
+          pp->buffer_pos = 0;
+          pp->value_offset = 0;
+          pp->state = PP_Init;
+          start_value = NULL;
+        }
+        continue;
+      case '\n':
+      case '\r':
+        /* Case: 'value\n' or 'value\r' */
+        end_value = &post_data[poff];
+        poff++;
+        if (pp->must_ikvi)
+          pp->state = PP_Callback;
+        else
+          pp->state = PP_Done;
+        break;
+      case '%':
+        last_escape = &post_data[poff];
+        poff++;
+        break;
+      case '0':
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+      case '8':
+      case '9':
+        /* character, may be part of escaping */
+        poff++;
+        continue;
+      default:
+        /* normal character, no more escaping! */
+        last_escape = NULL;
+        poff++;
+        continue;
+      }
+      break; /* end PP_ProcessValue */
+    case PP_Done:
+      switch (post_data[poff])
+      {
+      case '\n':
+      case '\r':
+        poff++;
+        continue;
+      }
+      /* unexpected data at the end, fail! */
+      pp->state = PP_Error;
+      break;
+    case PP_Callback:
+      if ( (pp->buffer_pos + (end_key - start_key) >
+            pp->buffer_size) ||
+           (pp->buffer_pos + (end_key - start_key) <
+            pp->buffer_pos) )
+      {
+        /* key too long, cannot parse! */
+        pp->state = PP_Error;
+        continue;
+      }
+      /* compute key, if we have not already */
+      if (NULL != start_key)
+      {
+        memcpy (&kbuf[pp->buffer_pos],
+                start_key,
+                end_key - start_key);
+        pp->buffer_pos += end_key - start_key;
+        start_key = NULL;
+        end_key = NULL;
+        pp->must_unescape_key = true;
+      }
+      if (pp->must_unescape_key)
+      {
+        kbuf[pp->buffer_pos] = '\0'; /* 0-terminate key */
+        MHD_unescape_plus (kbuf);
+        MHD_http_unescape (kbuf);
+        pp->must_unescape_key = false;
+      }
+      process_value (pp,
+                     start_value,
+                     end_value,
+                     NULL);
+      pp->value_offset = 0;
+      start_value = NULL;
+      end_value = NULL;
+      pp->buffer_pos = 0;
+      pp->state = PP_Init;
+      break;
+    default:
+      mhd_panic (mhd_panic_cls,
+                 __FILE__,
+                 __LINE__,
+                 NULL);              /* should never happen! */
+    }
+  }
+
+  /* save remaining data for next iteration */
+  if (NULL != start_key)
+  {
+    if (NULL == end_key)
+      end_key = &post_data[poff];
+    memcpy (&kbuf[pp->buffer_pos],
+            start_key,
+            end_key - start_key);
+    pp->buffer_pos += end_key - start_key;
+    pp->must_unescape_key = true;
+    start_key = NULL;
+    end_key = NULL;
+  }
+  if ( (NULL != start_value) &&
+       (PP_ProcessValue == pp->state) )
+  {
+    /* compute key, if we have not already */
+    if (pp->must_unescape_key)
+    {
+      kbuf[pp->buffer_pos] = '\0'; /* 0-terminate key */
+      MHD_unescape_plus (kbuf);
+      MHD_http_unescape (kbuf);
+      pp->must_unescape_key = false;
+    }
+    if (NULL == end_value)
+      end_value = &post_data[poff];
+    process_value (pp,
+                   start_value,
+                   end_value,
+                   last_escape);
+    pp->must_ikvi = false;
+  }
+  return MHD_YES;
+}","post_process_urlencoded (struct MHD_PostProcessor *pp,
+                         const char *post_data,
+                         size_t post_data_len)
+{
+  char *kbuf = (char *) &pp[1];
+  size_t poff;
+  const char *start_key = NULL;
+  const char *end_key = NULL;
+  const char *start_value = NULL;
+  const char *end_value = NULL;
+  const char *last_escape = NULL;
+
+  poff = 0;
+  while ( ( (poff < post_data_len) ||
+            (pp->state == PP_Callback) ) &&
+          (pp->state != PP_Error) )
+  {
+    switch (pp->state)
+    {
+    case PP_Error:
+      /* clearly impossible as per while loop invariant */
+      abort ();
+      break;
+    case PP_Init:
+      /* key phase */
+      if (NULL == start_key)
+        start_key = &post_data[poff];
+      pp->must_ikvi = true;
+      switch (post_data[poff])
+      {
+      case '=':
+        /* Case: 'key=' */
+        end_key = &post_data[poff];
+        poff++;
+        pp->state = PP_ProcessValue;
+        break;
+      case '&':
+        /* Case: 'key&' */
+        end_key = &post_data[poff];
+        mhd_assert (NULL == start_value);
+        mhd_assert (NULL == end_value);
+        poff++;
+        pp->state = PP_Callback;
+        break;
+      case '\n':
+      case '\r':
+        /* Case: 'key\n' or 'key\r' */
+        end_key = &post_data[poff];
+        poff++;
+        pp->state = PP_Done;
+        break;
+      default:
+        /* normal character, advance! */
+        poff++;
+        continue;
+      }
+      break; /* end PP_Init */
+    case PP_ProcessValue:
+      if (NULL == start_value)
+        start_value = &post_data[poff];
+      switch (post_data[poff])
+      {
+      case '=':
+        /* case 'key==' */
+        pp->state = PP_Error;
+        continue;
+      case '&':
+        /* case 'value&' */
+        end_value = &post_data[poff];
+        poff++;
+        if (pp->must_ikvi ||
+            (start_value != end_value) )
+        {
+          pp->state = PP_Callback;
+        }
+        else
+        {
+          pp->buffer_pos = 0;
+          pp->value_offset = 0;
+          pp->state = PP_Init;
+          start_value = NULL;
+        }
+        continue;
+      case '\n':
+      case '\r':
+        /* Case: 'value\n' or 'value\r' */
+        end_value = &post_data[poff];
+        poff++;
+        if (pp->must_ikvi)
+          pp->state = PP_Callback;
+        else
+          pp->state = PP_Done;
+        break;
+      case '%':
+        last_escape = &post_data[poff];
+        poff++;
+        break;
+      case '0':
+      case '1':
+      case '2':
+      case '3':
+      case '4':
+      case '5':
+      case '6':
+      case '7':
+      case '8':
+      case '9':
+        /* character, may be part of escaping */
+        poff++;
+        continue;
+      default:
+        /* normal character, no more escaping! */
+        last_escape = NULL;
+        poff++;
+        continue;
+      }
+      break; /* end PP_ProcessValue */
+    case PP_Done:
+      switch (post_data[poff])
+      {
+      case '\n':
+      case '\r':
+        poff++;
+        continue;
+      }
+      /* unexpected data at the end, fail! */
+      pp->state = PP_Error;
+      break;
+    case PP_Callback:
+      if ( (pp->buffer_pos + (end_key - start_key) >=
+            pp->buffer_size) ||
+           (pp->buffer_pos + (end_key - start_key) <
+            pp->buffer_pos) )
+      {
+        /* key too long, cannot parse! */
+        pp->state = PP_Error;
+        continue;
+      }
+      /* compute key, if we have not already */
+      if (NULL != start_key)
+      {
+        memcpy (&kbuf[pp->buffer_pos],
+                start_key,
+                end_key - start_key);
+        pp->buffer_pos += end_key - start_key;
+        start_key = NULL;
+        end_key = NULL;
+        pp->must_unescape_key = true;
+      }
+      if (pp->must_unescape_key)
+      {
+        kbuf[pp->buffer_pos] = '\0'; /* 0-terminate key */
+        MHD_unescape_plus (kbuf);
+        MHD_http_unescape (kbuf);
+        pp->must_unescape_key = false;
+      }
+      process_value (pp,
+                     start_value,
+                     end_value,
+                     NULL);
+      pp->value_offset = 0;
+      start_value = NULL;
+      end_value = NULL;
+      pp->buffer_pos = 0;
+      pp->state = PP_Init;
+      break;
+    default:
+      mhd_panic (mhd_panic_cls,
+                 __FILE__,
+                 __LINE__,
+                 NULL);              /* should never happen! */
+    }
+  }
+
+  /* save remaining data for next iteration */
+  if (NULL != start_key)
+  {
+    if (NULL == end_key)
+      end_key = &post_data[poff];
+    if (pp->buffer_pos + (end_key - start_key) >= pp->buffer_size)
+    {
+      pp->state = PP_Error;
+      return MHD_NO;
+    }
+    memcpy (&kbuf[pp->buffer_pos],
+            start_key,
+            end_key - start_key);
+    pp->buffer_pos += end_key - start_key;
+    pp->must_unescape_key = true;
+    start_key = NULL;
+    end_key = NULL;
+  }
+  if ( (NULL != start_value) &&
+       (PP_ProcessValue == pp->state) )
+  {
+    /* compute key, if we have not already */
+    if (pp->must_unescape_key)
+    {
+      kbuf[pp->buffer_pos] = '\0'; /* 0-terminate key */
+      MHD_unescape_plus (kbuf);
+      MHD_http_unescape (kbuf);
+      pp->must_unescape_key = false;
+    }
+    if (NULL == end_value)
+      end_value = &post_data[poff];
+    process_value (pp,
+                   start_value,
+                   end_value,
+                   last_escape);
+    pp->must_ikvi = false;
+  }
+  if (PP_Error == pp->state)
+  {
+    /* State in error, returning failure */
+    return MHD_NO;
+  }
+  return MHD_YES;
+}",
+2660,"[""CWE-120""]",graphviz,784411ca3655c80da0f6025ab20634b2a6ff696b,784411ca3655c80da0f6025ab20634b2a6ff696b,0,507442,3.0926806916627067e+38,45.0,"fix: out-of-bounds write on invalid label
+
+When the label for a node cannot be parsed (due to it being malformed), it falls
+back on the symbol name of the node itself. I.e. the default label the node
+would have had if it had no label attribute at all. However, this is applied by
+dynamically altering the node's label to ""\N"", a shortcut for the symbol name of
+the node. All of this is fine, however if the hand written label itself is
+shorter than the literal string ""\N"", not enough memory would have been
+allocated to write ""\N"" into the label text.
+
+Here we account for the possibility of error during label parsing, and assume
+that the label text may need to be overwritten with ""\N"" after the fact. Fixes
+issue #1700.",other,"static void record_init(node_t * n)
+{
+    field_t *info;
+    pointf ul, sz;
+    int flip, len;
+    char *textbuf;		/* temp buffer for storing labels */
+    int sides = BOTTOM | RIGHT | TOP | LEFT;
+
+    /* Always use rankdir to determine how records are laid out */
+    flip = NOT(GD_realflip(agraphof(n)));
+    reclblp = ND_label(n)->text;
+    len = strlen(reclblp);
+    /* For some forgotten reason, an empty label is parsed into a space, so
+     * we need at least two bytes in textbuf.
+     */
+    len = MAX(len, 1);
+    textbuf = N_NEW(len + 1, char);
+    if (!(info = parse_reclbl(n, flip, TRUE, textbuf))) {
+	agerr(AGERR, ""bad label format %s\n"", ND_label(n)->text);
+	reclblp = ""\\N"";
+	info = parse_reclbl(n, flip, TRUE, textbuf);
+    }
+    free(textbuf);
+    size_reclbl(n, info);
+    sz.x = POINTS(ND_width(n));
+    sz.y = POINTS(ND_height(n));
+    if (mapbool(late_string(n, N_fixed, ""false""))) {
+	if ((sz.x < info->size.x) || (sz.y < info->size.y)) {
+/* should check that the record really won't fit, e.g., there may be no text.
+			agerr(AGWARN, ""node '%s' size may be too small\n"", agnameof(n));
+*/
+	}
+    } else {
+	sz.x = MAX(info->size.x, sz.x);
+	sz.y = MAX(info->size.y, sz.y);
+    }
+    resize_reclbl(info, sz, mapbool(late_string(n, N_nojustify, ""false"")));
+    ul = pointfof(-sz.x / 2., sz.y / 2.);	/* FIXME - is this still true:    suspected to introduce ronding error - see Kluge below */
+    pos_reclbl(info, ul, sides);
+    ND_width(n) = PS2INCH(info->size.x);
+    ND_height(n) = PS2INCH(info->size.y + 1);	/* Kluge!!  +1 to fix rounding diff between layout and rendering 
+						   otherwise we can get -1 coords in output */
+    ND_shape_info(n) = (void *) info;
+}","static void record_init(node_t * n)
+{
+    field_t *info;
+    pointf ul, sz;
+    int flip, len;
+    char *textbuf;		/* temp buffer for storing labels */
+    int sides = BOTTOM | RIGHT | TOP | LEFT;
+
+    /* Always use rankdir to determine how records are laid out */
+    flip = NOT(GD_realflip(agraphof(n)));
+    reclblp = ND_label(n)->text;
+    len = strlen(reclblp);
+    /* For some forgotten reason, an empty label is parsed into a space, so
+     * we need at least two bytes in textbuf, as well as accounting for the
+     * error path involving ""\\N"" below.
+     */
+    len = MAX(MAX(len, 1), (int)strlen(""\\N""));
+    textbuf = N_NEW(len + 1, char);
+    if (!(info = parse_reclbl(n, flip, TRUE, textbuf))) {
+	agerr(AGERR, ""bad label format %s\n"", ND_label(n)->text);
+	reclblp = ""\\N"";
+	info = parse_reclbl(n, flip, TRUE, textbuf);
+    }
+    free(textbuf);
+    size_reclbl(n, info);
+    sz.x = POINTS(ND_width(n));
+    sz.y = POINTS(ND_height(n));
+    if (mapbool(late_string(n, N_fixed, ""false""))) {
+	if ((sz.x < info->size.x) || (sz.y < info->size.y)) {
+/* should check that the record really won't fit, e.g., there may be no text.
+			agerr(AGWARN, ""node '%s' size may be too small\n"", agnameof(n));
+*/
+	}
+    } else {
+	sz.x = MAX(info->size.x, sz.x);
+	sz.y = MAX(info->size.y, sz.y);
+    }
+    resize_reclbl(info, sz, mapbool(late_string(n, N_nojustify, ""false"")));
+    ul = pointfof(-sz.x / 2., sz.y / 2.);	/* FIXME - is this still true:    suspected to introduce ronding error - see Kluge below */
+    pos_reclbl(info, ul, sides);
+    ND_width(n) = PS2INCH(info->size.x);
+    ND_height(n) = PS2INCH(info->size.y + 1);	/* Kluge!!  +1 to fix rounding diff between layout and rendering 
+						   otherwise we can get -1 coords in output */
+    ND_shape_info(n) = (void *) info;
+}",
+3223,"[""CWE-120""]",udev,662c3110803bd8c1aedacc36788e6fd028944314,662c3110803bd8c1aedacc36788e6fd028944314,0,490328,1.0837385504033207e+38,24.0,"path_encode: fix max length calculation
+
+Sebastian Krahmer wrote:
+> it should reserve 4 times not 3 times len :)",other,"size_t util_path_encode(char *s, size_t len)
+{
+	char t[(len * 3)+1];
+	size_t i, j;
+
+	for (i = 0, j = 0; s[i] != '\0'; i++) {
+		if (s[i] == '/') {
+			memcpy(&t[j], ""\\x2f"", 4);
+			j += 4;
+		} else if (s[i] == '\\') {
+			memcpy(&t[j], ""\\x5c"", 4);
+			j += 4;
+		} else {
+			t[j] = s[i];
+			j++;
+		}
+	}
+	if (len == 0)
+		return j;
+	i = (j < len - 1) ? j : len - 1;
+	memcpy(s, t, i);
+	s[i] = '\0';
+	return j;
+}","size_t util_path_encode(char *s, size_t len)
+{
+	char t[(len * 4)+1];
+	size_t i, j;
+
+	for (i = 0, j = 0; s[i] != '\0'; i++) {
+		if (s[i] == '/') {
+			memcpy(&t[j], ""\\x2f"", 4);
+			j += 4;
+		} else if (s[i] == '\\') {
+			memcpy(&t[j], ""\\x5c"", 4);
+			j += 4;
+		} else {
+			t[j] = s[i];
+			j++;
+		}
+	}
+	if (len == 0)
+		return j;
+	i = (j < len - 1) ? j : len - 1;
+	memcpy(s, t, i);
+	s[i] = '\0';
+	return j;
+}",

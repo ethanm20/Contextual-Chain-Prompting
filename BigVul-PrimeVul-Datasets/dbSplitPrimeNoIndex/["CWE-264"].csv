@@ -1,0 +1,1987 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2435,"[""CWE-264""]",linux-2.6,176df2457ef6207156ca1a40991c54ca01fef567,176df2457ef6207156ca1a40991c54ca01fef567,0,487243,8.870036287876304e+37,56.0,"x86_64: Zero extend all registers after ptrace in 32bit entry path.
+
+Strictly it's only needed for eax.
+
+It actually does a little more than strictly needed -- the other registers
+are already zero extended.
+
+Also remove the now unnecessary and non functional compat task check
+in ptrace.
+
+This is CVE-2007-4573
+
+Found by Wojciech Purczynski
+
+Signed-off-by: Andi Kleen <ak@suse.de>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"static int putreg(struct task_struct *child,
+	unsigned long regno, unsigned long value)
+{
+	unsigned long tmp; 
+	
+	/* Some code in the 64bit emulation may not be 64bit clean.
+	   Don't take any chances. */
+	if (test_tsk_thread_flag(child, TIF_IA32))
+		value &= 0xffffffff;
+	switch (regno) {
+		case offsetof(struct user_regs_struct,fs):
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.fsindex = value & 0xffff; 
+			return 0;
+		case offsetof(struct user_regs_struct,gs):
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.gsindex = value & 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,ds):
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.ds = value & 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,es): 
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.es = value & 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,ss):
+			if ((value & 3) != 3)
+				return -EIO;
+			value &= 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,fs_base):
+			if (value >= TASK_SIZE_OF(child))
+				return -EIO;
+			child->thread.fs = value;
+			return 0;
+		case offsetof(struct user_regs_struct,gs_base):
+			if (value >= TASK_SIZE_OF(child))
+				return -EIO;
+			child->thread.gs = value;
+			return 0;
+		case offsetof(struct user_regs_struct, eflags):
+			value &= FLAG_MASK;
+			tmp = get_stack_long(child, EFL_OFFSET); 
+			tmp &= ~FLAG_MASK; 
+			value |= tmp;
+			break;
+		case offsetof(struct user_regs_struct,cs): 
+			if ((value & 3) != 3)
+				return -EIO;
+			value &= 0xffff;
+			break;
+	}
+	put_stack_long(child, regno - sizeof(struct pt_regs), value);
+	return 0;
+}","static int putreg(struct task_struct *child,
+	unsigned long regno, unsigned long value)
+{
+	unsigned long tmp; 
+	
+	switch (regno) {
+		case offsetof(struct user_regs_struct,fs):
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.fsindex = value & 0xffff; 
+			return 0;
+		case offsetof(struct user_regs_struct,gs):
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.gsindex = value & 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,ds):
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.ds = value & 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,es): 
+			if (value && (value & 3) != 3)
+				return -EIO;
+			child->thread.es = value & 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,ss):
+			if ((value & 3) != 3)
+				return -EIO;
+			value &= 0xffff;
+			return 0;
+		case offsetof(struct user_regs_struct,fs_base):
+			if (value >= TASK_SIZE_OF(child))
+				return -EIO;
+			child->thread.fs = value;
+			return 0;
+		case offsetof(struct user_regs_struct,gs_base):
+			if (value >= TASK_SIZE_OF(child))
+				return -EIO;
+			child->thread.gs = value;
+			return 0;
+		case offsetof(struct user_regs_struct, eflags):
+			value &= FLAG_MASK;
+			tmp = get_stack_long(child, EFL_OFFSET); 
+			tmp &= ~FLAG_MASK; 
+			value |= tmp;
+			break;
+		case offsetof(struct user_regs_struct,cs): 
+			if ((value & 3) != 3)
+				return -EIO;
+			value &= 0xffff;
+			break;
+	}
+	put_stack_long(child, regno - sizeof(struct pt_regs), value);
+	return 0;
+}",
+2461,"[""CWE-264""]",linux-2.6,7b82dc0e64e93f430182f36b46b79fcee87d3532,7b82dc0e64e93f430182f36b46b79fcee87d3532,0,489092,5.652818003901465e+37,25.0,"Remove suid/sgid bits on [f]truncate()
+
+.. to match what we do on write().  This way, people who write to files
+by using [f]truncate + writable mmap have the same semantics as if they
+were using the write() family of system calls.
+
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
+	struct file *filp)
+{
+	int err;
+	struct iattr newattrs;
+
+	/* Not pretty: ""inode->i_size"" shouldn't really be signed. But it is. */
+	if (length < 0)
+		return -EINVAL;
+
+	newattrs.ia_size = length;
+	newattrs.ia_valid = ATTR_SIZE | time_attrs;
+	if (filp) {
+		newattrs.ia_file = filp;
+		newattrs.ia_valid |= ATTR_FILE;
+	}
+
+	mutex_lock(&dentry->d_inode->i_mutex);
+	err = notify_change(dentry, &newattrs);
+	mutex_unlock(&dentry->d_inode->i_mutex);
+	return err;
+}","int do_truncate(struct dentry *dentry, loff_t length, unsigned int time_attrs,
+	struct file *filp)
+{
+	int err;
+	struct iattr newattrs;
+
+	/* Not pretty: ""inode->i_size"" shouldn't really be signed. But it is. */
+	if (length < 0)
+		return -EINVAL;
+
+	newattrs.ia_size = length;
+	newattrs.ia_valid = ATTR_SIZE | time_attrs;
+	if (filp) {
+		newattrs.ia_file = filp;
+		newattrs.ia_valid |= ATTR_FILE;
+	}
+
+	/* Remove suid/sgid on truncate too */
+	newattrs.ia_valid |= should_remove_suid(dentry);
+
+	mutex_lock(&dentry->d_inode->i_mutex);
+	err = notify_change(dentry, &newattrs);
+	mutex_unlock(&dentry->d_inode->i_mutex);
+	return err;
+}",
+2462,"[""CWE-264""]",linux-2.6,8c34e2d63231d4bf4852bac8521883944d770fe3,8c34e2d63231d4bf4852bac8521883944d770fe3,0,489112,1.9553890316051105e+38,31.0,"[PATCH] Remove SUID when splicing into an inode
+
+Originally from Mark Fasheh <mark.fasheh@oracle.com>
+
+generic_file_splice_write() does not remove S_ISUID or S_ISGID. This is
+inconsistent with the way we generally write to files.
+
+Signed-off-by: Mark Fasheh <mark.fasheh@oracle.com>
+Signed-off-by: Jens Axboe <jens.axboe@oracle.com>",other,"generic_file_splice_write(struct pipe_inode_info *pipe, struct file *out,
+			  loff_t *ppos, size_t len, unsigned int flags)
+{
+	struct address_space *mapping = out->f_mapping;
+	ssize_t ret;
+
+	ret = splice_from_pipe(pipe, out, ppos, len, flags, pipe_to_file);
+	if (ret > 0) {
+		struct inode *inode = mapping->host;
+
+		*ppos += ret;
+
+		/*
+		 * If file or inode is SYNC and we actually wrote some data,
+		 * sync it.
+		 */
+		if (unlikely((out->f_flags & O_SYNC) || IS_SYNC(inode))) {
+			int err;
+
+			mutex_lock(&inode->i_mutex);
+			err = generic_osync_inode(inode, mapping,
+						  OSYNC_METADATA|OSYNC_DATA);
+			mutex_unlock(&inode->i_mutex);
+
+			if (err)
+				ret = err;
+		}
+	}
+
+	return ret;
+}","generic_file_splice_write_nolock(struct pipe_inode_info *pipe, struct file *out,
+				 loff_t *ppos, size_t len, unsigned int flags)
+{
+	struct address_space *mapping = out->f_mapping;
+	struct inode *inode = mapping->host;
+	ssize_t ret;
+	int err;
+
+	err = remove_suid(out->f_dentry);
+	if (unlikely(err))
+		return err;
+
+	ret = __splice_from_pipe(pipe, out, ppos, len, flags, pipe_to_file);
+	if (ret > 0) {
+		*ppos += ret;
+
+		/*
+		 * If file or inode is SYNC and we actually wrote some data,
+		 * sync it.
+		 */
+		if (unlikely((out->f_flags & O_SYNC) || IS_SYNC(inode))) {
+			err = generic_osync_inode(inode, mapping,
+						  OSYNC_METADATA|OSYNC_DATA);
+
+			if (err)
+				ret = err;
+		}
+	}
+
+	return ret;
+}",
+2463,"[""CWE-264""]",linux-2.6,efc968d450e013049a662d22727cf132618dcb2f,efc968d450e013049a662d22727cf132618dcb2f,0,489199,3.2694770052020872e+38,20.0,"Don't allow splice() to files opened with O_APPEND
+
+This is debatable, but while we're debating it, let's disallow the
+combination of splice and an O_APPEND destination.
+
+It's not entirely clear what the semantics of O_APPEND should be, and
+POSIX apparently expects pwrite() to ignore O_APPEND, for example.  So
+we could make up any semantics we want, including the old ones.
+
+But Miklos convinced me that we should at least give it some thought,
+and that accepting writes at arbitrary offsets is wrong at least for
+IS_APPEND() files (which always have O_APPEND set, even if the reverse
+isn't true: you can obviously have O_APPEND set on a regular file).
+
+So disallow O_APPEND entirely for now.  I doubt anybody cares, and this
+way we have one less gray area to worry about.
+
+Reported-and-argued-for-by: Miklos Szeredi <miklos@szeredi.hu>
+Acked-by: Jens Axboe <ens.axboe@oracle.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"static long do_splice_from(struct pipe_inode_info *pipe, struct file *out,
+			   loff_t *ppos, size_t len, unsigned int flags)
+{
+	int ret;
+
+	if (unlikely(!out->f_op || !out->f_op->splice_write))
+		return -EINVAL;
+
+	if (unlikely(!(out->f_mode & FMODE_WRITE)))
+		return -EBADF;
+
+	ret = rw_verify_area(WRITE, out, ppos, len);
+	if (unlikely(ret < 0))
+		return ret;
+
+	return out->f_op->splice_write(pipe, out, ppos, len, flags);
+}","static long do_splice_from(struct pipe_inode_info *pipe, struct file *out,
+			   loff_t *ppos, size_t len, unsigned int flags)
+{
+	int ret;
+
+	if (unlikely(!out->f_op || !out->f_op->splice_write))
+		return -EINVAL;
+
+	if (unlikely(!(out->f_mode & FMODE_WRITE)))
+		return -EBADF;
+
+	if (unlikely(out->f_flags & O_APPEND))
+		return -EINVAL;
+
+	ret = rw_verify_area(WRITE, out, ppos, len);
+	if (unlikely(ret < 0))
+		return ret;
+
+	return out->f_op->splice_write(pipe, out, ppos, len, flags);
+}",
+2469,"[""CWE-264""]",linux-2.6,2d5516cbb9daf7d0e342a2e3b0fc6f8c39a81205,2d5516cbb9daf7d0e342a2e3b0fc6f8c39a81205,0,489731,2.8627219866169365e+38,376.0,"copy_process: fix CLONE_PARENT && parent_exec_id interaction
+
+CLONE_PARENT can fool the ->self_exec_id/parent_exec_id logic. If we
+re-use the old parent, we must also re-use ->parent_exec_id to make
+sure exit_notify() sees the right ->xxx_exec_id's when the CLONE_PARENT'ed
+task exits.
+
+Also, move down the ""p->parent_exec_id = p->self_exec_id"" thing, to place
+two different cases together.
+
+Signed-off-by: Oleg Nesterov <oleg@redhat.com>
+Cc: Roland McGrath <roland@redhat.com>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: David Howells <dhowells@redhat.com>
+Cc: Serge E. Hallyn <serge@hallyn.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"static struct task_struct *copy_process(unsigned long clone_flags,
+					unsigned long stack_start,
+					struct pt_regs *regs,
+					unsigned long stack_size,
+					int __user *child_tidptr,
+					struct pid *pid,
+					int trace)
+{
+	int retval;
+	struct task_struct *p;
+	int cgroup_callbacks_done = 0;
+
+	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
+		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Thread groups must share signals as well, and detached threads
+	 * can only be started up within the thread group.
+	 */
+	if ((clone_flags & CLONE_THREAD) && !(clone_flags & CLONE_SIGHAND))
+		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Shared signal handlers imply shared VM. By way of the above,
+	 * thread groups also imply shared VM. Blocking this case allows
+	 * for various simplifications in other code.
+	 */
+	if ((clone_flags & CLONE_SIGHAND) && !(clone_flags & CLONE_VM))
+		return ERR_PTR(-EINVAL);
+
+	retval = security_task_create(clone_flags);
+	if (retval)
+		goto fork_out;
+
+	retval = -ENOMEM;
+	p = dup_task_struct(current);
+	if (!p)
+		goto fork_out;
+
+	rt_mutex_init_task(p);
+
+#ifdef CONFIG_PROVE_LOCKING
+	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
+	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
+#endif
+	retval = -EAGAIN;
+	if (atomic_read(&p->real_cred->user->processes) >=
+			p->signal->rlim[RLIMIT_NPROC].rlim_cur) {
+		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
+		    p->real_cred->user != INIT_USER)
+			goto bad_fork_free;
+	}
+
+	retval = copy_creds(p, clone_flags);
+	if (retval < 0)
+		goto bad_fork_free;
+
+	/*
+	 * If multiple threads are within copy_process(), then this check
+	 * triggers too late. This doesn't hurt, the check is only there
+	 * to stop root fork bombs.
+	 */
+	retval = -EAGAIN;
+	if (nr_threads >= max_threads)
+		goto bad_fork_cleanup_count;
+
+	if (!try_module_get(task_thread_info(p)->exec_domain->module))
+		goto bad_fork_cleanup_count;
+
+	if (p->binfmt && !try_module_get(p->binfmt->module))
+		goto bad_fork_cleanup_put_domain;
+
+	p->did_exec = 0;
+	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
+	copy_flags(clone_flags, p);
+	INIT_LIST_HEAD(&p->children);
+	INIT_LIST_HEAD(&p->sibling);
+#ifdef CONFIG_PREEMPT_RCU
+	p->rcu_read_lock_nesting = 0;
+	p->rcu_flipctr_idx = 0;
+#endif /* #ifdef CONFIG_PREEMPT_RCU */
+	p->vfork_done = NULL;
+	spin_lock_init(&p->alloc_lock);
+
+	clear_tsk_thread_flag(p, TIF_SIGPENDING);
+	init_sigpending(&p->pending);
+
+	p->utime = cputime_zero;
+	p->stime = cputime_zero;
+	p->gtime = cputime_zero;
+	p->utimescaled = cputime_zero;
+	p->stimescaled = cputime_zero;
+	p->prev_utime = cputime_zero;
+	p->prev_stime = cputime_zero;
+
+	p->default_timer_slack_ns = current->timer_slack_ns;
+
+#ifdef CONFIG_DETECT_SOFTLOCKUP
+	p->last_switch_count = 0;
+	p->last_switch_timestamp = 0;
+#endif
+
+	task_io_accounting_init(&p->ioac);
+	acct_clear_integrals(p);
+
+	posix_cpu_timers_init(p);
+
+	p->lock_depth = -1;		/* -1 = no lock */
+	do_posix_clock_monotonic_gettime(&p->start_time);
+	p->real_start_time = p->start_time;
+	monotonic_to_bootbased(&p->real_start_time);
+	p->io_context = NULL;
+	p->audit_context = NULL;
+	cgroup_fork(p);
+#ifdef CONFIG_NUMA
+	p->mempolicy = mpol_dup(p->mempolicy);
+ 	if (IS_ERR(p->mempolicy)) {
+ 		retval = PTR_ERR(p->mempolicy);
+ 		p->mempolicy = NULL;
+ 		goto bad_fork_cleanup_cgroup;
+ 	}
+	mpol_fix_fork_child_flag(p);
+#endif
+#ifdef CONFIG_TRACE_IRQFLAGS
+	p->irq_events = 0;
+#ifdef __ARCH_WANT_INTERRUPTS_ON_CTXSW
+	p->hardirqs_enabled = 1;
+#else
+	p->hardirqs_enabled = 0;
+#endif
+	p->hardirq_enable_ip = 0;
+	p->hardirq_enable_event = 0;
+	p->hardirq_disable_ip = _THIS_IP_;
+	p->hardirq_disable_event = 0;
+	p->softirqs_enabled = 1;
+	p->softirq_enable_ip = _THIS_IP_;
+	p->softirq_enable_event = 0;
+	p->softirq_disable_ip = 0;
+	p->softirq_disable_event = 0;
+	p->hardirq_context = 0;
+	p->softirq_context = 0;
+#endif
+#ifdef CONFIG_LOCKDEP
+	p->lockdep_depth = 0; /* no locks held yet */
+	p->curr_chain_key = 0;
+	p->lockdep_recursion = 0;
+#endif
+
+#ifdef CONFIG_DEBUG_MUTEXES
+	p->blocked_on = NULL; /* not blocked yet */
+#endif
+	if (unlikely(current->ptrace))
+		ptrace_fork(p, clone_flags);
+
+	/* Perform scheduler related setup. Assign this task to a CPU. */
+	sched_fork(p, clone_flags);
+
+	if ((retval = audit_alloc(p)))
+		goto bad_fork_cleanup_policy;
+	/* copy all the process information */
+	if ((retval = copy_semundo(clone_flags, p)))
+		goto bad_fork_cleanup_audit;
+	if ((retval = copy_files(clone_flags, p)))
+		goto bad_fork_cleanup_semundo;
+	if ((retval = copy_fs(clone_flags, p)))
+		goto bad_fork_cleanup_files;
+	if ((retval = copy_sighand(clone_flags, p)))
+		goto bad_fork_cleanup_fs;
+	if ((retval = copy_signal(clone_flags, p)))
+		goto bad_fork_cleanup_sighand;
+	if ((retval = copy_mm(clone_flags, p)))
+		goto bad_fork_cleanup_signal;
+	if ((retval = copy_namespaces(clone_flags, p)))
+		goto bad_fork_cleanup_mm;
+	if ((retval = copy_io(clone_flags, p)))
+		goto bad_fork_cleanup_namespaces;
+	retval = copy_thread(0, clone_flags, stack_start, stack_size, p, regs);
+	if (retval)
+		goto bad_fork_cleanup_io;
+
+	if (pid != &init_struct_pid) {
+		retval = -ENOMEM;
+		pid = alloc_pid(p->nsproxy->pid_ns);
+		if (!pid)
+			goto bad_fork_cleanup_io;
+
+		if (clone_flags & CLONE_NEWPID) {
+			retval = pid_ns_prepare_proc(p->nsproxy->pid_ns);
+			if (retval < 0)
+				goto bad_fork_free_pid;
+		}
+	}
+
+	ftrace_graph_init_task(p);
+
+	p->pid = pid_nr(pid);
+	p->tgid = p->pid;
+	if (clone_flags & CLONE_THREAD)
+		p->tgid = current->tgid;
+
+	if (current->nsproxy != p->nsproxy) {
+		retval = ns_cgroup_clone(p, pid);
+		if (retval)
+			goto bad_fork_free_graph;
+	}
+
+	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
+	/*
+	 * Clear TID on mm_release()?
+	 */
+	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? child_tidptr: NULL;
+#ifdef CONFIG_FUTEX
+	p->robust_list = NULL;
+#ifdef CONFIG_COMPAT
+	p->compat_robust_list = NULL;
+#endif
+	INIT_LIST_HEAD(&p->pi_state_list);
+	p->pi_state_cache = NULL;
+#endif
+	/*
+	 * sigaltstack should be cleared when sharing the same VM
+	 */
+	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
+		p->sas_ss_sp = p->sas_ss_size = 0;
+
+	/*
+	 * Syscall tracing should be turned off in the child regardless
+	 * of CLONE_PTRACE.
+	 */
+	clear_tsk_thread_flag(p, TIF_SYSCALL_TRACE);
+#ifdef TIF_SYSCALL_EMU
+	clear_tsk_thread_flag(p, TIF_SYSCALL_EMU);
+#endif
+	clear_all_latency_tracing(p);
+
+	/* Our parent execution domain becomes current domain
+	   These must match for thread signalling to apply */
+	p->parent_exec_id = p->self_exec_id;
+
+	/* ok, now we should be set up.. */
+	p->exit_signal = (clone_flags & CLONE_THREAD) ? -1 : (clone_flags & CSIGNAL);
+	p->pdeath_signal = 0;
+	p->exit_state = 0;
+
+	/*
+	 * Ok, make it visible to the rest of the system.
+	 * We dont wake it up yet.
+	 */
+	p->group_leader = p;
+	INIT_LIST_HEAD(&p->thread_group);
+
+	/* Now that the task is set up, run cgroup callbacks if
+	 * necessary. We need to run them before the task is visible
+	 * on the tasklist. */
+	cgroup_fork_callbacks(p);
+	cgroup_callbacks_done = 1;
+
+	/* Need tasklist lock for parent etc handling! */
+	write_lock_irq(&tasklist_lock);
+
+	/*
+	 * The task hasn't been attached yet, so its cpus_allowed mask will
+	 * not be changed, nor will its assigned CPU.
+	 *
+	 * The cpus_allowed mask of the parent may have changed after it was
+	 * copied first time - so re-copy it here, then check the child's CPU
+	 * to ensure it is on a valid CPU (and if not, just force it back to
+	 * parent's CPU). This avoids alot of nasty races.
+	 */
+	p->cpus_allowed = current->cpus_allowed;
+	p->rt.nr_cpus_allowed = current->rt.nr_cpus_allowed;
+	if (unlikely(!cpu_isset(task_cpu(p), p->cpus_allowed) ||
+			!cpu_online(task_cpu(p))))
+		set_task_cpu(p, smp_processor_id());
+
+	/* CLONE_PARENT re-uses the old parent */
+	if (clone_flags & (CLONE_PARENT|CLONE_THREAD))
+		p->real_parent = current->real_parent;
+	else
+		p->real_parent = current;
+
+	spin_lock(&current->sighand->siglock);
+
+	/*
+	 * Process group and session signals need to be delivered to just the
+	 * parent before the fork or both the parent and the child after the
+	 * fork. Restart if a signal comes in before we add the new process to
+	 * it's process group.
+	 * A fatal signal pending means that current will exit, so the new
+	 * thread can't slip out of an OOM kill (or normal SIGKILL).
+ 	 */
+	recalc_sigpending();
+	if (signal_pending(current)) {
+		spin_unlock(&current->sighand->siglock);
+		write_unlock_irq(&tasklist_lock);
+		retval = -ERESTARTNOINTR;
+		goto bad_fork_free_graph;
+	}
+
+	if (clone_flags & CLONE_THREAD) {
+		p->group_leader = current->group_leader;
+		list_add_tail_rcu(&p->thread_group, &p->group_leader->thread_group);
+	}
+
+	if (likely(p->pid)) {
+		list_add_tail(&p->sibling, &p->real_parent->children);
+		tracehook_finish_clone(p, clone_flags, trace);
+
+		if (thread_group_leader(p)) {
+			if (clone_flags & CLONE_NEWPID)
+				p->nsproxy->pid_ns->child_reaper = p;
+
+			p->signal->leader_pid = pid;
+			tty_kref_put(p->signal->tty);
+			p->signal->tty = tty_kref_get(current->signal->tty);
+			set_task_pgrp(p, task_pgrp_nr(current));
+			set_task_session(p, task_session_nr(current));
+			attach_pid(p, PIDTYPE_PGID, task_pgrp(current));
+			attach_pid(p, PIDTYPE_SID, task_session(current));
+			list_add_tail_rcu(&p->tasks, &init_task.tasks);
+			__get_cpu_var(process_counts)++;
+		}
+		attach_pid(p, PIDTYPE_PID, pid);
+		nr_threads++;
+	}
+
+	total_forks++;
+	spin_unlock(&current->sighand->siglock);
+	write_unlock_irq(&tasklist_lock);
+	proc_fork_connector(p);
+	cgroup_post_fork(p);
+	return p;
+
+bad_fork_free_graph:
+	ftrace_graph_exit_task(p);
+bad_fork_free_pid:
+	if (pid != &init_struct_pid)
+		free_pid(pid);
+bad_fork_cleanup_io:
+	put_io_context(p->io_context);
+bad_fork_cleanup_namespaces:
+	exit_task_namespaces(p);
+bad_fork_cleanup_mm:
+	if (p->mm)
+		mmput(p->mm);
+bad_fork_cleanup_signal:
+	cleanup_signal(p);
+bad_fork_cleanup_sighand:
+	__cleanup_sighand(p->sighand);
+bad_fork_cleanup_fs:
+	exit_fs(p); /* blocking */
+bad_fork_cleanup_files:
+	exit_files(p); /* blocking */
+bad_fork_cleanup_semundo:
+	exit_sem(p);
+bad_fork_cleanup_audit:
+	audit_free(p);
+bad_fork_cleanup_policy:
+#ifdef CONFIG_NUMA
+	mpol_put(p->mempolicy);
+bad_fork_cleanup_cgroup:
+#endif
+	cgroup_exit(p, cgroup_callbacks_done);
+	delayacct_tsk_free(p);
+	if (p->binfmt)
+		module_put(p->binfmt->module);
+bad_fork_cleanup_put_domain:
+	module_put(task_thread_info(p)->exec_domain->module);
+bad_fork_cleanup_count:
+	atomic_dec(&p->cred->user->processes);
+	put_cred(p->real_cred);
+	put_cred(p->cred);
+bad_fork_free:
+	free_task(p);
+fork_out:
+	return ERR_PTR(retval);
+}","static struct task_struct *copy_process(unsigned long clone_flags,
+					unsigned long stack_start,
+					struct pt_regs *regs,
+					unsigned long stack_size,
+					int __user *child_tidptr,
+					struct pid *pid,
+					int trace)
+{
+	int retval;
+	struct task_struct *p;
+	int cgroup_callbacks_done = 0;
+
+	if ((clone_flags & (CLONE_NEWNS|CLONE_FS)) == (CLONE_NEWNS|CLONE_FS))
+		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Thread groups must share signals as well, and detached threads
+	 * can only be started up within the thread group.
+	 */
+	if ((clone_flags & CLONE_THREAD) && !(clone_flags & CLONE_SIGHAND))
+		return ERR_PTR(-EINVAL);
+
+	/*
+	 * Shared signal handlers imply shared VM. By way of the above,
+	 * thread groups also imply shared VM. Blocking this case allows
+	 * for various simplifications in other code.
+	 */
+	if ((clone_flags & CLONE_SIGHAND) && !(clone_flags & CLONE_VM))
+		return ERR_PTR(-EINVAL);
+
+	retval = security_task_create(clone_flags);
+	if (retval)
+		goto fork_out;
+
+	retval = -ENOMEM;
+	p = dup_task_struct(current);
+	if (!p)
+		goto fork_out;
+
+	rt_mutex_init_task(p);
+
+#ifdef CONFIG_PROVE_LOCKING
+	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
+	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
+#endif
+	retval = -EAGAIN;
+	if (atomic_read(&p->real_cred->user->processes) >=
+			p->signal->rlim[RLIMIT_NPROC].rlim_cur) {
+		if (!capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE) &&
+		    p->real_cred->user != INIT_USER)
+			goto bad_fork_free;
+	}
+
+	retval = copy_creds(p, clone_flags);
+	if (retval < 0)
+		goto bad_fork_free;
+
+	/*
+	 * If multiple threads are within copy_process(), then this check
+	 * triggers too late. This doesn't hurt, the check is only there
+	 * to stop root fork bombs.
+	 */
+	retval = -EAGAIN;
+	if (nr_threads >= max_threads)
+		goto bad_fork_cleanup_count;
+
+	if (!try_module_get(task_thread_info(p)->exec_domain->module))
+		goto bad_fork_cleanup_count;
+
+	if (p->binfmt && !try_module_get(p->binfmt->module))
+		goto bad_fork_cleanup_put_domain;
+
+	p->did_exec = 0;
+	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
+	copy_flags(clone_flags, p);
+	INIT_LIST_HEAD(&p->children);
+	INIT_LIST_HEAD(&p->sibling);
+#ifdef CONFIG_PREEMPT_RCU
+	p->rcu_read_lock_nesting = 0;
+	p->rcu_flipctr_idx = 0;
+#endif /* #ifdef CONFIG_PREEMPT_RCU */
+	p->vfork_done = NULL;
+	spin_lock_init(&p->alloc_lock);
+
+	clear_tsk_thread_flag(p, TIF_SIGPENDING);
+	init_sigpending(&p->pending);
+
+	p->utime = cputime_zero;
+	p->stime = cputime_zero;
+	p->gtime = cputime_zero;
+	p->utimescaled = cputime_zero;
+	p->stimescaled = cputime_zero;
+	p->prev_utime = cputime_zero;
+	p->prev_stime = cputime_zero;
+
+	p->default_timer_slack_ns = current->timer_slack_ns;
+
+#ifdef CONFIG_DETECT_SOFTLOCKUP
+	p->last_switch_count = 0;
+	p->last_switch_timestamp = 0;
+#endif
+
+	task_io_accounting_init(&p->ioac);
+	acct_clear_integrals(p);
+
+	posix_cpu_timers_init(p);
+
+	p->lock_depth = -1;		/* -1 = no lock */
+	do_posix_clock_monotonic_gettime(&p->start_time);
+	p->real_start_time = p->start_time;
+	monotonic_to_bootbased(&p->real_start_time);
+	p->io_context = NULL;
+	p->audit_context = NULL;
+	cgroup_fork(p);
+#ifdef CONFIG_NUMA
+	p->mempolicy = mpol_dup(p->mempolicy);
+ 	if (IS_ERR(p->mempolicy)) {
+ 		retval = PTR_ERR(p->mempolicy);
+ 		p->mempolicy = NULL;
+ 		goto bad_fork_cleanup_cgroup;
+ 	}
+	mpol_fix_fork_child_flag(p);
+#endif
+#ifdef CONFIG_TRACE_IRQFLAGS
+	p->irq_events = 0;
+#ifdef __ARCH_WANT_INTERRUPTS_ON_CTXSW
+	p->hardirqs_enabled = 1;
+#else
+	p->hardirqs_enabled = 0;
+#endif
+	p->hardirq_enable_ip = 0;
+	p->hardirq_enable_event = 0;
+	p->hardirq_disable_ip = _THIS_IP_;
+	p->hardirq_disable_event = 0;
+	p->softirqs_enabled = 1;
+	p->softirq_enable_ip = _THIS_IP_;
+	p->softirq_enable_event = 0;
+	p->softirq_disable_ip = 0;
+	p->softirq_disable_event = 0;
+	p->hardirq_context = 0;
+	p->softirq_context = 0;
+#endif
+#ifdef CONFIG_LOCKDEP
+	p->lockdep_depth = 0; /* no locks held yet */
+	p->curr_chain_key = 0;
+	p->lockdep_recursion = 0;
+#endif
+
+#ifdef CONFIG_DEBUG_MUTEXES
+	p->blocked_on = NULL; /* not blocked yet */
+#endif
+	if (unlikely(current->ptrace))
+		ptrace_fork(p, clone_flags);
+
+	/* Perform scheduler related setup. Assign this task to a CPU. */
+	sched_fork(p, clone_flags);
+
+	if ((retval = audit_alloc(p)))
+		goto bad_fork_cleanup_policy;
+	/* copy all the process information */
+	if ((retval = copy_semundo(clone_flags, p)))
+		goto bad_fork_cleanup_audit;
+	if ((retval = copy_files(clone_flags, p)))
+		goto bad_fork_cleanup_semundo;
+	if ((retval = copy_fs(clone_flags, p)))
+		goto bad_fork_cleanup_files;
+	if ((retval = copy_sighand(clone_flags, p)))
+		goto bad_fork_cleanup_fs;
+	if ((retval = copy_signal(clone_flags, p)))
+		goto bad_fork_cleanup_sighand;
+	if ((retval = copy_mm(clone_flags, p)))
+		goto bad_fork_cleanup_signal;
+	if ((retval = copy_namespaces(clone_flags, p)))
+		goto bad_fork_cleanup_mm;
+	if ((retval = copy_io(clone_flags, p)))
+		goto bad_fork_cleanup_namespaces;
+	retval = copy_thread(0, clone_flags, stack_start, stack_size, p, regs);
+	if (retval)
+		goto bad_fork_cleanup_io;
+
+	if (pid != &init_struct_pid) {
+		retval = -ENOMEM;
+		pid = alloc_pid(p->nsproxy->pid_ns);
+		if (!pid)
+			goto bad_fork_cleanup_io;
+
+		if (clone_flags & CLONE_NEWPID) {
+			retval = pid_ns_prepare_proc(p->nsproxy->pid_ns);
+			if (retval < 0)
+				goto bad_fork_free_pid;
+		}
+	}
+
+	ftrace_graph_init_task(p);
+
+	p->pid = pid_nr(pid);
+	p->tgid = p->pid;
+	if (clone_flags & CLONE_THREAD)
+		p->tgid = current->tgid;
+
+	if (current->nsproxy != p->nsproxy) {
+		retval = ns_cgroup_clone(p, pid);
+		if (retval)
+			goto bad_fork_free_graph;
+	}
+
+	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
+	/*
+	 * Clear TID on mm_release()?
+	 */
+	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? child_tidptr: NULL;
+#ifdef CONFIG_FUTEX
+	p->robust_list = NULL;
+#ifdef CONFIG_COMPAT
+	p->compat_robust_list = NULL;
+#endif
+	INIT_LIST_HEAD(&p->pi_state_list);
+	p->pi_state_cache = NULL;
+#endif
+	/*
+	 * sigaltstack should be cleared when sharing the same VM
+	 */
+	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
+		p->sas_ss_sp = p->sas_ss_size = 0;
+
+	/*
+	 * Syscall tracing should be turned off in the child regardless
+	 * of CLONE_PTRACE.
+	 */
+	clear_tsk_thread_flag(p, TIF_SYSCALL_TRACE);
+#ifdef TIF_SYSCALL_EMU
+	clear_tsk_thread_flag(p, TIF_SYSCALL_EMU);
+#endif
+	clear_all_latency_tracing(p);
+
+	/* ok, now we should be set up.. */
+	p->exit_signal = (clone_flags & CLONE_THREAD) ? -1 : (clone_flags & CSIGNAL);
+	p->pdeath_signal = 0;
+	p->exit_state = 0;
+
+	/*
+	 * Ok, make it visible to the rest of the system.
+	 * We dont wake it up yet.
+	 */
+	p->group_leader = p;
+	INIT_LIST_HEAD(&p->thread_group);
+
+	/* Now that the task is set up, run cgroup callbacks if
+	 * necessary. We need to run them before the task is visible
+	 * on the tasklist. */
+	cgroup_fork_callbacks(p);
+	cgroup_callbacks_done = 1;
+
+	/* Need tasklist lock for parent etc handling! */
+	write_lock_irq(&tasklist_lock);
+
+	/*
+	 * The task hasn't been attached yet, so its cpus_allowed mask will
+	 * not be changed, nor will its assigned CPU.
+	 *
+	 * The cpus_allowed mask of the parent may have changed after it was
+	 * copied first time - so re-copy it here, then check the child's CPU
+	 * to ensure it is on a valid CPU (and if not, just force it back to
+	 * parent's CPU). This avoids alot of nasty races.
+	 */
+	p->cpus_allowed = current->cpus_allowed;
+	p->rt.nr_cpus_allowed = current->rt.nr_cpus_allowed;
+	if (unlikely(!cpu_isset(task_cpu(p), p->cpus_allowed) ||
+			!cpu_online(task_cpu(p))))
+		set_task_cpu(p, smp_processor_id());
+
+	/* CLONE_PARENT re-uses the old parent */
+	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
+		p->real_parent = current->real_parent;
+		p->parent_exec_id = current->parent_exec_id;
+	} else {
+		p->real_parent = current;
+		p->parent_exec_id = current->self_exec_id;
+	}
+
+	spin_lock(&current->sighand->siglock);
+
+	/*
+	 * Process group and session signals need to be delivered to just the
+	 * parent before the fork or both the parent and the child after the
+	 * fork. Restart if a signal comes in before we add the new process to
+	 * it's process group.
+	 * A fatal signal pending means that current will exit, so the new
+	 * thread can't slip out of an OOM kill (or normal SIGKILL).
+ 	 */
+	recalc_sigpending();
+	if (signal_pending(current)) {
+		spin_unlock(&current->sighand->siglock);
+		write_unlock_irq(&tasklist_lock);
+		retval = -ERESTARTNOINTR;
+		goto bad_fork_free_graph;
+	}
+
+	if (clone_flags & CLONE_THREAD) {
+		p->group_leader = current->group_leader;
+		list_add_tail_rcu(&p->thread_group, &p->group_leader->thread_group);
+	}
+
+	if (likely(p->pid)) {
+		list_add_tail(&p->sibling, &p->real_parent->children);
+		tracehook_finish_clone(p, clone_flags, trace);
+
+		if (thread_group_leader(p)) {
+			if (clone_flags & CLONE_NEWPID)
+				p->nsproxy->pid_ns->child_reaper = p;
+
+			p->signal->leader_pid = pid;
+			tty_kref_put(p->signal->tty);
+			p->signal->tty = tty_kref_get(current->signal->tty);
+			set_task_pgrp(p, task_pgrp_nr(current));
+			set_task_session(p, task_session_nr(current));
+			attach_pid(p, PIDTYPE_PGID, task_pgrp(current));
+			attach_pid(p, PIDTYPE_SID, task_session(current));
+			list_add_tail_rcu(&p->tasks, &init_task.tasks);
+			__get_cpu_var(process_counts)++;
+		}
+		attach_pid(p, PIDTYPE_PID, pid);
+		nr_threads++;
+	}
+
+	total_forks++;
+	spin_unlock(&current->sighand->siglock);
+	write_unlock_irq(&tasklist_lock);
+	proc_fork_connector(p);
+	cgroup_post_fork(p);
+	return p;
+
+bad_fork_free_graph:
+	ftrace_graph_exit_task(p);
+bad_fork_free_pid:
+	if (pid != &init_struct_pid)
+		free_pid(pid);
+bad_fork_cleanup_io:
+	put_io_context(p->io_context);
+bad_fork_cleanup_namespaces:
+	exit_task_namespaces(p);
+bad_fork_cleanup_mm:
+	if (p->mm)
+		mmput(p->mm);
+bad_fork_cleanup_signal:
+	cleanup_signal(p);
+bad_fork_cleanup_sighand:
+	__cleanup_sighand(p->sighand);
+bad_fork_cleanup_fs:
+	exit_fs(p); /* blocking */
+bad_fork_cleanup_files:
+	exit_files(p); /* blocking */
+bad_fork_cleanup_semundo:
+	exit_sem(p);
+bad_fork_cleanup_audit:
+	audit_free(p);
+bad_fork_cleanup_policy:
+#ifdef CONFIG_NUMA
+	mpol_put(p->mempolicy);
+bad_fork_cleanup_cgroup:
+#endif
+	cgroup_exit(p, cgroup_callbacks_done);
+	delayacct_tsk_free(p);
+	if (p->binfmt)
+		module_put(p->binfmt->module);
+bad_fork_cleanup_put_domain:
+	module_put(task_thread_info(p)->exec_domain->module);
+bad_fork_cleanup_count:
+	atomic_dec(&p->cred->user->processes);
+	put_cred(p->real_cred);
+	put_cred(p->cred);
+bad_fork_free:
+	free_task(p);
+fork_out:
+	return ERR_PTR(retval);
+}",
+2471,"[""CWE-264""]",linux-2.6,50fee1dec5d71b8a14c1b82f2f42e16adc227f8b,50fee1dec5d71b8a14c1b82f2f42e16adc227f8b,0,489836,4.370134327935023e+37,176.0,"net: amend the fix for SO_BSDCOMPAT gsopt infoleak
+
+The fix for CVE-2009-0676 (upstream commit df0bca04) is incomplete. Note
+that the same problem of leaking kernel memory will reappear if someone
+on some architecture uses struct timeval with some internal padding (for
+example tv_sec 64-bit and tv_usec 32-bit) --- then, you are going to
+leak the padded bytes to userspace.
+
+Signed-off-by: Eugene Teo <eugeneteo@kernel.sg>
+Reported-by: Mikulas Patocka <mpatocka@redhat.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"int sock_getsockopt(struct socket *sock, int level, int optname,
+		    char __user *optval, int __user *optlen)
+{
+	struct sock *sk = sock->sk;
+
+	union {
+		int val;
+		struct linger ling;
+		struct timeval tm;
+	} v;
+
+	unsigned int lv = sizeof(int);
+	int len;
+
+	if (get_user(len, optlen))
+		return -EFAULT;
+	if (len < 0)
+		return -EINVAL;
+
+	v.val = 0;
+
+	switch(optname) {
+	case SO_DEBUG:
+		v.val = sock_flag(sk, SOCK_DBG);
+		break;
+
+	case SO_DONTROUTE:
+		v.val = sock_flag(sk, SOCK_LOCALROUTE);
+		break;
+
+	case SO_BROADCAST:
+		v.val = !!sock_flag(sk, SOCK_BROADCAST);
+		break;
+
+	case SO_SNDBUF:
+		v.val = sk->sk_sndbuf;
+		break;
+
+	case SO_RCVBUF:
+		v.val = sk->sk_rcvbuf;
+		break;
+
+	case SO_REUSEADDR:
+		v.val = sk->sk_reuse;
+		break;
+
+	case SO_KEEPALIVE:
+		v.val = !!sock_flag(sk, SOCK_KEEPOPEN);
+		break;
+
+	case SO_TYPE:
+		v.val = sk->sk_type;
+		break;
+
+	case SO_ERROR:
+		v.val = -sock_error(sk);
+		if (v.val==0)
+			v.val = xchg(&sk->sk_err_soft, 0);
+		break;
+
+	case SO_OOBINLINE:
+		v.val = !!sock_flag(sk, SOCK_URGINLINE);
+		break;
+
+	case SO_NO_CHECK:
+		v.val = sk->sk_no_check;
+		break;
+
+	case SO_PRIORITY:
+		v.val = sk->sk_priority;
+		break;
+
+	case SO_LINGER:
+		lv		= sizeof(v.ling);
+		v.ling.l_onoff	= !!sock_flag(sk, SOCK_LINGER);
+		v.ling.l_linger	= sk->sk_lingertime / HZ;
+		break;
+
+	case SO_BSDCOMPAT:
+		sock_warn_obsolete_bsdism(""getsockopt"");
+		break;
+
+	case SO_TIMESTAMP:
+		v.val = sock_flag(sk, SOCK_RCVTSTAMP) &&
+				!sock_flag(sk, SOCK_RCVTSTAMPNS);
+		break;
+
+	case SO_TIMESTAMPNS:
+		v.val = sock_flag(sk, SOCK_RCVTSTAMPNS);
+		break;
+
+	case SO_RCVTIMEO:
+		lv=sizeof(struct timeval);
+		if (sk->sk_rcvtimeo == MAX_SCHEDULE_TIMEOUT) {
+			v.tm.tv_sec = 0;
+			v.tm.tv_usec = 0;
+		} else {
+			v.tm.tv_sec = sk->sk_rcvtimeo / HZ;
+			v.tm.tv_usec = ((sk->sk_rcvtimeo % HZ) * 1000000) / HZ;
+		}
+		break;
+
+	case SO_SNDTIMEO:
+		lv=sizeof(struct timeval);
+		if (sk->sk_sndtimeo == MAX_SCHEDULE_TIMEOUT) {
+			v.tm.tv_sec = 0;
+			v.tm.tv_usec = 0;
+		} else {
+			v.tm.tv_sec = sk->sk_sndtimeo / HZ;
+			v.tm.tv_usec = ((sk->sk_sndtimeo % HZ) * 1000000) / HZ;
+		}
+		break;
+
+	case SO_RCVLOWAT:
+		v.val = sk->sk_rcvlowat;
+		break;
+
+	case SO_SNDLOWAT:
+		v.val=1;
+		break;
+
+	case SO_PASSCRED:
+		v.val = test_bit(SOCK_PASSCRED, &sock->flags) ? 1 : 0;
+		break;
+
+	case SO_PEERCRED:
+		if (len > sizeof(sk->sk_peercred))
+			len = sizeof(sk->sk_peercred);
+		if (copy_to_user(optval, &sk->sk_peercred, len))
+			return -EFAULT;
+		goto lenout;
+
+	case SO_PEERNAME:
+	{
+		char address[128];
+
+		if (sock->ops->getname(sock, (struct sockaddr *)address, &lv, 2))
+			return -ENOTCONN;
+		if (lv < len)
+			return -EINVAL;
+		if (copy_to_user(optval, address, len))
+			return -EFAULT;
+		goto lenout;
+	}
+
+	/* Dubious BSD thing... Probably nobody even uses it, but
+	 * the UNIX standard wants it for whatever reason... -DaveM
+	 */
+	case SO_ACCEPTCONN:
+		v.val = sk->sk_state == TCP_LISTEN;
+		break;
+
+	case SO_PASSSEC:
+		v.val = test_bit(SOCK_PASSSEC, &sock->flags) ? 1 : 0;
+		break;
+
+	case SO_PEERSEC:
+		return security_socket_getpeersec_stream(sock, optval, optlen, len);
+
+	case SO_MARK:
+		v.val = sk->sk_mark;
+		break;
+
+	default:
+		return -ENOPROTOOPT;
+	}
+
+	if (len > lv)
+		len = lv;
+	if (copy_to_user(optval, &v, len))
+		return -EFAULT;
+lenout:
+	if (put_user(len, optlen))
+		return -EFAULT;
+	return 0;
+}","int sock_getsockopt(struct socket *sock, int level, int optname,
+		    char __user *optval, int __user *optlen)
+{
+	struct sock *sk = sock->sk;
+
+	union {
+		int val;
+		struct linger ling;
+		struct timeval tm;
+	} v;
+
+	unsigned int lv = sizeof(int);
+	int len;
+
+	if (get_user(len, optlen))
+		return -EFAULT;
+	if (len < 0)
+		return -EINVAL;
+
+	memset(&v, 0, sizeof(v));
+
+	switch(optname) {
+	case SO_DEBUG:
+		v.val = sock_flag(sk, SOCK_DBG);
+		break;
+
+	case SO_DONTROUTE:
+		v.val = sock_flag(sk, SOCK_LOCALROUTE);
+		break;
+
+	case SO_BROADCAST:
+		v.val = !!sock_flag(sk, SOCK_BROADCAST);
+		break;
+
+	case SO_SNDBUF:
+		v.val = sk->sk_sndbuf;
+		break;
+
+	case SO_RCVBUF:
+		v.val = sk->sk_rcvbuf;
+		break;
+
+	case SO_REUSEADDR:
+		v.val = sk->sk_reuse;
+		break;
+
+	case SO_KEEPALIVE:
+		v.val = !!sock_flag(sk, SOCK_KEEPOPEN);
+		break;
+
+	case SO_TYPE:
+		v.val = sk->sk_type;
+		break;
+
+	case SO_ERROR:
+		v.val = -sock_error(sk);
+		if (v.val==0)
+			v.val = xchg(&sk->sk_err_soft, 0);
+		break;
+
+	case SO_OOBINLINE:
+		v.val = !!sock_flag(sk, SOCK_URGINLINE);
+		break;
+
+	case SO_NO_CHECK:
+		v.val = sk->sk_no_check;
+		break;
+
+	case SO_PRIORITY:
+		v.val = sk->sk_priority;
+		break;
+
+	case SO_LINGER:
+		lv		= sizeof(v.ling);
+		v.ling.l_onoff	= !!sock_flag(sk, SOCK_LINGER);
+		v.ling.l_linger	= sk->sk_lingertime / HZ;
+		break;
+
+	case SO_BSDCOMPAT:
+		sock_warn_obsolete_bsdism(""getsockopt"");
+		break;
+
+	case SO_TIMESTAMP:
+		v.val = sock_flag(sk, SOCK_RCVTSTAMP) &&
+				!sock_flag(sk, SOCK_RCVTSTAMPNS);
+		break;
+
+	case SO_TIMESTAMPNS:
+		v.val = sock_flag(sk, SOCK_RCVTSTAMPNS);
+		break;
+
+	case SO_RCVTIMEO:
+		lv=sizeof(struct timeval);
+		if (sk->sk_rcvtimeo == MAX_SCHEDULE_TIMEOUT) {
+			v.tm.tv_sec = 0;
+			v.tm.tv_usec = 0;
+		} else {
+			v.tm.tv_sec = sk->sk_rcvtimeo / HZ;
+			v.tm.tv_usec = ((sk->sk_rcvtimeo % HZ) * 1000000) / HZ;
+		}
+		break;
+
+	case SO_SNDTIMEO:
+		lv=sizeof(struct timeval);
+		if (sk->sk_sndtimeo == MAX_SCHEDULE_TIMEOUT) {
+			v.tm.tv_sec = 0;
+			v.tm.tv_usec = 0;
+		} else {
+			v.tm.tv_sec = sk->sk_sndtimeo / HZ;
+			v.tm.tv_usec = ((sk->sk_sndtimeo % HZ) * 1000000) / HZ;
+		}
+		break;
+
+	case SO_RCVLOWAT:
+		v.val = sk->sk_rcvlowat;
+		break;
+
+	case SO_SNDLOWAT:
+		v.val=1;
+		break;
+
+	case SO_PASSCRED:
+		v.val = test_bit(SOCK_PASSCRED, &sock->flags) ? 1 : 0;
+		break;
+
+	case SO_PEERCRED:
+		if (len > sizeof(sk->sk_peercred))
+			len = sizeof(sk->sk_peercred);
+		if (copy_to_user(optval, &sk->sk_peercred, len))
+			return -EFAULT;
+		goto lenout;
+
+	case SO_PEERNAME:
+	{
+		char address[128];
+
+		if (sock->ops->getname(sock, (struct sockaddr *)address, &lv, 2))
+			return -ENOTCONN;
+		if (lv < len)
+			return -EINVAL;
+		if (copy_to_user(optval, address, len))
+			return -EFAULT;
+		goto lenout;
+	}
+
+	/* Dubious BSD thing... Probably nobody even uses it, but
+	 * the UNIX standard wants it for whatever reason... -DaveM
+	 */
+	case SO_ACCEPTCONN:
+		v.val = sk->sk_state == TCP_LISTEN;
+		break;
+
+	case SO_PASSSEC:
+		v.val = test_bit(SOCK_PASSSEC, &sock->flags) ? 1 : 0;
+		break;
+
+	case SO_PEERSEC:
+		return security_socket_getpeersec_stream(sock, optval, optlen, len);
+
+	case SO_MARK:
+		v.val = sk->sk_mark;
+		break;
+
+	default:
+		return -ENOPROTOOPT;
+	}
+
+	if (len > lv)
+		len = lv;
+	if (copy_to_user(optval, &v, len))
+		return -EFAULT;
+lenout:
+	if (put_user(len, optlen))
+		return -EFAULT;
+	return 0;
+}",
+2472,"[""CWE-264""]",linux-2.6,c25b9abbc2c2c0da88e180c3933d6e773245815a,c25b9abbc2c2c0da88e180c3933d6e773245815a,0,489857,3.0927401435118876e+38,31.0,"drivers/net/skfp: if !capable(CAP_NET_ADMIN): inverted logic
+
+Fix inverted logic
+
+Signed-off-by: Roel Kluin <roel.kluin@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int skfp_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+{
+	struct s_smc *smc = netdev_priv(dev);
+	skfddi_priv *lp = &smc->os;
+	struct s_skfp_ioctl ioc;
+	int status = 0;
+
+	if (copy_from_user(&ioc, rq->ifr_data, sizeof(struct s_skfp_ioctl)))
+		return -EFAULT;
+
+	switch (ioc.cmd) {
+	case SKFP_GET_STATS:	/* Get the driver statistics */
+		ioc.len = sizeof(lp->MacStat);
+		status = copy_to_user(ioc.data, skfp_ctl_get_stats(dev), ioc.len)
+				? -EFAULT : 0;
+		break;
+	case SKFP_CLR_STATS:	/* Zero out the driver statistics */
+		if (!capable(CAP_NET_ADMIN)) {
+			memset(&lp->MacStat, 0, sizeof(lp->MacStat));
+		} else {
+			status = -EPERM;
+		}
+		break;
+	default:
+		printk(""ioctl for %s: unknow cmd: %04x\n"", dev->name, ioc.cmd);
+		status = -EOPNOTSUPP;
+
+	}			// switch
+
+	return status;
+}				// skfp_ioctl","static int skfp_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+{
+	struct s_smc *smc = netdev_priv(dev);
+	skfddi_priv *lp = &smc->os;
+	struct s_skfp_ioctl ioc;
+	int status = 0;
+
+	if (copy_from_user(&ioc, rq->ifr_data, sizeof(struct s_skfp_ioctl)))
+		return -EFAULT;
+
+	switch (ioc.cmd) {
+	case SKFP_GET_STATS:	/* Get the driver statistics */
+		ioc.len = sizeof(lp->MacStat);
+		status = copy_to_user(ioc.data, skfp_ctl_get_stats(dev), ioc.len)
+				? -EFAULT : 0;
+		break;
+	case SKFP_CLR_STATS:	/* Zero out the driver statistics */
+		if (!capable(CAP_NET_ADMIN)) {
+			status = -EPERM;
+		} else {
+			memset(&lp->MacStat, 0, sizeof(lp->MacStat));
+		}
+		break;
+	default:
+		printk(""ioctl for %s: unknow cmd: %04x\n"", dev->name, ioc.cmd);
+		status = -EOPNOTSUPP;
+
+	}			// switch
+
+	return status;
+}				// skfp_ioctl",
+2530,"[""CWE-264""]",linux-2.6,9f35a33b8d06263a165efe3541d9aa0cdbd70b3b,9f35a33b8d06263a165efe3541d9aa0cdbd70b3b,0,493726,1.3419899242479776e+38,36.0,"KEYS: Fix a NULL pointer deref in the user-defined key type
+
+Fix a NULL pointer deref in the user-defined key type whereby updating a
+negative key into a fully instantiated key will cause an oops to occur
+when the code attempts to free the non-existent old payload.
+
+This results in an oops that looks something like the following:
+
+  BUG: unable to handle kernel NULL pointer dereference at 0000000000000008
+  IP: [<ffffffff81085fa1>] __call_rcu+0x11/0x13e
+  PGD 3391d067 PUD 3894a067 PMD 0
+  Oops: 0002 [#1] SMP
+  CPU 1
+  Pid: 4354, comm: keyctl Not tainted 3.1.0-fsdevel+ #1140                  /DG965RY
+  RIP: 0010:[<ffffffff81085fa1>]  [<ffffffff81085fa1>] __call_rcu+0x11/0x13e
+  RSP: 0018:ffff88003d591df8  EFLAGS: 00010246
+  RAX: 0000000000000000 RBX: 0000000000000000 RCX: 000000000000006e
+  RDX: ffffffff8161d0c0 RSI: 0000000000000000 RDI: 0000000000000000
+  RBP: ffff88003d591e18 R08: 0000000000000000 R09: ffffffff8152fa6c
+  R10: 0000000000000000 R11: 0000000000000300 R12: ffff88003b8f9538
+  R13: ffffffff8161d0c0 R14: ffff88003b8f9d50 R15: ffff88003c69f908
+  FS:  00007f97eb18c720(0000) GS:ffff88003bd00000(0000) knlGS:0000000000000000
+  CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+  CR2: 0000000000000008 CR3: 000000003d47a000 CR4: 00000000000006e0
+  DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+  DR3: 0000000000000000 DR6: 00000000ffff0ff0 DR7: 0000000000000400
+  Process keyctl (pid: 4354, threadinfo ffff88003d590000, task ffff88003c78a040)
+  Stack:
+   ffff88003e0ffde0 ffff88003b8f9538 0000000000000001 ffff88003b8f9d50
+   ffff88003d591e28 ffffffff810860f0 ffff88003d591e68 ffffffff8117bfea
+   ffff88003d591e68 ffffffff00000000 ffff88003e0ffde1 ffff88003e0ffde0
+  Call Trace:
+   [<ffffffff810860f0>] call_rcu_sched+0x10/0x12
+   [<ffffffff8117bfea>] user_update+0x8d/0xa2
+   [<ffffffff8117723a>] key_create_or_update+0x236/0x270
+   [<ffffffff811789b1>] sys_add_key+0x123/0x17e
+   [<ffffffff813b84bb>] system_call_fastpath+0x16/0x1b
+
+Signed-off-by: David Howells <dhowells@redhat.com>
+Acked-by: Jeff Layton <jlayton@redhat.com>
+Acked-by: Neil Horman <nhorman@redhat.com>
+Acked-by: Steve Dickson <steved@redhat.com>
+Acked-by: James Morris <jmorris@namei.org>
+Cc: stable@kernel.org
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"int user_update(struct key *key, const void *data, size_t datalen)
+{
+	struct user_key_payload *upayload, *zap;
+	int ret;
+
+	ret = -EINVAL;
+	if (datalen <= 0 || datalen > 32767 || !data)
+		goto error;
+
+	/* construct a replacement payload */
+	ret = -ENOMEM;
+	upayload = kmalloc(sizeof(*upayload) + datalen, GFP_KERNEL);
+	if (!upayload)
+		goto error;
+
+	upayload->datalen = datalen;
+	memcpy(upayload->data, data, datalen);
+
+	/* check the quota and attach the new data */
+	zap = upayload;
+
+	ret = key_payload_reserve(key, datalen);
+
+	if (ret == 0) {
+		/* attach the new data, displacing the old */
+		zap = key->payload.data;
+		rcu_assign_pointer(key->payload.data, upayload);
+		key->expiry = 0;
+	}
+
+	kfree_rcu(zap, rcu);
+
+error:
+	return ret;
+}","int user_update(struct key *key, const void *data, size_t datalen)
+{
+	struct user_key_payload *upayload, *zap;
+	int ret;
+
+	ret = -EINVAL;
+	if (datalen <= 0 || datalen > 32767 || !data)
+		goto error;
+
+	/* construct a replacement payload */
+	ret = -ENOMEM;
+	upayload = kmalloc(sizeof(*upayload) + datalen, GFP_KERNEL);
+	if (!upayload)
+		goto error;
+
+	upayload->datalen = datalen;
+	memcpy(upayload->data, data, datalen);
+
+	/* check the quota and attach the new data */
+	zap = upayload;
+
+	ret = key_payload_reserve(key, datalen);
+
+	if (ret == 0) {
+		/* attach the new data, displacing the old */
+		zap = key->payload.data;
+		rcu_assign_pointer(key->payload.data, upayload);
+		key->expiry = 0;
+	}
+
+	if (zap)
+		kfree_rcu(zap, rcu);
+
+error:
+	return ret;
+}",
+3219,"[""CWE-264""]",linux-2.6,f2455eb176ac87081bbfc9a44b21c7cd2bc1967e,f2455eb176ac87081bbfc9a44b21c7cd2bc1967e,0,488945,2.323246282728731e+38,85.0,"wan: Missing capability checks in sbni_ioctl()
+
+There are missing capability checks in the following code:
+
+1300 static int
+1301 sbni_ioctl( struct net_device  *dev,  struct ifreq  *ifr,  int  cmd)
+1302 {
+[...]
+1319     case  SIOCDEVRESINSTATS :
+1320         if( current->euid != 0 )    /* root only */
+1321             return  -EPERM;
+[...]
+1336     case  SIOCDEVSHWSTATE :
+1337         if( current->euid != 0 )    /* root only */
+1338             return  -EPERM;
+[...]
+1357     case  SIOCDEVENSLAVE :
+1358         if( current->euid != 0 )    /* root only */
+1359             return  -EPERM;
+[...]
+1372     case  SIOCDEVEMANSIPATE :
+1373         if( current->euid != 0 )    /* root only */
+1374             return  -EPERM;
+
+Here's my proposed fix:
+
+Missing capability checks.
+
+Signed-off-by: Eugene Teo <eugeneteo@kernel.sg>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"sbni_ioctl( struct net_device  *dev,  struct ifreq  *ifr,  int  cmd )
+{
+	struct net_local  *nl = (struct net_local *) dev->priv; 
+	struct sbni_flags  flags;
+	int  error = 0;
+
+#ifdef CONFIG_SBNI_MULTILINE
+	struct net_device  *slave_dev;
+	char  slave_name[ 8 ];
+#endif
+  
+	switch( cmd ) {
+	case  SIOCDEVGETINSTATS :
+		if (copy_to_user( ifr->ifr_data, &nl->in_stats,
+					sizeof(struct sbni_in_stats) ))
+			error = -EFAULT;
+		break;
+
+	case  SIOCDEVRESINSTATS :
+		if( current->euid != 0 )	/* root only */
+			return  -EPERM;
+		memset( &nl->in_stats, 0, sizeof(struct sbni_in_stats) );
+		break;
+
+	case  SIOCDEVGHWSTATE :
+		flags.mac_addr	= *(u32 *)(dev->dev_addr + 3);
+		flags.rate	= nl->csr1.rate;
+		flags.slow_mode	= (nl->state & FL_SLOW_MODE) != 0;
+		flags.rxl	= nl->cur_rxl_index;
+		flags.fixed_rxl	= nl->delta_rxl == 0;
+
+		if (copy_to_user( ifr->ifr_data, &flags, sizeof flags ))
+			error = -EFAULT;
+		break;
+
+	case  SIOCDEVSHWSTATE :
+		if( current->euid != 0 )	/* root only */
+			return  -EPERM;
+
+		spin_lock( &nl->lock );
+		flags = *(struct sbni_flags*) &ifr->ifr_ifru;
+		if( flags.fixed_rxl )
+			nl->delta_rxl = 0,
+			nl->cur_rxl_index = flags.rxl;
+		else
+			nl->delta_rxl = DEF_RXL_DELTA,
+			nl->cur_rxl_index = DEF_RXL;
+
+		nl->csr1.rxl = rxl_tab[ nl->cur_rxl_index ];
+		nl->csr1.rate = flags.rate;
+		outb( *(u8 *)&nl->csr1 | PR_RES, dev->base_addr + CSR1 );
+		spin_unlock( &nl->lock );
+		break;
+
+#ifdef CONFIG_SBNI_MULTILINE
+
+	case  SIOCDEVENSLAVE :
+		if( current->euid != 0 )	/* root only */
+			return  -EPERM;
+
+		if (copy_from_user( slave_name, ifr->ifr_data, sizeof slave_name ))
+			return -EFAULT;
+		slave_dev = dev_get_by_name(&init_net, slave_name );
+		if( !slave_dev  ||  !(slave_dev->flags & IFF_UP) ) {
+			printk( KERN_ERR ""%s: trying to enslave non-active ""
+				""device %s\n"", dev->name, slave_name );
+			return  -EPERM;
+		}
+
+		return  enslave( dev, slave_dev );
+
+	case  SIOCDEVEMANSIPATE :
+		if( current->euid != 0 )	/* root only */
+			return  -EPERM;
+
+		return  emancipate( dev );
+
+#endif	/* CONFIG_SBNI_MULTILINE */
+
+	default :
+		return  -EOPNOTSUPP;
+	}
+
+	return  error;
+}","sbni_ioctl( struct net_device  *dev,  struct ifreq  *ifr,  int  cmd )
+{
+	struct net_local  *nl = (struct net_local *) dev->priv; 
+	struct sbni_flags  flags;
+	int  error = 0;
+
+#ifdef CONFIG_SBNI_MULTILINE
+	struct net_device  *slave_dev;
+	char  slave_name[ 8 ];
+#endif
+  
+	switch( cmd ) {
+	case  SIOCDEVGETINSTATS :
+		if (copy_to_user( ifr->ifr_data, &nl->in_stats,
+					sizeof(struct sbni_in_stats) ))
+			error = -EFAULT;
+		break;
+
+	case  SIOCDEVRESINSTATS :
+		if (!capable(CAP_NET_ADMIN))
+			return  -EPERM;
+		memset( &nl->in_stats, 0, sizeof(struct sbni_in_stats) );
+		break;
+
+	case  SIOCDEVGHWSTATE :
+		flags.mac_addr	= *(u32 *)(dev->dev_addr + 3);
+		flags.rate	= nl->csr1.rate;
+		flags.slow_mode	= (nl->state & FL_SLOW_MODE) != 0;
+		flags.rxl	= nl->cur_rxl_index;
+		flags.fixed_rxl	= nl->delta_rxl == 0;
+
+		if (copy_to_user( ifr->ifr_data, &flags, sizeof flags ))
+			error = -EFAULT;
+		break;
+
+	case  SIOCDEVSHWSTATE :
+		if (!capable(CAP_NET_ADMIN))
+			return  -EPERM;
+
+		spin_lock( &nl->lock );
+		flags = *(struct sbni_flags*) &ifr->ifr_ifru;
+		if( flags.fixed_rxl )
+			nl->delta_rxl = 0,
+			nl->cur_rxl_index = flags.rxl;
+		else
+			nl->delta_rxl = DEF_RXL_DELTA,
+			nl->cur_rxl_index = DEF_RXL;
+
+		nl->csr1.rxl = rxl_tab[ nl->cur_rxl_index ];
+		nl->csr1.rate = flags.rate;
+		outb( *(u8 *)&nl->csr1 | PR_RES, dev->base_addr + CSR1 );
+		spin_unlock( &nl->lock );
+		break;
+
+#ifdef CONFIG_SBNI_MULTILINE
+
+	case  SIOCDEVENSLAVE :
+		if (!capable(CAP_NET_ADMIN))
+			return  -EPERM;
+
+		if (copy_from_user( slave_name, ifr->ifr_data, sizeof slave_name ))
+			return -EFAULT;
+		slave_dev = dev_get_by_name(&init_net, slave_name );
+		if( !slave_dev  ||  !(slave_dev->flags & IFF_UP) ) {
+			printk( KERN_ERR ""%s: trying to enslave non-active ""
+				""device %s\n"", dev->name, slave_name );
+			return  -EPERM;
+		}
+
+		return  enslave( dev, slave_dev );
+
+	case  SIOCDEVEMANSIPATE :
+		if (!capable(CAP_NET_ADMIN))
+			return  -EPERM;
+
+		return  emancipate( dev );
+
+#endif	/* CONFIG_SBNI_MULTILINE */
+
+	default :
+		return  -EOPNOTSUPP;
+	}
+
+	return  error;
+}",
+3227,"[""CWE-264""]",clutter,e310c68d7b38d521e341f4e8a36f54303079d74e,e310c68d7b38d521e341f4e8a36f54303079d74e,0,497483,2.70833825451385e+38,92.0,"x11: trap errors when calling XIQueryDevice
+
+Devices can disappear at any time, causing XIQueryDevice
+to throw an error. At the same time, plug a memory leak.
+
+https://bugzilla.gnome.org/show_bug.cgi?id=701974",other,"translate_hierarchy_event (ClutterBackendX11       *backend_x11,
+                           ClutterDeviceManagerXI2 *manager_xi2,
+                           XIHierarchyEvent        *ev)
+{
+  int i;
+
+  for (i = 0; i < ev->num_info; i++)
+    {
+      if (ev->info[i].flags & XIDeviceEnabled)
+        {
+          XIDeviceInfo *info;
+          int n_devices;
+
+          CLUTTER_NOTE (EVENT, ""Hierarchy event: device enabled"");
+
+          info = XIQueryDevice (backend_x11->xdpy,
+                                ev->info[i].deviceid,
+                                &n_devices);
+          add_device (manager_xi2, backend_x11, &info[0], FALSE);
+        }
+      else if (ev->info[i].flags & XIDeviceDisabled)
+        {
+          CLUTTER_NOTE (EVENT, ""Hierarchy event: device disabled"");
+
+          remove_device (manager_xi2, ev->info[i].deviceid);
+        }
+      else if ((ev->info[i].flags & XISlaveAttached) ||
+               (ev->info[i].flags & XISlaveDetached))
+        {
+          ClutterInputDevice *master, *slave;
+          XIDeviceInfo *info;
+          int n_devices;
+          gboolean send_changed = FALSE;
+
+          CLUTTER_NOTE (EVENT, ""Hierarchy event: slave %s"",
+                        (ev->info[i].flags & XISlaveAttached)
+                          ? ""attached""
+                          : ""detached"");
+
+          slave = g_hash_table_lookup (manager_xi2->devices_by_id,
+                                       GINT_TO_POINTER (ev->info[i].deviceid));
+          master = clutter_input_device_get_associated_device (slave);
+
+          /* detach the slave in both cases */
+          if (master != NULL)
+            {
+              _clutter_input_device_remove_slave (master, slave);
+              _clutter_input_device_set_associated_device (slave, NULL);
+
+              send_changed = TRUE;
+            }
+
+          /* and attach the slave to the new master if needed */
+          if (ev->info[i].flags & XISlaveAttached)
+            {
+              info = XIQueryDevice (backend_x11->xdpy,
+                                    ev->info[i].deviceid,
+                                    &n_devices);
+              master = g_hash_table_lookup (manager_xi2->devices_by_id,
+                                            GINT_TO_POINTER (info->attachment));
+              _clutter_input_device_set_associated_device (slave, master);
+              _clutter_input_device_add_slave (master, slave);
+
+              send_changed = TRUE;
+              XIFreeDeviceInfo (info);
+            }
+
+          if (send_changed)
+            {
+              ClutterStage *stage = _clutter_input_device_get_stage (master);
+              if (stage != NULL)
+                _clutter_stage_x11_events_device_changed (CLUTTER_STAGE_X11 (_clutter_stage_get_window (stage)), 
+                                                          master,
+                                                          CLUTTER_DEVICE_MANAGER (manager_xi2));
+            }
+        }
+    }
+}","translate_hierarchy_event (ClutterBackendX11       *backend_x11,
+                           ClutterDeviceManagerXI2 *manager_xi2,
+                           XIHierarchyEvent        *ev)
+{
+  int i;
+
+  for (i = 0; i < ev->num_info; i++)
+    {
+      if (ev->info[i].flags & XIDeviceEnabled)
+        {
+          XIDeviceInfo *info;
+          int n_devices;
+
+          CLUTTER_NOTE (EVENT, ""Hierarchy event: device enabled"");
+
+          clutter_x11_trap_x_errors ();
+          info = XIQueryDevice (backend_x11->xdpy,
+                                ev->info[i].deviceid,
+                                &n_devices);
+          clutter_x11_untrap_x_errors ();
+          if (info != NULL)
+            {
+              add_device (manager_xi2, backend_x11, &info[0], FALSE);
+              XIFreeDeviceInfo (info);
+            }
+        }
+      else if (ev->info[i].flags & XIDeviceDisabled)
+        {
+          CLUTTER_NOTE (EVENT, ""Hierarchy event: device disabled"");
+
+          remove_device (manager_xi2, ev->info[i].deviceid);
+        }
+      else if ((ev->info[i].flags & XISlaveAttached) ||
+               (ev->info[i].flags & XISlaveDetached))
+        {
+          ClutterInputDevice *master, *slave;
+          XIDeviceInfo *info;
+          int n_devices;
+          gboolean send_changed = FALSE;
+
+          CLUTTER_NOTE (EVENT, ""Hierarchy event: slave %s"",
+                        (ev->info[i].flags & XISlaveAttached)
+                          ? ""attached""
+                          : ""detached"");
+
+          slave = g_hash_table_lookup (manager_xi2->devices_by_id,
+                                       GINT_TO_POINTER (ev->info[i].deviceid));
+          master = clutter_input_device_get_associated_device (slave);
+
+          /* detach the slave in both cases */
+          if (master != NULL)
+            {
+              _clutter_input_device_remove_slave (master, slave);
+              _clutter_input_device_set_associated_device (slave, NULL);
+
+              send_changed = TRUE;
+            }
+
+          /* and attach the slave to the new master if needed */
+          if (ev->info[i].flags & XISlaveAttached)
+            {
+              clutter_x11_trap_x_errors ();
+              info = XIQueryDevice (backend_x11->xdpy,
+                                    ev->info[i].deviceid,
+                                    &n_devices);
+              clutter_x11_untrap_x_errors ();
+              if (info != NULL)
+                {
+                  master = g_hash_table_lookup (manager_xi2->devices_by_id,
+                                                GINT_TO_POINTER (info->attachment));
+                  if (master != NULL)
+                    {
+                      _clutter_input_device_set_associated_device (slave, master);
+                      _clutter_input_device_add_slave (master, slave);
+
+                      send_changed = TRUE;
+                    }
+                  XIFreeDeviceInfo (info);
+                }
+            }
+
+          if (send_changed)
+            {
+              ClutterStage *stage = _clutter_input_device_get_stage (master);
+              if (stage != NULL)
+                _clutter_stage_x11_events_device_changed (CLUTTER_STAGE_X11 (_clutter_stage_get_window (stage)), 
+                                                          master,
+                                                          CLUTTER_DEVICE_MANAGER (manager_xi2));
+            }
+        }
+    }
+}",

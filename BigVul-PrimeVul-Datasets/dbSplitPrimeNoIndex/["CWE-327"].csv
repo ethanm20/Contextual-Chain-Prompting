@@ -1,0 +1,390 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+538,"[""CWE-327""]",openssl,f426625b6ae9a7831010750490a5f0ad689c5ba3,f426625b6ae9a7831010750490a5f0ad689c5ba3,0,505463,9.44302560730189e+37,108.0,"Prevent over long nonces in ChaCha20-Poly1305
+
+ChaCha20-Poly1305 is an AEAD cipher, and requires a unique nonce input for
+every encryption operation. RFC 7539 specifies that the nonce value (IV)
+should be 96 bits (12 bytes). OpenSSL allows a variable nonce length and
+front pads the nonce with 0 bytes if it is less than 12 bytes. However it
+also incorrectly allows a nonce to be set of up to 16 bytes. In this case
+only the last 12 bytes are significant and any additional leading bytes are
+ignored.
+
+It is a requirement of using this cipher that nonce values are unique.
+Messages encrypted using a reused nonce value are susceptible to serious
+confidentiality and integrity attacks. If an application changes the
+default nonce length to be longer than 12 bytes and then makes a change to
+the leading bytes of the nonce expecting the new value to be a new unique
+nonce then such an application could inadvertently encrypt messages with a
+reused nonce.
+
+Additionally the ignored bytes in a long nonce are not covered by the
+integrity guarantee of this cipher. Any application that relies on the
+integrity of these ignored leading bytes of a long nonce may be further
+affected.
+
+Any OpenSSL internal use of this cipher, including in SSL/TLS, is safe
+because no such use sets such a long nonce value. However user
+applications that use this cipher directly and set a non-default nonce
+length to be longer than 12 bytes may be vulnerable.
+
+CVE-2019-1543
+
+Fixes #8345
+
+Reviewed-by: Paul Dale <paul.dale@oracle.com>
+Reviewed-by: Richard Levitte <levitte@openssl.org>
+(Merged from https://github.com/openssl/openssl/pull/8406)
+
+(cherry picked from commit 2a3d0ee9d59156c48973592331404471aca886d6)",other,"static int chacha20_poly1305_ctrl(EVP_CIPHER_CTX *ctx, int type, int arg,
+                                  void *ptr)
+{
+    EVP_CHACHA_AEAD_CTX *actx = aead_data(ctx);
+
+    switch(type) {
+    case EVP_CTRL_INIT:
+        if (actx == NULL)
+            actx = ctx->cipher_data
+                 = OPENSSL_zalloc(sizeof(*actx) + Poly1305_ctx_size());
+        if (actx == NULL) {
+            EVPerr(EVP_F_CHACHA20_POLY1305_CTRL, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        actx->len.aad = 0;
+        actx->len.text = 0;
+        actx->aad = 0;
+        actx->mac_inited = 0;
+        actx->tag_len = 0;
+        actx->nonce_len = 12;
+        actx->tls_payload_length = NO_TLS_PAYLOAD_LENGTH;
+        memset(actx->tls_aad, 0, POLY1305_BLOCK_SIZE);
+        return 1;
+
+    case EVP_CTRL_COPY:
+        if (actx) {
+            EVP_CIPHER_CTX *dst = (EVP_CIPHER_CTX *)ptr;
+
+            dst->cipher_data =
+                   OPENSSL_memdup(actx, sizeof(*actx) + Poly1305_ctx_size());
+            if (dst->cipher_data == NULL) {
+                EVPerr(EVP_F_CHACHA20_POLY1305_CTRL, EVP_R_COPY_ERROR);
+                return 0;
+            }
+        }
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA_CTR_SIZE)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_IV_FIXED:
+        if (arg != 12)
+            return 0;
+        actx->nonce[0] = actx->key.counter[1]
+                       = CHACHA_U8TOU32((unsigned char *)ptr);
+        actx->nonce[1] = actx->key.counter[2]
+                       = CHACHA_U8TOU32((unsigned char *)ptr+4);
+        actx->nonce[2] = actx->key.counter[3]
+                       = CHACHA_U8TOU32((unsigned char *)ptr+8);
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_TAG:
+        if (arg <= 0 || arg > POLY1305_BLOCK_SIZE)
+            return 0;
+        if (ptr != NULL) {
+            memcpy(actx->tag, ptr, arg);
+            actx->tag_len = arg;
+        }
+        return 1;
+
+    case EVP_CTRL_AEAD_GET_TAG:
+        if (arg <= 0 || arg > POLY1305_BLOCK_SIZE || !ctx->encrypt)
+            return 0;
+        memcpy(ptr, actx->tag, arg);
+        return 1;
+
+    case EVP_CTRL_AEAD_TLS1_AAD:
+        if (arg != EVP_AEAD_TLS1_AAD_LEN)
+            return 0;
+        {
+            unsigned int len;
+            unsigned char *aad = ptr;
+
+            memcpy(actx->tls_aad, ptr, EVP_AEAD_TLS1_AAD_LEN);
+            len = aad[EVP_AEAD_TLS1_AAD_LEN - 2] << 8 |
+                  aad[EVP_AEAD_TLS1_AAD_LEN - 1];
+            aad = actx->tls_aad;
+            if (!ctx->encrypt) {
+                if (len < POLY1305_BLOCK_SIZE)
+                    return 0;
+                len -= POLY1305_BLOCK_SIZE;     /* discount attached tag */
+                aad[EVP_AEAD_TLS1_AAD_LEN - 2] = (unsigned char)(len >> 8);
+                aad[EVP_AEAD_TLS1_AAD_LEN - 1] = (unsigned char)len;
+            }
+            actx->tls_payload_length = len;
+
+            /*
+             * merge record sequence number as per RFC7905
+             */
+            actx->key.counter[1] = actx->nonce[0];
+            actx->key.counter[2] = actx->nonce[1] ^ CHACHA_U8TOU32(aad);
+            actx->key.counter[3] = actx->nonce[2] ^ CHACHA_U8TOU32(aad+4);
+            actx->mac_inited = 0;
+
+            return POLY1305_BLOCK_SIZE;         /* tag length */
+        }
+
+    case EVP_CTRL_AEAD_SET_MAC_KEY:
+        /* no-op */
+        return 1;
+
+    default:
+        return -1;
+    }
+}","static int chacha20_poly1305_ctrl(EVP_CIPHER_CTX *ctx, int type, int arg,
+                                  void *ptr)
+{
+    EVP_CHACHA_AEAD_CTX *actx = aead_data(ctx);
+
+    switch(type) {
+    case EVP_CTRL_INIT:
+        if (actx == NULL)
+            actx = ctx->cipher_data
+                 = OPENSSL_zalloc(sizeof(*actx) + Poly1305_ctx_size());
+        if (actx == NULL) {
+            EVPerr(EVP_F_CHACHA20_POLY1305_CTRL, EVP_R_INITIALIZATION_ERROR);
+            return 0;
+        }
+        actx->len.aad = 0;
+        actx->len.text = 0;
+        actx->aad = 0;
+        actx->mac_inited = 0;
+        actx->tag_len = 0;
+        actx->nonce_len = 12;
+        actx->tls_payload_length = NO_TLS_PAYLOAD_LENGTH;
+        memset(actx->tls_aad, 0, POLY1305_BLOCK_SIZE);
+        return 1;
+
+    case EVP_CTRL_COPY:
+        if (actx) {
+            EVP_CIPHER_CTX *dst = (EVP_CIPHER_CTX *)ptr;
+
+            dst->cipher_data =
+                   OPENSSL_memdup(actx, sizeof(*actx) + Poly1305_ctx_size());
+            if (dst->cipher_data == NULL) {
+                EVPerr(EVP_F_CHACHA20_POLY1305_CTRL, EVP_R_COPY_ERROR);
+                return 0;
+            }
+        }
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_IVLEN:
+        if (arg <= 0 || arg > CHACHA20_POLY1305_MAX_IVLEN)
+            return 0;
+        actx->nonce_len = arg;
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_IV_FIXED:
+        if (arg != 12)
+            return 0;
+        actx->nonce[0] = actx->key.counter[1]
+                       = CHACHA_U8TOU32((unsigned char *)ptr);
+        actx->nonce[1] = actx->key.counter[2]
+                       = CHACHA_U8TOU32((unsigned char *)ptr+4);
+        actx->nonce[2] = actx->key.counter[3]
+                       = CHACHA_U8TOU32((unsigned char *)ptr+8);
+        return 1;
+
+    case EVP_CTRL_AEAD_SET_TAG:
+        if (arg <= 0 || arg > POLY1305_BLOCK_SIZE)
+            return 0;
+        if (ptr != NULL) {
+            memcpy(actx->tag, ptr, arg);
+            actx->tag_len = arg;
+        }
+        return 1;
+
+    case EVP_CTRL_AEAD_GET_TAG:
+        if (arg <= 0 || arg > POLY1305_BLOCK_SIZE || !ctx->encrypt)
+            return 0;
+        memcpy(ptr, actx->tag, arg);
+        return 1;
+
+    case EVP_CTRL_AEAD_TLS1_AAD:
+        if (arg != EVP_AEAD_TLS1_AAD_LEN)
+            return 0;
+        {
+            unsigned int len;
+            unsigned char *aad = ptr;
+
+            memcpy(actx->tls_aad, ptr, EVP_AEAD_TLS1_AAD_LEN);
+            len = aad[EVP_AEAD_TLS1_AAD_LEN - 2] << 8 |
+                  aad[EVP_AEAD_TLS1_AAD_LEN - 1];
+            aad = actx->tls_aad;
+            if (!ctx->encrypt) {
+                if (len < POLY1305_BLOCK_SIZE)
+                    return 0;
+                len -= POLY1305_BLOCK_SIZE;     /* discount attached tag */
+                aad[EVP_AEAD_TLS1_AAD_LEN - 2] = (unsigned char)(len >> 8);
+                aad[EVP_AEAD_TLS1_AAD_LEN - 1] = (unsigned char)len;
+            }
+            actx->tls_payload_length = len;
+
+            /*
+             * merge record sequence number as per RFC7905
+             */
+            actx->key.counter[1] = actx->nonce[0];
+            actx->key.counter[2] = actx->nonce[1] ^ CHACHA_U8TOU32(aad);
+            actx->key.counter[3] = actx->nonce[2] ^ CHACHA_U8TOU32(aad+4);
+            actx->mac_inited = 0;
+
+            return POLY1305_BLOCK_SIZE;         /* tag length */
+        }
+
+    case EVP_CTRL_AEAD_SET_MAC_KEY:
+        /* no-op */
+        return 1;
+
+    default:
+        return -1;
+    }
+}",
+2674,"[""CWE-327""]",openssl,7d56a74a96828985db7354a55227a511615f732b,7d56a74a96828985db7354a55227a511615f732b,0,514692,2.835600907241247e+38,64.0,"Fix the RC4-MD5 cipher
+
+A copy&paste error meant that the RC4-MD5 cipher (used in TLS) used the TLS
+AAD data as the MAC key.
+
+CVE-2022-1434
+
+Fixes #18112
+
+Reviewed-by: Tomas Mraz <tomas@openssl.org>
+Reviewed-by: Shane Lontis <shane.lontis@oracle.com>
+Reviewed-by: Matt Caswell <matt@openssl.org>",other,"static int rc4_hmac_md5_set_ctx_params(void *vctx, const OSSL_PARAM params[])
+{
+    PROV_RC4_HMAC_MD5_CTX *ctx = (PROV_RC4_HMAC_MD5_CTX *)vctx;
+    const OSSL_PARAM *p;
+    size_t sz;
+
+    if (params == NULL)
+        return 1;
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN);
+    if (p != NULL) {
+        if (!OSSL_PARAM_get_size_t(p, &sz)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        if (ctx->base.keylen != sz) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_KEY_LENGTH);
+            return 0;
+        }
+    }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN);
+    if (p != NULL) {
+        if (!OSSL_PARAM_get_size_t(p, &sz)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        if (ctx->base.ivlen != sz) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_IV_LENGTH);
+            return 0;
+        }
+    }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_TLS1_AAD);
+    if (p != NULL) {
+        if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        sz = GET_HW(ctx)->tls_init(&ctx->base, p->data, p->data_size);
+        if (sz == 0) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_DATA);
+            return 0;
+        }
+        ctx->tls_aad_pad_sz = sz;
+    }
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_TLS1_AAD);
+    if (p != NULL) {
+        if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        GET_HW(ctx)->init_mackey(&ctx->base, p->data, p->data_size);
+    }
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_TLS_VERSION);
+    if (p != NULL) {
+        if (!OSSL_PARAM_get_uint(p, &ctx->base.tlsversion)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+    }
+
+    return 1;
+}","static int rc4_hmac_md5_set_ctx_params(void *vctx, const OSSL_PARAM params[])
+{
+    PROV_RC4_HMAC_MD5_CTX *ctx = (PROV_RC4_HMAC_MD5_CTX *)vctx;
+    const OSSL_PARAM *p;
+    size_t sz;
+
+    if (params == NULL)
+        return 1;
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_KEYLEN);
+    if (p != NULL) {
+        if (!OSSL_PARAM_get_size_t(p, &sz)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        if (ctx->base.keylen != sz) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_KEY_LENGTH);
+            return 0;
+        }
+    }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_IVLEN);
+    if (p != NULL) {
+        if (!OSSL_PARAM_get_size_t(p, &sz)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        if (ctx->base.ivlen != sz) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_IV_LENGTH);
+            return 0;
+        }
+    }
+
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_TLS1_AAD);
+    if (p != NULL) {
+        if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        sz = GET_HW(ctx)->tls_init(&ctx->base, p->data, p->data_size);
+        if (sz == 0) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_INVALID_DATA);
+            return 0;
+        }
+        ctx->tls_aad_pad_sz = sz;
+    }
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_AEAD_MAC_KEY);
+    if (p != NULL) {
+        if (p->data_type != OSSL_PARAM_OCTET_STRING) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+        GET_HW(ctx)->init_mackey(&ctx->base, p->data, p->data_size);
+    }
+    p = OSSL_PARAM_locate_const(params, OSSL_CIPHER_PARAM_TLS_VERSION);
+    if (p != NULL) {
+        if (!OSSL_PARAM_get_uint(p, &ctx->base.tlsversion)) {
+            ERR_raise(ERR_LIB_PROV, PROV_R_FAILED_TO_GET_PARAMETER);
+            return 0;
+        }
+    }
+
+    return 1;
+}",

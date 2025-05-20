@@ -1,0 +1,79 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2670,"[""CWE-89""]",server,3c209bfc040ddfc41ece8357d772547432353fd2,3c209bfc040ddfc41ece8357d772547432353fd2,0,511887,1.908518391970559e+38,37.0,"MDEV-25994: Crash with union of my_decimal type in ORDER BY clause
+
+When single-row subquery fails with ""Subquery reutrns more than 1 row""
+error, it will raise an error and return NULL.
+
+On the other hand, Item_singlerow_subselect sets item->maybe_null=0
+for table-less subqueries like ""(SELECT not_null_value)""  (*)
+
+This discrepancy (item with maybe_null=0 returning NULL) causes the
+code in Type_handler_decimal_result::make_sort_key_part() to crash.
+
+Fixed this by allowing inference (*) only when the subquery is NOT a
+UNION.",other,"bool Item_singlerow_subselect::fix_length_and_dec()
+{
+  if ((max_columns= engine->cols()) == 1)
+  {
+    if (engine->fix_length_and_dec(row= &value))
+      return TRUE;
+  }
+  else
+  {
+    if (!(row= (Item_cache**) current_thd->alloc(sizeof(Item_cache*) *
+                                                 max_columns)) ||
+        engine->fix_length_and_dec(row))
+      return TRUE;
+    value= *row;
+  }
+  unsigned_flag= value->unsigned_flag;
+  /*
+    If there are not tables in subquery then ability to have NULL value
+    depends on SELECT list (if single row subquery have tables then it
+    always can be NULL if there are not records fetched).
+  */
+  if (engine->no_tables())
+    maybe_null= engine->may_be_null();
+  else
+  {
+    for (uint i= 0; i < max_columns; i++)
+      row[i]->maybe_null= TRUE;
+  }
+  return FALSE;
+}","bool Item_singlerow_subselect::fix_length_and_dec()
+{
+  if ((max_columns= engine->cols()) == 1)
+  {
+    if (engine->fix_length_and_dec(row= &value))
+      return TRUE;
+  }
+  else
+  {
+    if (!(row= (Item_cache**) current_thd->alloc(sizeof(Item_cache*) *
+                                                 max_columns)) ||
+        engine->fix_length_and_dec(row))
+      return TRUE;
+    value= *row;
+  }
+  unsigned_flag= value->unsigned_flag;
+  /*
+    If the subquery has no tables (1) and is not a UNION (2), like:
+
+      (SELECT subq_value)
+
+    then its NULLability is the same as subq_value's NULLability.
+
+    (1): A subquery that uses a table will return NULL when the table is empty.
+    (2): A UNION subquery will return NULL if it produces a ""Subquery returns
+         more than one row"" error.
+  */
+  if (engine->no_tables() &&
+      engine->engine_type() != subselect_engine::UNION_ENGINE)
+    maybe_null= engine->may_be_null();
+  else
+  {
+    for (uint i= 0; i < max_columns; i++)
+      row[i]->maybe_null= TRUE;
+  }
+  return FALSE;
+}",

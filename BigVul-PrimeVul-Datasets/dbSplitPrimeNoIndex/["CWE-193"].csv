@@ -1,0 +1,81 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2448,"[""CWE-193""]",linux-2.6,94ad374a0751f40d25e22e036c37f7263569d24c,94ad374a0751f40d25e22e036c37f7263569d24c,0,488631,1.7422657972902205e+38,32.0,"Fix off-by-one error in iov_iter_advance()
+
+The iov_iter_advance() function would look at the iov->iov_len entry
+even though it might have iterated over the whole array, and iov was
+pointing past the end.  This would cause DEBUG_PAGEALLOC to trigger a
+kernel page fault if the allocation was at the end of a page, and the
+next page was unallocated.
+
+The quick fix is to just change the order of the tests: check that there
+is any iovec data left before we check the iov entry itself.
+
+Thanks to Alexey Dobriyan for finding this case, and testing the fix.
+
+Reported-and-tested-by: Alexey Dobriyan <adobriyan@gmail.com>
+Cc: Nick Piggin <npiggin@suse.de>
+Cc: Andrew Morton <akpm@linux-foundation.org>
+Cc: <stable@kernel.org> [2.6.25.x, 2.6.26.x]
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"void iov_iter_advance(struct iov_iter *i, size_t bytes)
+{
+	BUG_ON(i->count < bytes);
+
+	if (likely(i->nr_segs == 1)) {
+		i->iov_offset += bytes;
+		i->count -= bytes;
+	} else {
+		const struct iovec *iov = i->iov;
+		size_t base = i->iov_offset;
+
+		/*
+		 * The !iov->iov_len check ensures we skip over unlikely
+		 * zero-length segments (without overruning the iovec).
+		 */
+		while (bytes || unlikely(!iov->iov_len && i->count)) {
+			int copy;
+
+			copy = min(bytes, iov->iov_len - base);
+			BUG_ON(!i->count || i->count < copy);
+			i->count -= copy;
+			bytes -= copy;
+			base += copy;
+			if (iov->iov_len == base) {
+				iov++;
+				base = 0;
+			}
+		}
+		i->iov = iov;
+		i->iov_offset = base;
+	}
+}","void iov_iter_advance(struct iov_iter *i, size_t bytes)
+{
+	BUG_ON(i->count < bytes);
+
+	if (likely(i->nr_segs == 1)) {
+		i->iov_offset += bytes;
+		i->count -= bytes;
+	} else {
+		const struct iovec *iov = i->iov;
+		size_t base = i->iov_offset;
+
+		/*
+		 * The !iov->iov_len check ensures we skip over unlikely
+		 * zero-length segments (without overruning the iovec).
+		 */
+		while (bytes || unlikely(i->count && !iov->iov_len)) {
+			int copy;
+
+			copy = min(bytes, iov->iov_len - base);
+			BUG_ON(!i->count || i->count < copy);
+			i->count -= copy;
+			bytes -= copy;
+			base += copy;
+			if (iov->iov_len == base) {
+				iov++;
+				base = 0;
+			}
+		}
+		i->iov = iov;
+		i->iov_offset = base;
+	}
+}",

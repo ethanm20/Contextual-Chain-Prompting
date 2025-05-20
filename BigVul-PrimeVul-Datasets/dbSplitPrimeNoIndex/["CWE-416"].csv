@@ -1,0 +1,2538 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+548,"[""CWE-416""]",server,b3c3291f0b7c1623cb20663f7cf31b7f749768bc,b3c3291f0b7c1623cb20663f7cf31b7f749768bc,0,511472,8.490436714166893e+37,476.0,MDEV-24176 fixup: GCC -Wmaybe-uninitialized,other,"bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx)
+{
+  TABLE *table;
+  const char *key;
+  uint	key_length;
+  const char *alias= table_list->alias.str;
+  uint flags= ot_ctx->get_flags();
+  MDL_ticket *mdl_ticket;
+  TABLE_SHARE *share;
+  uint gts_flags;
+  bool from_share= false;
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+  int part_names_error=0;
+#endif
+  DBUG_ENTER(""open_table"");
+
+  /*
+    The table must not be opened already. The table can be pre-opened for
+    some statements if it is a temporary table.
+
+    open_temporary_table() must be used to open temporary tables.
+  */
+  DBUG_ASSERT(!table_list->table);
+
+  /* an open table operation needs a lot of the stack space */
+  if (check_stack_overrun(thd, STACK_MIN_SIZE_FOR_OPEN, (uchar *)&alias))
+    DBUG_RETURN(TRUE);
+
+  if (!(flags & MYSQL_OPEN_IGNORE_KILLED) && thd->killed)
+  {
+    thd->send_kill_message();
+    DBUG_RETURN(TRUE);
+  }
+
+  /*
+    Check if we're trying to take a write lock in a read only transaction.
+
+    Note that we allow write locks on log tables as otherwise logging
+    to general/slow log would be disabled in read only transactions.
+  */
+  if (table_list->mdl_request.is_write_lock_request() &&
+      thd->tx_read_only &&
+      !(flags & (MYSQL_LOCK_LOG_TABLE | MYSQL_OPEN_HAS_MDL_LOCK)))
+  {
+    my_error(ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION, MYF(0));
+    DBUG_RETURN(true);
+  }
+
+  if (!table_list->db.str)
+  {
+    my_error(ER_NO_DB_ERROR, MYF(0));
+    DBUG_RETURN(true);
+  }
+
+  key_length= get_table_def_key(table_list, &key);
+
+  /*
+    If we're in pre-locked or LOCK TABLES mode, let's try to find the
+    requested table in the list of pre-opened and locked tables. If the
+    table is not there, return an error - we can't open not pre-opened
+    tables in pre-locked/LOCK TABLES mode.
+    TODO: move this block into a separate function.
+  */
+  if (thd->locked_tables_mode &&
+      ! (flags & MYSQL_OPEN_GET_NEW_TABLE))
+  {						// Using table locks
+    TABLE *best_table= 0;
+    int best_distance= INT_MIN;
+    for (table=thd->open_tables; table ; table=table->next)
+    {
+      if (table->s->table_cache_key.length == key_length &&
+	  !memcmp(table->s->table_cache_key.str, key, key_length))
+      {
+        if (!my_strcasecmp(system_charset_info, table->alias.c_ptr(), alias) &&
+            table->query_id != thd->query_id && /* skip tables already used */
+            (thd->locked_tables_mode == LTM_LOCK_TABLES ||
+             table->query_id == 0))
+        {
+          int distance= ((int) table->reginfo.lock_type -
+                         (int) table_list->lock_type);
+
+          /*
+            Find a table that either has the exact lock type requested,
+            or has the best suitable lock. In case there is no locked
+            table that has an equal or higher lock than requested,
+            we us the closest matching lock to be able to produce an error
+            message about wrong lock mode on the table. The best_table
+            is changed if bd < 0 <= d or bd < d < 0 or 0 <= d < bd.
+
+            distance <  0 - No suitable lock found
+            distance >  0 - we have lock mode higher then we require
+            distance == 0 - we have lock mode exactly which we need
+          */
+          if ((best_distance < 0 && distance > best_distance) ||
+              (distance >= 0 && distance < best_distance))
+          {
+            best_distance= distance;
+            best_table= table;
+            if (best_distance == 0)
+            {
+              /*
+                We have found a perfect match and can finish iterating
+                through open tables list. Check for table use conflict
+                between calling statement and SP/trigger is done in
+                lock_tables().
+              */
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (best_table)
+    {
+      table= best_table;
+      table->query_id= thd->query_id;
+      table->init(thd, table_list);
+      DBUG_PRINT(""info"",(""Using locked table""));
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+      part_names_error= set_partitions_as_used(table_list, table);
+#endif
+      goto reset;
+    }
+
+    if (is_locked_view(thd, table_list))
+    {
+      if (table_list->sequence)
+      {
+        my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str, table_list->alias.str);
+        DBUG_RETURN(true);
+      }
+      DBUG_RETURN(FALSE); // VIEW
+    }
+
+    /*
+      No table in the locked tables list. In case of explicit LOCK TABLES
+      this can happen if a user did not include the table into the list.
+      In case of pre-locked mode locked tables list is generated automatically,
+      so we may only end up here if the table did not exist when
+      locked tables list was created.
+    */
+    if (thd->locked_tables_mode == LTM_PRELOCKED)
+      my_error(ER_NO_SUCH_TABLE, MYF(0), table_list->db.str, table_list->alias.str);
+    else
+      my_error(ER_TABLE_NOT_LOCKED, MYF(0), alias);
+    DBUG_RETURN(TRUE);
+  }
+
+  /*
+    Non pre-locked/LOCK TABLES mode, and the table is not temporary.
+    This is the normal use case.
+  */
+
+  if (! (flags & MYSQL_OPEN_HAS_MDL_LOCK))
+  {
+    /*
+      We are not under LOCK TABLES and going to acquire write-lock/
+      modify the base table. We need to acquire protection against
+      global read lock until end of this statement in order to have
+      this statement blocked by active FLUSH TABLES WITH READ LOCK.
+
+      We don't need to acquire this protection under LOCK TABLES as
+      such protection already acquired at LOCK TABLES time and
+      not released until UNLOCK TABLES.
+
+      We don't block statements which modify only temporary tables
+      as these tables are not preserved by any form of
+      backup which uses FLUSH TABLES WITH READ LOCK.
+
+      TODO: The fact that we sometimes acquire protection against
+            GRL only when we encounter table to be write-locked
+            slightly increases probability of deadlock.
+            This problem will be solved once Alik pushes his
+            temporary table refactoring patch and we can start
+            pre-acquiring metadata locks at the beggining of
+            open_tables() call.
+    */
+    if (table_list->mdl_request.is_write_lock_request() &&
+        ! (flags & (MYSQL_OPEN_IGNORE_GLOBAL_READ_LOCK |
+                    MYSQL_OPEN_FORCE_SHARED_MDL |
+                    MYSQL_OPEN_FORCE_SHARED_HIGH_PRIO_MDL |
+                    MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK)) &&
+        ! ot_ctx->has_protection_against_grl())
+    {
+      MDL_request protection_request;
+      MDL_deadlock_handler mdl_deadlock_handler(ot_ctx);
+
+      if (thd->global_read_lock.can_acquire_protection())
+        DBUG_RETURN(TRUE);
+
+      protection_request.init(MDL_key::GLOBAL, """", """", MDL_INTENTION_EXCLUSIVE,
+                              MDL_STATEMENT);
+
+      /*
+        Install error handler which if possible will convert deadlock error
+        into request to back-off and restart process of opening tables.
+      */
+      thd->push_internal_handler(&mdl_deadlock_handler);
+      bool result= thd->mdl_context.acquire_lock(&protection_request,
+                                                 ot_ctx->get_timeout());
+      thd->pop_internal_handler();
+
+      if (result)
+        DBUG_RETURN(TRUE);
+
+      ot_ctx->set_has_protection_against_grl();
+    }
+
+    if (open_table_get_mdl_lock(thd, ot_ctx, &table_list->mdl_request,
+                                flags, &mdl_ticket) ||
+        mdl_ticket == NULL)
+    {
+      DEBUG_SYNC(thd, ""before_open_table_wait_refresh"");
+      DBUG_RETURN(TRUE);
+    }
+    DEBUG_SYNC(thd, ""after_open_table_mdl_shared"");
+  }
+  else
+  {
+    /*
+      Grab reference to the MDL lock ticket that was acquired
+      by the caller.
+    */
+    mdl_ticket= table_list->mdl_request.ticket;
+  }
+
+  if (table_list->open_strategy == TABLE_LIST::OPEN_IF_EXISTS)
+  {
+    if (!ha_table_exists(thd, &table_list->db, &table_list->table_name))
+      DBUG_RETURN(FALSE);
+  }
+  else if (table_list->open_strategy == TABLE_LIST::OPEN_STUB)
+    DBUG_RETURN(FALSE);
+
+  /* Table exists. Let us try to open it. */
+
+  if (table_list->i_s_requested_object & OPEN_TABLE_ONLY)
+    gts_flags= GTS_TABLE;
+  else if (table_list->i_s_requested_object &  OPEN_VIEW_ONLY)
+    gts_flags= GTS_VIEW;
+  else
+    gts_flags= GTS_TABLE | GTS_VIEW;
+
+retry_share:
+
+  share= tdc_acquire_share(thd, table_list, gts_flags, &table);
+
+  if (unlikely(!share))
+  {
+    /*
+      Hide ""Table doesn't exist"" errors if the table belongs to a view.
+      The check for thd->is_error() is necessary to not push an
+      unwanted error in case the error was already silenced.
+      @todo Rework the alternative ways to deal with ER_NO_SUCH TABLE.
+    */
+    if (thd->is_error())
+    {
+      if (table_list->parent_l)
+      {
+        thd->clear_error();
+        my_error(ER_WRONG_MRG_TABLE, MYF(0));
+      }
+      else if (table_list->belong_to_view)
+      {
+        TABLE_LIST *view= table_list->belong_to_view;
+        thd->clear_error();
+        my_error(ER_VIEW_INVALID, MYF(0),
+                 view->view_db.str, view->view_name.str);
+      }
+    }
+    DBUG_RETURN(TRUE);
+  }
+
+  /*
+    Check if this TABLE_SHARE-object corresponds to a view. Note, that there is
+    no need to check TABLE_SHARE::tdc.flushed as we do for regular tables,
+    because view shares are always up to date.
+  */
+  if (share->is_view)
+  {
+    /*
+      If parent_l of the table_list is non null then a merge table
+      has this view as child table, which is not supported.
+    */
+    if (table_list->parent_l)
+    {
+      my_error(ER_WRONG_MRG_TABLE, MYF(0));
+      goto err_lock;
+    }
+    if (table_list->sequence)
+    {
+      my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str,
+               table_list->alias.str);
+      goto err_lock;
+    }
+    /*
+      This table is a view. Validate its metadata version: in particular,
+      that it was a view when the statement was prepared.
+    */
+    if (check_and_update_table_version(thd, table_list, share))
+      goto err_lock;
+
+    /* Open view */
+    if (mysql_make_view(thd, share, table_list, false))
+      goto err_lock;
+
+
+    /* TODO: Don't free this */
+    tdc_release_share(share);
+
+    DBUG_ASSERT(table_list->view);
+
+    DBUG_RETURN(FALSE);
+  }
+
+#ifdef WITH_WSREP
+  if (!((flags & MYSQL_OPEN_IGNORE_FLUSH) ||
+        (thd->wsrep_applier)))
+#else
+  if (!(flags & MYSQL_OPEN_IGNORE_FLUSH))
+#endif
+  {
+    if (share->tdc->flushed)
+    {
+      DBUG_PRINT(""info"", (""Found old share version: %lld  current: %lld"",
+                          share->tdc->version, tdc_refresh_version()));
+      /*
+        We already have an MDL lock. But we have encountered an old
+        version of table in the table definition cache which is possible
+        when someone changes the table version directly in the cache
+        without acquiring a metadata lock (e.g. this can happen during
+        ""rolling"" FLUSH TABLE(S)).
+        Release our reference to share, wait until old version of
+        share goes away and then try to get new version of table share.
+      */
+      if (table)
+        tc_release_table(table);
+      else
+        tdc_release_share(share);
+
+      MDL_deadlock_handler mdl_deadlock_handler(ot_ctx);
+      bool wait_result;
+
+      thd->push_internal_handler(&mdl_deadlock_handler);
+      wait_result= tdc_wait_for_old_version(thd, table_list->db.str,
+                                            table_list->table_name.str,
+                                            ot_ctx->get_timeout(),
+                                            mdl_ticket->get_deadlock_weight());
+      thd->pop_internal_handler();
+
+      if (wait_result)
+        DBUG_RETURN(TRUE);
+
+      goto retry_share;
+    }
+
+    if (thd->open_tables && thd->open_tables->s->tdc->flushed)
+    {
+      /*
+        If the version changes while we're opening the tables,
+        we have to back off, close all the tables opened-so-far,
+        and try to reopen them. Note: refresh_version is currently
+        changed only during FLUSH TABLES.
+      */
+      if (table)
+        tc_release_table(table);
+      else
+        tdc_release_share(share);
+      (void)ot_ctx->request_backoff_action(Open_table_context::OT_REOPEN_TABLES,
+                                           NULL);
+      DBUG_RETURN(TRUE);
+    }
+  }
+
+  if (table)
+  {
+    DBUG_ASSERT(table->file != NULL);
+    MYSQL_REBIND_TABLE(table->file);
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+    part_names_error= set_partitions_as_used(table_list, table);
+#endif
+  }
+  else
+  {
+    enum open_frm_error error;
+
+    /* make a new table */
+    if (!(table=(TABLE*) my_malloc(sizeof(*table),MYF(MY_WME))))
+      goto err_lock;
+
+    error= open_table_from_share(thd, share, &table_list->alias,
+                                 HA_OPEN_KEYFILE | HA_TRY_READ_ONLY,
+                                 EXTRA_RECORD,
+                                 thd->open_options, table, FALSE,
+                                 IF_PARTITIONING(table_list->partition_names,0));
+
+    if (unlikely(error))
+    {
+      my_free(table);
+
+      if (error == OPEN_FRM_DISCOVER)
+        (void) ot_ctx->request_backoff_action(Open_table_context::OT_DISCOVER,
+                                              table_list);
+      else if (share->crashed)
+      {
+        if (!(flags & MYSQL_OPEN_IGNORE_REPAIR))
+          (void) ot_ctx->request_backoff_action(Open_table_context::OT_REPAIR,
+                                                table_list);
+        else
+          table_list->crashed= 1;  /* Mark that table was crashed */
+      }
+      goto err_lock;
+    }
+    if (open_table_entry_fini(thd, share, table))
+    {
+      closefrm(table);
+      my_free(table);
+      goto err_lock;
+    }
+
+    /* Add table to the share's used tables list. */
+    tc_add_table(thd, table);
+    from_share= true;
+  }
+
+  table->mdl_ticket= mdl_ticket;
+  table->reginfo.lock_type=TL_READ;		/* Assume read */
+
+  table->init(thd, table_list);
+
+  table->next= thd->open_tables;		/* Link into simple list */
+  thd->set_open_tables(table);
+
+ reset:
+  /*
+    Check that there is no reference to a condition from an earlier query
+    (cf. Bug#58553). 
+  */
+  DBUG_ASSERT(table->file->pushed_cond == NULL);
+  table_list->updatable= 1; // It is not derived table nor non-updatable VIEW
+  table_list->table= table;
+
+  if (!from_share && table->vcol_fix_expr(thd))
+    goto err_lock;
+
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+  if (unlikely(table->part_info))
+  {
+    /* Partitions specified were incorrect.*/
+    if (part_names_error)
+    {
+      table->file->print_error(part_names_error, MYF(0));
+      DBUG_RETURN(true);
+    }
+  }
+  else if (table_list->partition_names)
+  {
+    /* Don't allow PARTITION () clause on a nonpartitioned table */
+    my_error(ER_PARTITION_CLAUSE_ON_NONPARTITIONED, MYF(0));
+    DBUG_RETURN(true);
+  }
+#endif
+  if (table_list->sequence && table->s->table_type != TABLE_TYPE_SEQUENCE)
+  {
+    my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str, table_list->alias.str);
+    DBUG_RETURN(true);
+  }
+
+  DBUG_RETURN(FALSE);
+
+err_lock:
+  tdc_release_share(share);
+
+  DBUG_PRINT(""exit"", (""failed""));
+  DBUG_RETURN(TRUE);
+}","bool open_table(THD *thd, TABLE_LIST *table_list, Open_table_context *ot_ctx)
+{
+  TABLE *table;
+  const char *key;
+  uint	key_length;
+  const char *alias= table_list->alias.str;
+  uint flags= ot_ctx->get_flags();
+  MDL_ticket *mdl_ticket;
+  TABLE_SHARE *share;
+  uint gts_flags;
+  bool from_share= false;
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+  int part_names_error=0;
+#endif
+  DBUG_ENTER(""open_table"");
+
+  /*
+    The table must not be opened already. The table can be pre-opened for
+    some statements if it is a temporary table.
+
+    open_temporary_table() must be used to open temporary tables.
+  */
+  DBUG_ASSERT(!table_list->table);
+
+  /* an open table operation needs a lot of the stack space */
+  if (check_stack_overrun(thd, STACK_MIN_SIZE_FOR_OPEN, (uchar *)&alias))
+    DBUG_RETURN(TRUE);
+
+  if (!(flags & MYSQL_OPEN_IGNORE_KILLED) && thd->killed)
+  {
+    thd->send_kill_message();
+    DBUG_RETURN(TRUE);
+  }
+
+  /*
+    Check if we're trying to take a write lock in a read only transaction.
+
+    Note that we allow write locks on log tables as otherwise logging
+    to general/slow log would be disabled in read only transactions.
+  */
+  if (table_list->mdl_request.is_write_lock_request() &&
+      thd->tx_read_only &&
+      !(flags & (MYSQL_LOCK_LOG_TABLE | MYSQL_OPEN_HAS_MDL_LOCK)))
+  {
+    my_error(ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION, MYF(0));
+    DBUG_RETURN(true);
+  }
+
+  if (!table_list->db.str)
+  {
+    my_error(ER_NO_DB_ERROR, MYF(0));
+    DBUG_RETURN(true);
+  }
+
+  key_length= get_table_def_key(table_list, &key);
+
+  /*
+    If we're in pre-locked or LOCK TABLES mode, let's try to find the
+    requested table in the list of pre-opened and locked tables. If the
+    table is not there, return an error - we can't open not pre-opened
+    tables in pre-locked/LOCK TABLES mode.
+    TODO: move this block into a separate function.
+  */
+  if (thd->locked_tables_mode &&
+      ! (flags & MYSQL_OPEN_GET_NEW_TABLE))
+  {						// Using table locks
+    TABLE *best_table= 0;
+    int best_distance= INT_MIN;
+    for (table=thd->open_tables; table ; table=table->next)
+    {
+      if (table->s->table_cache_key.length == key_length &&
+	  !memcmp(table->s->table_cache_key.str, key, key_length))
+      {
+        if (!my_strcasecmp(system_charset_info, table->alias.c_ptr(), alias) &&
+            table->query_id != thd->query_id && /* skip tables already used */
+            (thd->locked_tables_mode == LTM_LOCK_TABLES ||
+             table->query_id == 0))
+        {
+          int distance= ((int) table->reginfo.lock_type -
+                         (int) table_list->lock_type);
+
+          /*
+            Find a table that either has the exact lock type requested,
+            or has the best suitable lock. In case there is no locked
+            table that has an equal or higher lock than requested,
+            we us the closest matching lock to be able to produce an error
+            message about wrong lock mode on the table. The best_table
+            is changed if bd < 0 <= d or bd < d < 0 or 0 <= d < bd.
+
+            distance <  0 - No suitable lock found
+            distance >  0 - we have lock mode higher then we require
+            distance == 0 - we have lock mode exactly which we need
+          */
+          if ((best_distance < 0 && distance > best_distance) ||
+              (distance >= 0 && distance < best_distance))
+          {
+            best_distance= distance;
+            best_table= table;
+            if (best_distance == 0)
+            {
+              /*
+                We have found a perfect match and can finish iterating
+                through open tables list. Check for table use conflict
+                between calling statement and SP/trigger is done in
+                lock_tables().
+              */
+              break;
+            }
+          }
+        }
+      }
+    }
+    if (best_table)
+    {
+      table= best_table;
+      table->query_id= thd->query_id;
+      table->init(thd, table_list);
+      DBUG_PRINT(""info"",(""Using locked table""));
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+      part_names_error= set_partitions_as_used(table_list, table);
+#endif
+      goto reset;
+    }
+
+    if (is_locked_view(thd, table_list))
+    {
+      if (table_list->sequence)
+      {
+        my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str, table_list->alias.str);
+        DBUG_RETURN(true);
+      }
+      DBUG_RETURN(FALSE); // VIEW
+    }
+
+    /*
+      No table in the locked tables list. In case of explicit LOCK TABLES
+      this can happen if a user did not include the table into the list.
+      In case of pre-locked mode locked tables list is generated automatically,
+      so we may only end up here if the table did not exist when
+      locked tables list was created.
+    */
+    if (thd->locked_tables_mode == LTM_PRELOCKED)
+      my_error(ER_NO_SUCH_TABLE, MYF(0), table_list->db.str, table_list->alias.str);
+    else
+      my_error(ER_TABLE_NOT_LOCKED, MYF(0), alias);
+    DBUG_RETURN(TRUE);
+  }
+
+  /*
+    Non pre-locked/LOCK TABLES mode, and the table is not temporary.
+    This is the normal use case.
+  */
+
+  if (! (flags & MYSQL_OPEN_HAS_MDL_LOCK))
+  {
+    /*
+      We are not under LOCK TABLES and going to acquire write-lock/
+      modify the base table. We need to acquire protection against
+      global read lock until end of this statement in order to have
+      this statement blocked by active FLUSH TABLES WITH READ LOCK.
+
+      We don't need to acquire this protection under LOCK TABLES as
+      such protection already acquired at LOCK TABLES time and
+      not released until UNLOCK TABLES.
+
+      We don't block statements which modify only temporary tables
+      as these tables are not preserved by any form of
+      backup which uses FLUSH TABLES WITH READ LOCK.
+
+      TODO: The fact that we sometimes acquire protection against
+            GRL only when we encounter table to be write-locked
+            slightly increases probability of deadlock.
+            This problem will be solved once Alik pushes his
+            temporary table refactoring patch and we can start
+            pre-acquiring metadata locks at the beggining of
+            open_tables() call.
+    */
+    if (table_list->mdl_request.is_write_lock_request() &&
+        ! (flags & (MYSQL_OPEN_IGNORE_GLOBAL_READ_LOCK |
+                    MYSQL_OPEN_FORCE_SHARED_MDL |
+                    MYSQL_OPEN_FORCE_SHARED_HIGH_PRIO_MDL |
+                    MYSQL_OPEN_SKIP_SCOPED_MDL_LOCK)) &&
+        ! ot_ctx->has_protection_against_grl())
+    {
+      MDL_request protection_request;
+      MDL_deadlock_handler mdl_deadlock_handler(ot_ctx);
+
+      if (thd->global_read_lock.can_acquire_protection())
+        DBUG_RETURN(TRUE);
+
+      protection_request.init(MDL_key::GLOBAL, """", """", MDL_INTENTION_EXCLUSIVE,
+                              MDL_STATEMENT);
+
+      /*
+        Install error handler which if possible will convert deadlock error
+        into request to back-off and restart process of opening tables.
+      */
+      thd->push_internal_handler(&mdl_deadlock_handler);
+      bool result= thd->mdl_context.acquire_lock(&protection_request,
+                                                 ot_ctx->get_timeout());
+      thd->pop_internal_handler();
+
+      if (result)
+        DBUG_RETURN(TRUE);
+
+      ot_ctx->set_has_protection_against_grl();
+    }
+
+    if (open_table_get_mdl_lock(thd, ot_ctx, &table_list->mdl_request,
+                                flags, &mdl_ticket) ||
+        mdl_ticket == NULL)
+    {
+      DEBUG_SYNC(thd, ""before_open_table_wait_refresh"");
+      DBUG_RETURN(TRUE);
+    }
+    DEBUG_SYNC(thd, ""after_open_table_mdl_shared"");
+  }
+  else
+  {
+    /*
+      Grab reference to the MDL lock ticket that was acquired
+      by the caller.
+    */
+    mdl_ticket= table_list->mdl_request.ticket;
+  }
+
+  if (table_list->open_strategy == TABLE_LIST::OPEN_IF_EXISTS)
+  {
+    if (!ha_table_exists(thd, &table_list->db, &table_list->table_name))
+      DBUG_RETURN(FALSE);
+  }
+  else if (table_list->open_strategy == TABLE_LIST::OPEN_STUB)
+    DBUG_RETURN(FALSE);
+
+  /* Table exists. Let us try to open it. */
+
+  if (table_list->i_s_requested_object & OPEN_TABLE_ONLY)
+    gts_flags= GTS_TABLE;
+  else if (table_list->i_s_requested_object &  OPEN_VIEW_ONLY)
+    gts_flags= GTS_VIEW;
+  else
+    gts_flags= GTS_TABLE | GTS_VIEW;
+
+retry_share:
+
+  share= tdc_acquire_share(thd, table_list, gts_flags, &table);
+
+  if (unlikely(!share))
+  {
+    /*
+      Hide ""Table doesn't exist"" errors if the table belongs to a view.
+      The check for thd->is_error() is necessary to not push an
+      unwanted error in case the error was already silenced.
+      @todo Rework the alternative ways to deal with ER_NO_SUCH TABLE.
+    */
+    if (thd->is_error())
+    {
+      if (table_list->parent_l)
+      {
+        thd->clear_error();
+        my_error(ER_WRONG_MRG_TABLE, MYF(0));
+      }
+      else if (table_list->belong_to_view)
+      {
+        TABLE_LIST *view= table_list->belong_to_view;
+        thd->clear_error();
+        my_error(ER_VIEW_INVALID, MYF(0),
+                 view->view_db.str, view->view_name.str);
+      }
+    }
+    DBUG_RETURN(TRUE);
+  }
+
+  /*
+    Check if this TABLE_SHARE-object corresponds to a view. Note, that there is
+    no need to check TABLE_SHARE::tdc.flushed as we do for regular tables,
+    because view shares are always up to date.
+  */
+  if (share->is_view)
+  {
+    /*
+      If parent_l of the table_list is non null then a merge table
+      has this view as child table, which is not supported.
+    */
+    if (table_list->parent_l)
+    {
+      my_error(ER_WRONG_MRG_TABLE, MYF(0));
+      goto err_lock;
+    }
+    if (table_list->sequence)
+    {
+      my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str,
+               table_list->alias.str);
+      goto err_lock;
+    }
+    /*
+      This table is a view. Validate its metadata version: in particular,
+      that it was a view when the statement was prepared.
+    */
+    if (check_and_update_table_version(thd, table_list, share))
+      goto err_lock;
+
+    /* Open view */
+    if (mysql_make_view(thd, share, table_list, false))
+      goto err_lock;
+
+
+    /* TODO: Don't free this */
+    tdc_release_share(share);
+
+    DBUG_ASSERT(table_list->view);
+
+    DBUG_RETURN(FALSE);
+  }
+
+#ifdef WITH_WSREP
+  if (!((flags & MYSQL_OPEN_IGNORE_FLUSH) ||
+        (thd->wsrep_applier)))
+#else
+  if (!(flags & MYSQL_OPEN_IGNORE_FLUSH))
+#endif
+  {
+    if (share->tdc->flushed)
+    {
+      DBUG_PRINT(""info"", (""Found old share version: %lld  current: %lld"",
+                          share->tdc->version, tdc_refresh_version()));
+      /*
+        We already have an MDL lock. But we have encountered an old
+        version of table in the table definition cache which is possible
+        when someone changes the table version directly in the cache
+        without acquiring a metadata lock (e.g. this can happen during
+        ""rolling"" FLUSH TABLE(S)).
+        Release our reference to share, wait until old version of
+        share goes away and then try to get new version of table share.
+      */
+      if (table)
+        tc_release_table(table);
+      else
+        tdc_release_share(share);
+
+      MDL_deadlock_handler mdl_deadlock_handler(ot_ctx);
+      bool wait_result;
+
+      thd->push_internal_handler(&mdl_deadlock_handler);
+      wait_result= tdc_wait_for_old_version(thd, table_list->db.str,
+                                            table_list->table_name.str,
+                                            ot_ctx->get_timeout(),
+                                            mdl_ticket->get_deadlock_weight());
+      thd->pop_internal_handler();
+
+      if (wait_result)
+        DBUG_RETURN(TRUE);
+
+      goto retry_share;
+    }
+
+    if (thd->open_tables && thd->open_tables->s->tdc->flushed)
+    {
+      /*
+        If the version changes while we're opening the tables,
+        we have to back off, close all the tables opened-so-far,
+        and try to reopen them. Note: refresh_version is currently
+        changed only during FLUSH TABLES.
+      */
+      if (table)
+        tc_release_table(table);
+      else
+        tdc_release_share(share);
+      (void)ot_ctx->request_backoff_action(Open_table_context::OT_REOPEN_TABLES,
+                                           NULL);
+      DBUG_RETURN(TRUE);
+    }
+  }
+
+  if (table)
+  {
+    DBUG_ASSERT(table->file != NULL);
+    MYSQL_REBIND_TABLE(table->file);
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+    part_names_error= set_partitions_as_used(table_list, table);
+#endif
+  }
+  else
+  {
+    enum open_frm_error error;
+
+    /* make a new table */
+    if (!(table=(TABLE*) my_malloc(sizeof(*table),MYF(MY_WME))))
+      goto err_lock;
+
+    error= open_table_from_share(thd, share, &table_list->alias,
+                                 HA_OPEN_KEYFILE | HA_TRY_READ_ONLY,
+                                 EXTRA_RECORD,
+                                 thd->open_options, table, FALSE,
+                                 IF_PARTITIONING(table_list->partition_names,0));
+
+    if (unlikely(error))
+    {
+      my_free(table);
+
+      if (error == OPEN_FRM_DISCOVER)
+        (void) ot_ctx->request_backoff_action(Open_table_context::OT_DISCOVER,
+                                              table_list);
+      else if (share->crashed)
+      {
+        if (!(flags & MYSQL_OPEN_IGNORE_REPAIR))
+          (void) ot_ctx->request_backoff_action(Open_table_context::OT_REPAIR,
+                                                table_list);
+        else
+          table_list->crashed= 1;  /* Mark that table was crashed */
+      }
+      goto err_lock;
+    }
+    if (open_table_entry_fini(thd, share, table))
+    {
+      closefrm(table);
+      my_free(table);
+      goto err_lock;
+    }
+
+    /* Add table to the share's used tables list. */
+    tc_add_table(thd, table);
+    from_share= true;
+  }
+
+  table->mdl_ticket= mdl_ticket;
+  table->reginfo.lock_type=TL_READ;		/* Assume read */
+
+  table->init(thd, table_list);
+
+  table->next= thd->open_tables;		/* Link into simple list */
+  thd->set_open_tables(table);
+
+ reset:
+  /*
+    Check that there is no reference to a condition from an earlier query
+    (cf. Bug#58553). 
+  */
+  DBUG_ASSERT(table->file->pushed_cond == NULL);
+  table_list->updatable= 1; // It is not derived table nor non-updatable VIEW
+  table_list->table= table;
+
+  if (!from_share && table->vcol_fix_expr(thd))
+    DBUG_RETURN(true);
+
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+  if (unlikely(table->part_info))
+  {
+    /* Partitions specified were incorrect.*/
+    if (part_names_error)
+    {
+      table->file->print_error(part_names_error, MYF(0));
+      DBUG_RETURN(true);
+    }
+  }
+  else if (table_list->partition_names)
+  {
+    /* Don't allow PARTITION () clause on a nonpartitioned table */
+    my_error(ER_PARTITION_CLAUSE_ON_NONPARTITIONED, MYF(0));
+    DBUG_RETURN(true);
+  }
+#endif
+  if (table_list->sequence && table->s->table_type != TABLE_TYPE_SEQUENCE)
+  {
+    my_error(ER_NOT_SEQUENCE, MYF(0), table_list->db.str, table_list->alias.str);
+    DBUG_RETURN(true);
+  }
+
+  DBUG_RETURN(FALSE);
+
+err_lock:
+  tdc_release_share(share);
+
+  DBUG_PRINT(""exit"", (""failed""));
+  DBUG_RETURN(TRUE);
+}",
+550,"[""CWE-416""]",server,c05fd700970ad45735caed3a6f9930d4ce19a3bd,c05fd700970ad45735caed3a6f9930d4ce19a3bd,0,513202,1.0913858913332936e+38,14.0,MDEV-26323 use-after-poison issue of MariaDB server,other,"static void fix_dl_name(MEM_ROOT *root, LEX_STRING *dl)
+{
+  const size_t so_ext_len= sizeof(SO_EXT) - 1;
+  if (my_strcasecmp(&my_charset_latin1, dl->str + dl->length - so_ext_len,
+                    SO_EXT))
+  {
+    char *s= (char*)alloc_root(root, dl->length + so_ext_len + 1);
+    memcpy(s, dl->str, dl->length);
+    strcpy(s + dl->length, SO_EXT);
+    dl->str= s;
+    dl->length+= so_ext_len;
+  }
+}","static void fix_dl_name(MEM_ROOT *root, LEX_STRING *dl)
+{
+  const size_t so_ext_len= sizeof(SO_EXT) - 1;
+  if (dl->length < so_ext_len ||
+      my_strcasecmp(&my_charset_latin1, dl->str + dl->length - so_ext_len,
+                    SO_EXT))
+  {
+    char *s= (char*)alloc_root(root, dl->length + so_ext_len + 1);
+    memcpy(s, dl->str, dl->length);
+    strcpy(s + dl->length, SO_EXT);
+    dl->str= s;
+    dl->length+= so_ext_len;
+  }
+}",
+2622,"[""CWE-416""]",server,eef21014898d61e77890359d6546d4985d829ef6,eef21014898d61e77890359d6546d4985d829ef6,0,504113,1.4259913961016325e+38,16.0,"MDEV-11933 Wrong usage of linked list in mysql_prune_stmt_list
+
+mysql_prune_stmt_list() was walking the list following
+element->next pointers, but inside the loop it was invoking
+list_add(element) that modified element->next. So, mysql_prune_stmt_list()
+failed to visit and reset all elements, and some of them were left
+with pointers to invalid MYSQL.",other,"static void mysql_prune_stmt_list(MYSQL *mysql)
+{
+  LIST *element= mysql->stmts;
+  LIST *pruned_list= 0;
+
+  for (; element; element= element->next)
+  {
+    MYSQL_STMT *stmt= (MYSQL_STMT *) element->data;
+    if (stmt->state != MYSQL_STMT_INIT_DONE)
+    {
+      stmt->mysql= 0;
+      stmt->last_errno= CR_SERVER_LOST;
+      strmov(stmt->last_error, ER(CR_SERVER_LOST));
+      strmov(stmt->sqlstate, unknown_sqlstate);
+    }
+    else
+    {
+      pruned_list= list_add(pruned_list, element);
+    }
+  }
+
+  mysql->stmts= pruned_list;
+}","static void mysql_prune_stmt_list(MYSQL *mysql)
+{
+  LIST *element= mysql->stmts;
+  for (; element; element= element->next)
+  {
+    MYSQL_STMT *stmt= (MYSQL_STMT *) element->data;
+    if (stmt->state != MYSQL_STMT_INIT_DONE)
+    {
+      stmt->mysql= 0;
+      stmt->last_errno= CR_SERVER_LOST;
+      strmov(stmt->last_error, ER(CR_SERVER_LOST));
+      strmov(stmt->sqlstate, unknown_sqlstate);
+      mysql->stmts= list_delete(mysql->stmts, element);
+    }
+  }
+}",
+2645,"[""CWE-416""]",node,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,0,506890,1.3825095897507762e+38,23.0,"src: use unique_ptr for WriteWrap
+
+This commit attempts to avoid a use-after-free error by using unqiue_ptr
+and passing a reference to it.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+PR-URL: https://github.com/nodejs-private/node-private/pull/238
+Reviewed-By: Michael Dawson <midawson@redhat.com>
+Reviewed-By: Tobias Nießen <tniessen@tnie.de>
+Reviewed-By: Richard Lau <rlau@redhat.com>",other,"int Http2Stream::DoWrite(WriteWrap* req_wrap,
+                         uv_buf_t* bufs,
+                         size_t nbufs,
+                         uv_stream_t* send_handle) {
+  CHECK_NULL(send_handle);
+  Http2Scope h2scope(this);
+  if (!IsWritable() || IsDestroyed()) {
+    req_wrap->Done(UV_EOF);
+    return 0;
+  }
+  Debug(this, ""queuing %d buffers to send"", id_, nbufs);
+  for (size_t i = 0; i < nbufs; ++i) {
+    // Store the req_wrap on the last write info in the queue, so that it is
+    // only marked as finished once all buffers associated with it are finished.
+    queue_.emplace(nghttp2_stream_write {
+      i == nbufs - 1 ? req_wrap : nullptr,
+      bufs[i]
+    });
+    IncrementAvailableOutboundLength(bufs[i].len);
+  }
+  CHECK_NE(nghttp2_session_resume_data(**session_, id_), NGHTTP2_ERR_NOMEM);
+  return 0;
+}","int Http2Stream::DoWrite(std::unique_ptr<WriteWrap>& req_wrap,
+                         uv_buf_t* bufs,
+                         size_t nbufs,
+                         uv_stream_t* send_handle) {
+  CHECK_NULL(send_handle);
+  Http2Scope h2scope(this);
+  if (!IsWritable() || IsDestroyed()) {
+    req_wrap->Done(UV_EOF);
+    return 0;
+  }
+  Debug(this, ""queuing %d buffers to send"", id_, nbufs);
+  for (size_t i = 0; i < nbufs; ++i) {
+    // Store the req_wrap on the last write info in the queue, so that it is
+    // only marked as finished once all buffers associated with it are finished.
+    queue_.emplace(nghttp2_stream_write {
+      i == nbufs - 1 ? req_wrap.get() : nullptr,
+      bufs[i]
+    });
+    IncrementAvailableOutboundLength(bufs[i].len);
+  }
+  CHECK_NE(nghttp2_session_resume_data(**session_, id_), NGHTTP2_ERR_NOMEM);
+  return 0;
+}",
+2646,"[""CWE-416""]",node,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,0,506991,3.46579875612198e+37,6.0,"src: use unique_ptr for WriteWrap
+
+This commit attempts to avoid a use-after-free error by using unqiue_ptr
+and passing a reference to it.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+PR-URL: https://github.com/nodejs-private/node-private/pull/238
+Reviewed-By: Michael Dawson <midawson@redhat.com>
+Reviewed-By: Tobias Nießen <tniessen@tnie.de>
+Reviewed-By: Richard Lau <rlau@redhat.com>",other,"  int DoWrite(WriteWrap* w,
+              uv_buf_t* bufs,
+              size_t count,
+              uv_stream_t* send_handle) override {
+    return UV_ENOSYS;  // Not implemented (yet).
+  }","  int DoWrite(std::unique_ptr<WriteWrap>& w,
+              uv_buf_t* bufs,
+              size_t count,
+              uv_stream_t* send_handle) override {
+    return UV_ENOSYS;  // Not implemented (yet).
+  }",
+2647,"[""CWE-416""]",node,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,0,507020,2.575772447188852e+38,33.0,"src: use unique_ptr for WriteWrap
+
+This commit attempts to avoid a use-after-free error by using unqiue_ptr
+and passing a reference to it.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+PR-URL: https://github.com/nodejs-private/node-private/pull/238
+Reviewed-By: Michael Dawson <midawson@redhat.com>
+Reviewed-By: Tobias Nießen <tniessen@tnie.de>
+Reviewed-By: Richard Lau <rlau@redhat.com>",other,"int JSStream::DoWrite(WriteWrap* w,
+                      uv_buf_t* bufs,
+                      size_t count,
+                      uv_stream_t* send_handle) {
+  CHECK_NULL(send_handle);
+
+  HandleScope scope(env()->isolate());
+  Context::Scope context_scope(env()->context());
+
+  Local<Array> bufs_arr = Array::New(env()->isolate(), count);
+  Local<Object> buf;
+  for (size_t i = 0; i < count; i++) {
+    buf = Buffer::Copy(env(), bufs[i].base, bufs[i].len).ToLocalChecked();
+    bufs_arr->Set(i, buf);
+  }
+
+  Local<Value> argv[] = {
+    w->object(),
+    bufs_arr
+  };
+
+  TryCatch try_catch(env()->isolate());
+  Local<Value> value;
+  int value_int = UV_EPROTO;
+  if (!MakeCallback(env()->onwrite_string(),
+                    arraysize(argv),
+                    argv).ToLocal(&value) ||
+      !value->Int32Value(env()->context()).To(&value_int)) {
+    if (!try_catch.HasTerminated())
+      FatalException(env()->isolate(), try_catch);
+  }
+  return value_int;
+}","int JSStream::DoWrite(std::unique_ptr<WriteWrap>& w,
+                      uv_buf_t* bufs,
+                      size_t count,
+                      uv_stream_t* send_handle) {
+  CHECK_NULL(send_handle);
+
+  HandleScope scope(env()->isolate());
+  Context::Scope context_scope(env()->context());
+
+  Local<Array> bufs_arr = Array::New(env()->isolate(), count);
+  Local<Object> buf;
+  for (size_t i = 0; i < count; i++) {
+    buf = Buffer::Copy(env(), bufs[i].base, bufs[i].len).ToLocalChecked();
+    bufs_arr->Set(i, buf);
+  }
+
+  Local<Value> argv[] = {
+    w.get()->object(),
+    bufs_arr
+  };
+
+  TryCatch try_catch(env()->isolate());
+  Local<Value> value;
+  int value_int = UV_EPROTO;
+  if (!MakeCallback(env()->onwrite_string(),
+                    arraysize(argv),
+                    argv).ToLocal(&value) ||
+      !value->Int32Value(env()->context()).To(&value_int)) {
+    if (!try_catch.HasTerminated())
+      FatalException(env()->isolate(), try_catch);
+  }
+  return value_int;
+}",
+2648,"[""CWE-416""]",node,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,0,507040,2.2071816557487337e+38,30.0,"src: use unique_ptr for WriteWrap
+
+This commit attempts to avoid a use-after-free error by using unqiue_ptr
+and passing a reference to it.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+PR-URL: https://github.com/nodejs-private/node-private/pull/238
+Reviewed-By: Michael Dawson <midawson@redhat.com>
+Reviewed-By: Tobias Nießen <tniessen@tnie.de>
+Reviewed-By: Richard Lau <rlau@redhat.com>",other,"int LibuvStreamWrap::DoWrite(WriteWrap* req_wrap,
+                             uv_buf_t* bufs,
+                             size_t count,
+                             uv_stream_t* send_handle) {
+  LibuvWriteWrap* w = static_cast<LibuvWriteWrap*>(req_wrap);
+  int r;
+  if (send_handle == nullptr) {
+    r = w->Dispatch(uv_write, stream(), bufs, count, AfterUvWrite);
+  } else {
+    r = w->Dispatch(uv_write2,
+                    stream(),
+                    bufs,
+                    count,
+                    send_handle,
+                    AfterUvWrite);
+  }
+
+  if (!r) {
+    size_t bytes = 0;
+    for (size_t i = 0; i < count; i++)
+      bytes += bufs[i].len;
+    if (stream()->type == UV_TCP) {
+      NODE_COUNT_NET_BYTES_SENT(bytes);
+    } else if (stream()->type == UV_NAMED_PIPE) {
+      NODE_COUNT_PIPE_BYTES_SENT(bytes);
+    }
+  }
+
+  return r;
+}","int LibuvStreamWrap::DoWrite(std::unique_ptr<WriteWrap>& req_wrap,
+                             uv_buf_t* bufs,
+                             size_t count,
+                             uv_stream_t* send_handle) {
+  LibuvWriteWrap* w = static_cast<LibuvWriteWrap*>(req_wrap.get());
+  int r;
+  if (send_handle == nullptr) {
+    r = w->Dispatch(uv_write, stream(), bufs, count, AfterUvWrite);
+  } else {
+    r = w->Dispatch(uv_write2,
+                    stream(),
+                    bufs,
+                    count,
+                    send_handle,
+                    AfterUvWrite);
+  }
+
+  if (!r) {
+    size_t bytes = 0;
+    for (size_t i = 0; i < count; i++)
+      bytes += bufs[i].len;
+    if (stream()->type == UV_TCP) {
+      NODE_COUNT_NET_BYTES_SENT(bytes);
+    } else if (stream()->type == UV_NAMED_PIPE) {
+      NODE_COUNT_PIPE_BYTES_SENT(bytes);
+    }
+  }
+
+  return r;
+}",
+2649,"[""CWE-416""]",node,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,0,506891,1.3159542334058832e+38,48.0,"src: use unique_ptr for WriteWrap
+
+This commit attempts to avoid a use-after-free error by using unqiue_ptr
+and passing a reference to it.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+PR-URL: https://github.com/nodejs-private/node-private/pull/238
+Reviewed-By: Michael Dawson <midawson@redhat.com>
+Reviewed-By: Tobias Nießen <tniessen@tnie.de>
+Reviewed-By: Richard Lau <rlau@redhat.com>",other,"inline StreamWriteResult StreamBase::Write(
+    uv_buf_t* bufs,
+    size_t count,
+    uv_stream_t* send_handle,
+    v8::Local<v8::Object> req_wrap_obj) {
+  Environment* env = stream_env();
+  int err;
+
+  size_t total_bytes = 0;
+  for (size_t i = 0; i < count; ++i)
+    total_bytes += bufs[i].len;
+  bytes_written_ += total_bytes;
+
+  if (send_handle == nullptr) {
+    err = DoTryWrite(&bufs, &count);
+    if (err != 0 || count == 0) {
+      return StreamWriteResult { false, err, nullptr, total_bytes };
+    }
+  }
+
+  HandleScope handle_scope(env->isolate());
+
+  if (req_wrap_obj.IsEmpty()) {
+    req_wrap_obj =
+        env->write_wrap_template()
+            ->NewInstance(env->context()).ToLocalChecked();
+    StreamReq::ResetObject(req_wrap_obj);
+  }
+
+  AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(GetAsyncWrap());
+  WriteWrap* req_wrap = CreateWriteWrap(req_wrap_obj);
+
+  err = DoWrite(req_wrap, bufs, count, send_handle);
+  bool async = err == 0;
+
+  if (!async) {
+    req_wrap->Dispose();
+    req_wrap = nullptr;
+  }
+
+  const char* msg = Error();
+  if (msg != nullptr) {
+    req_wrap_obj->Set(env->error_string(), OneByteString(env->isolate(), msg));
+    ClearError();
+  }
+
+  return StreamWriteResult { async, err, req_wrap, total_bytes };
+}","inline StreamWriteResult StreamBase::Write(
+    uv_buf_t* bufs,
+    size_t count,
+    uv_stream_t* send_handle,
+    v8::Local<v8::Object> req_wrap_obj) {
+  Environment* env = stream_env();
+  int err;
+
+  size_t total_bytes = 0;
+  for (size_t i = 0; i < count; ++i)
+    total_bytes += bufs[i].len;
+  bytes_written_ += total_bytes;
+
+  if (send_handle == nullptr) {
+    err = DoTryWrite(&bufs, &count);
+    if (err != 0 || count == 0) {
+      return StreamWriteResult { false, err, nullptr, total_bytes };
+    }
+  }
+
+  HandleScope handle_scope(env->isolate());
+
+  if (req_wrap_obj.IsEmpty()) {
+    req_wrap_obj =
+        env->write_wrap_template()
+            ->NewInstance(env->context()).ToLocalChecked();
+    StreamReq::ResetObject(req_wrap_obj);
+  }
+
+  AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(GetAsyncWrap());
+  std::unique_ptr<WriteWrap> req_wrap{CreateWriteWrap(req_wrap_obj)};
+
+  err = DoWrite(req_wrap, bufs, count, send_handle);
+  bool async = err == 0;
+
+  if (!async && req_wrap != nullptr) {
+    req_wrap->Dispose();
+    req_wrap.release();
+  }
+
+  const char* msg = Error();
+  if (msg != nullptr) {
+    req_wrap_obj->Set(env->error_string(), OneByteString(env->isolate(), msg));
+    ClearError();
+  }
+
+  return StreamWriteResult { async, err, req_wrap.release(), total_bytes };
+}",
+2650,"[""CWE-416""]",node,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,7f178663ebffc82c9f8a5a1b6bf2da0c263a30ed,0,506856,3.0845472174469253e+38,105.0,"src: use unique_ptr for WriteWrap
+
+This commit attempts to avoid a use-after-free error by using unqiue_ptr
+and passing a reference to it.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+PR-URL: https://github.com/nodejs-private/node-private/pull/238
+Reviewed-By: Michael Dawson <midawson@redhat.com>
+Reviewed-By: Tobias Nießen <tniessen@tnie.de>
+Reviewed-By: Richard Lau <rlau@redhat.com>",other,"int TLSWrap::DoWrite(WriteWrap* w,
+                     uv_buf_t* bufs,
+                     size_t count,
+                     uv_stream_t* send_handle) {
+  CHECK_NULL(send_handle);
+  Debug(this, ""DoWrite()"");
+
+  if (ssl_ == nullptr) {
+    ClearError();
+    error_ = ""Write after DestroySSL"";
+    return UV_EPROTO;
+  }
+
+  size_t length = 0;
+  size_t i;
+  for (i = 0; i < count; i++)
+    length += bufs[i].len;
+
+  // We want to trigger a Write() on the underlying stream to drive the stream
+  // system, but don't want to encrypt empty buffers into a TLS frame, so see
+  // if we can find something to Write().
+  // First, call ClearOut(). It does an SSL_read(), which might cause handshake
+  // or other internal messages to be encrypted. If it does, write them later
+  // with EncOut().
+  // If there is still no encrypted output, call Write(bufs) on the underlying
+  // stream. Since the bufs are empty, it won't actually write non-TLS data
+  // onto the socket, we just want the side-effects. After, make sure the
+  // WriteWrap was accepted by the stream, or that we call Done() on it.
+  if (length == 0) {
+    Debug(this, ""Empty write"");
+    ClearOut();
+    if (BIO_pending(enc_out_) == 0) {
+      Debug(this, ""No pending encrypted output, writing to underlying stream"");
+      CHECK_NULL(current_empty_write_);
+      current_empty_write_ = w;
+      StreamWriteResult res =
+          underlying_stream()->Write(bufs, count, send_handle);
+      if (!res.async) {
+        env()->SetImmediate([](Environment* env, void* data) {
+          TLSWrap* self = static_cast<TLSWrap*>(data);
+          self->OnStreamAfterWrite(self->current_empty_write_, 0);
+        }, this, object());
+      }
+      return 0;
+    }
+  }
+
+  // Store the current write wrap
+  CHECK_NULL(current_write_);
+  current_write_ = w;
+
+  // Write encrypted data to underlying stream and call Done().
+  if (length == 0) {
+    EncOut();
+    return 0;
+  }
+
+  std::vector<char> data;
+  crypto::MarkPopErrorOnReturn mark_pop_error_on_return;
+
+  int written = 0;
+  if (count != 1) {
+    data = std::vector<char>(length);
+    size_t offset = 0;
+    for (i = 0; i < count; i++) {
+      memcpy(data.data() + offset, bufs[i].base, bufs[i].len);
+      offset += bufs[i].len;
+    }
+    written = SSL_write(ssl_.get(), data.data(), length);
+  } else {
+    // Only one buffer: try to write directly, only store if it fails
+    written = SSL_write(ssl_.get(), bufs[0].base, bufs[0].len);
+    if (written == -1) {
+      data = std::vector<char>(length);
+      memcpy(data.data(), bufs[0].base, bufs[0].len);
+    }
+  }
+
+  CHECK(written == -1 || written == static_cast<int>(length));
+  Debug(this, ""Writing %zu bytes, written = %d"", length, written);
+
+  if (written == -1) {
+    int err;
+    Local<Value> arg = GetSSLError(written, &err, &error_);
+
+    // If we stopped writing because of an error, it's fatal, discard the data.
+    if (!arg.IsEmpty()) {
+      Debug(this, ""Got SSL error (%d), returning UV_EPROTO"", err);
+      current_write_ = nullptr;
+      return UV_EPROTO;
+    }
+
+    Debug(this, ""Saving data for later write"");
+    // Otherwise, save unwritten data so it can be written later by ClearIn().
+    CHECK_EQ(pending_cleartext_input_.size(), 0);
+    pending_cleartext_input_ = std::move(data);
+  }
+
+  // Write any encrypted/handshake output that may be ready.
+  EncOut();
+
+  return 0;
+}","int TLSWrap::DoWrite(std::unique_ptr<WriteWrap>& w,
+                     uv_buf_t* bufs,
+                     size_t count,
+                     uv_stream_t* send_handle) {
+  CHECK_NULL(send_handle);
+  Debug(this, ""DoWrite()"");
+
+  if (ssl_ == nullptr) {
+    ClearError();
+    error_ = ""Write after DestroySSL"";
+    return UV_EPROTO;
+  }
+
+  size_t length = 0;
+  size_t i;
+  for (i = 0; i < count; i++)
+    length += bufs[i].len;
+
+  // We want to trigger a Write() on the underlying stream to drive the stream
+  // system, but don't want to encrypt empty buffers into a TLS frame, so see
+  // if we can find something to Write().
+  // First, call ClearOut(). It does an SSL_read(), which might cause handshake
+  // or other internal messages to be encrypted. If it does, write them later
+  // with EncOut().
+  // If there is still no encrypted output, call Write(bufs) on the underlying
+  // stream. Since the bufs are empty, it won't actually write non-TLS data
+  // onto the socket, we just want the side-effects. After, make sure the
+  // WriteWrap was accepted by the stream, or that we call Done() on it.
+  if (length == 0) {
+    Debug(this, ""Empty write"");
+    ClearOut();
+    if (BIO_pending(enc_out_) == 0) {
+      Debug(this, ""No pending encrypted output, writing to underlying stream"");
+      CHECK_NULL(current_empty_write_);
+      current_empty_write_ = w.get();
+      StreamWriteResult res =
+          underlying_stream()->Write(bufs, count, send_handle);
+      if (!res.async) {
+        env()->SetImmediate([](Environment* env, void* data) {
+          TLSWrap* self = static_cast<TLSWrap*>(data);
+          self->OnStreamAfterWrite(self->current_empty_write_, 0);
+        }, this, object());
+      }
+      return 0;
+    }
+  }
+
+  // Store the current write wrap
+  CHECK_NULL(current_write_);
+  current_write_ = std::move(w);
+
+  // Write encrypted data to underlying stream and call Done().
+  if (length == 0) {
+    EncOut();
+    return 0;
+  }
+
+  std::vector<char> data;
+  crypto::MarkPopErrorOnReturn mark_pop_error_on_return;
+
+  int written = 0;
+  if (count != 1) {
+    data = std::vector<char>(length);
+    size_t offset = 0;
+    for (i = 0; i < count; i++) {
+      memcpy(data.data() + offset, bufs[i].base, bufs[i].len);
+      offset += bufs[i].len;
+    }
+    written = SSL_write(ssl_.get(), data.data(), length);
+  } else {
+    // Only one buffer: try to write directly, only store if it fails
+    written = SSL_write(ssl_.get(), bufs[0].base, bufs[0].len);
+    if (written == -1) {
+      data = std::vector<char>(length);
+      memcpy(data.data(), bufs[0].base, bufs[0].len);
+    }
+  }
+
+  CHECK(written == -1 || written == static_cast<int>(length));
+  Debug(this, ""Writing %zu bytes, written = %d"", length, written);
+
+  if (written == -1) {
+    int err;
+    Local<Value> arg = GetSSLError(written, &err, &error_);
+
+    // If we stopped writing because of an error, it's fatal, discard the data.
+    if (!arg.IsEmpty()) {
+      Debug(this, ""Got SSL error (%d), returning UV_EPROTO"", err);
+      current_write_.release();
+      return UV_EPROTO;
+    }
+
+    Debug(this, ""Saving data for later write"");
+    // Otherwise, save unwritten data so it can be written later by ClearIn().
+    CHECK_EQ(pending_cleartext_input_.size(), 0);
+    pending_cleartext_input_ = std::move(data);
+  }
+
+  // Write any encrypted/handshake output that may be ready.
+  EncOut();
+
+  w.reset(current_write_.get());
+
+  return 0;
+}",
+2651,"[""CWE-416""]",node,4f8772f9b731118628256189b73cd202149bbd97,4f8772f9b731118628256189b73cd202149bbd97,0,507120,2.69355021279128e+37,54.0,"src: retain pointers to WriteWrap/ShutdownWrap
+
+Avoids potential use-after-free when wrap req's are synchronously
+destroyed.
+
+CVE-ID: CVE-2020-8265
+Fixes: https://github.com/nodejs-private/node-private/issues/227
+Refs: https://hackerone.com/bugs?subject=nodejs&report_id=988103
+PR-URL: https://github.com/nodejs-private/node-private/pull/23
+Reviewed-By: Anna Henningsen <anna@addaleax.net>
+Reviewed-By: Matteo Collina <matteo.collina@gmail.com>
+Reviewed-By: Rich Trott <rtrott@gmail.com>",other,"StreamWriteResult StreamBase::Write(
+    uv_buf_t* bufs,
+    size_t count,
+    uv_stream_t* send_handle,
+    v8::Local<v8::Object> req_wrap_obj) {
+  Environment* env = stream_env();
+  int err;
+
+  size_t total_bytes = 0;
+  for (size_t i = 0; i < count; ++i)
+    total_bytes += bufs[i].len;
+  bytes_written_ += total_bytes;
+
+  if (send_handle == nullptr) {
+    err = DoTryWrite(&bufs, &count);
+    if (err != 0 || count == 0) {
+      return StreamWriteResult { false, err, nullptr, total_bytes };
+    }
+  }
+
+  v8::HandleScope handle_scope(env->isolate());
+
+  if (req_wrap_obj.IsEmpty()) {
+    if (!env->write_wrap_template()
+             ->NewInstance(env->context())
+             .ToLocal(&req_wrap_obj)) {
+      return StreamWriteResult { false, UV_EBUSY, nullptr, 0 };
+    }
+    StreamReq::ResetObject(req_wrap_obj);
+  }
+
+  AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(GetAsyncWrap());
+  WriteWrap* req_wrap = CreateWriteWrap(req_wrap_obj);
+
+  err = DoWrite(req_wrap, bufs, count, send_handle);
+  bool async = err == 0;
+
+  if (!async) {
+    req_wrap->Dispose();
+    req_wrap = nullptr;
+  }
+
+  const char* msg = Error();
+  if (msg != nullptr) {
+    req_wrap_obj->Set(env->context(),
+                      env->error_string(),
+                      OneByteString(env->isolate(), msg)).Check();
+    ClearError();
+  }
+
+  return StreamWriteResult { async, err, req_wrap, total_bytes };
+}","StreamWriteResult StreamBase::Write(
+    uv_buf_t* bufs,
+    size_t count,
+    uv_stream_t* send_handle,
+    v8::Local<v8::Object> req_wrap_obj) {
+  Environment* env = stream_env();
+  int err;
+
+  size_t total_bytes = 0;
+  for (size_t i = 0; i < count; ++i)
+    total_bytes += bufs[i].len;
+  bytes_written_ += total_bytes;
+
+  if (send_handle == nullptr) {
+    err = DoTryWrite(&bufs, &count);
+    if (err != 0 || count == 0) {
+      return StreamWriteResult { false, err, nullptr, total_bytes, {} };
+    }
+  }
+
+  v8::HandleScope handle_scope(env->isolate());
+
+  if (req_wrap_obj.IsEmpty()) {
+    if (!env->write_wrap_template()
+             ->NewInstance(env->context())
+             .ToLocal(&req_wrap_obj)) {
+      return StreamWriteResult { false, UV_EBUSY, nullptr, 0, {} };
+    }
+    StreamReq::ResetObject(req_wrap_obj);
+  }
+
+  AsyncHooks::DefaultTriggerAsyncIdScope trigger_scope(GetAsyncWrap());
+  WriteWrap* req_wrap = CreateWriteWrap(req_wrap_obj);
+  BaseObjectPtr<AsyncWrap> req_wrap_ptr(req_wrap->GetAsyncWrap());
+
+  err = DoWrite(req_wrap, bufs, count, send_handle);
+  bool async = err == 0;
+
+  if (!async) {
+    req_wrap->Dispose();
+    req_wrap = nullptr;
+  }
+
+  const char* msg = Error();
+  if (msg != nullptr) {
+    req_wrap_obj->Set(env->context(),
+                      env->error_string(),
+                      OneByteString(env->isolate(), msg)).Check();
+    ClearError();
+  }
+
+  return StreamWriteResult {
+      async, err, req_wrap, total_bytes, std::move(req_wrap_ptr) };
+}",
+2661,"[""CWE-416""]",node,a3c33d4ce78f74d1cf1765704af5b427aa3840a6,a3c33d4ce78f74d1cf1765704af5b427aa3840a6,0,507615,1.872384056615458e+38,33.0,"http2: update handling of rst_stream with error code NGHTTP2_CANCEL
+
+The PR updates the handling of rst_stream frames and adds all streams
+to the pending list on receiving rst frames with the error code
+NGHTTP2_CANCEL.
+
+The changes will remove dependency on the stream state that may allow
+bypassing the checks in certain cases. I think a better solution is to
+delay streams in all cases if rst_stream is received for the cancel
+events.
+
+The rst_stream frames can be received for protocol/connection error as
+well it should be handled immediately. Adding streams to the pending
+list in such cases may cause errors.
+
+CVE-ID: CVE-2021-22930
+Refs: https://nvd.nist.gov/vuln/detail/CVE-2021-22930
+PR-URL: https://github.com/nodejs/node/pull/39622
+Refs: https://github.com/nodejs/node/pull/39423
+Reviewed-By: Matteo Collina <matteo.collina@gmail.com>
+Reviewed-By: James M Snell <jasnell@gmail.com>
+Reviewed-By: Beth Griggs <bgriggs@redhat.com>",other,"void Http2Stream::SubmitRstStream(const uint32_t code) {
+  CHECK(!this->is_destroyed());
+  code_ = code;
+
+  // If RST_STREAM frame is received and stream is not writable
+  // because it is busy reading data, don't try force purging it.
+  // Instead add the stream to pending stream list and process
+  // the pending data when it is safe to do so. This is to avoid
+  // double free error due to unwanted behavior of nghttp2.
+  // Ref:https://github.com/nodejs/node/issues/38964
+
+  // Add stream to the pending list if it is received with scope
+  // below in the stack. The pending list may not get processed
+  // if RST_STREAM received is not in scope and added to the list
+  // causing endpoint to hang.
+  if (session_->is_in_scope() &&
+      !is_writable() && is_reading()) {
+    session_->AddPendingRstStream(id_);
+    return;
+  }
+
+
+  // If possible, force a purge of any currently pending data here to make sure
+  // it is sent before closing the stream. If it returns non-zero then we need
+  // to wait until the current write finishes and try again to avoid nghttp2
+  // behaviour where it prioritizes RstStream over everything else.
+  if (session_->SendPendingData() != 0) {
+    session_->AddPendingRstStream(id_);
+    return;
+  }
+
+  FlushRstStream();
+}","void Http2Stream::SubmitRstStream(const uint32_t code) {
+  CHECK(!this->is_destroyed());
+  code_ = code;
+
+  auto is_stream_cancel = [](const uint32_t code) {
+    return code == NGHTTP2_CANCEL;
+  };
+
+  // If RST_STREAM frame is received with error code NGHTTP2_CANCEL,
+  // add it to the pending list and don't force purge the data. It is
+  // to avoids the double free error due to unwanted behavior of nghttp2.
+
+  // Add stream to the pending list only if it is received with scope
+  // below in the stack. The pending list may not get processed
+  // if RST_STREAM received is not in scope and added to the list
+  // causing endpoint to hang.
+  if (session_->is_in_scope() && is_stream_cancel(code)) {
+      session_->AddPendingRstStream(id_);
+      return;
+  }
+
+
+  // If possible, force a purge of any currently pending data here to make sure
+  // it is sent before closing the stream. If it returns non-zero then we need
+  // to wait until the current write finishes and try again to avoid nghttp2
+  // behaviour where it prioritizes RstStream over everything else.
+  if (session_->SendPendingData() != 0) {
+    session_->AddPendingRstStream(id_);
+    return;
+  }
+
+  FlushRstStream();
+}",
+2671,"[""CWE-416""]",server,af810407f78b7f792a9bb8c47c8c532eb3b3a758,af810407f78b7f792a9bb8c47c8c532eb3b3a758,0,514535,1.404410645216933e+38,305.0,"MDEV-28098 incorrect key in ""dup value"" error after long unique
+
+reset errkey after using it, so that it wouldn't affect
+the next error message in the next statement",other,"void handler::print_error(int error, myf errflag)
+{
+  bool fatal_error= 0;
+  DBUG_ENTER(""handler::print_error"");
+  DBUG_PRINT(""enter"",(""error: %d"",error));
+
+  if (ha_thd()->transaction_rollback_request)
+  {
+    /* Ensure this becomes a true error */
+    errflag&= ~(ME_WARNING | ME_NOTE);
+  }
+
+  int textno= -1; // impossible value
+  switch (error) {
+  case EACCES:
+    textno=ER_OPEN_AS_READONLY;
+    break;
+  case EAGAIN:
+    textno=ER_FILE_USED;
+    break;
+  case ENOENT:
+  case ENOTDIR:
+  case ELOOP:
+    textno=ER_FILE_NOT_FOUND;
+    break;
+  case ENOSPC:
+  case HA_ERR_DISK_FULL:
+    textno= ER_DISK_FULL;
+    SET_FATAL_ERROR;                            // Ensure error is logged
+    break;
+  case HA_ERR_KEY_NOT_FOUND:
+  case HA_ERR_NO_ACTIVE_RECORD:
+  case HA_ERR_RECORD_DELETED:
+  case HA_ERR_END_OF_FILE:
+    /*
+      This errors is not not normally fatal (for example for reads). However
+      if you get it during an update or delete, then its fatal.
+      As the user is calling print_error() (which is not done on read), we
+      assume something when wrong with the update or delete.
+    */
+    SET_FATAL_ERROR;
+    textno=ER_KEY_NOT_FOUND;
+    break;
+  case HA_ERR_ABORTED_BY_USER:
+  {
+    DBUG_ASSERT(ha_thd()->killed);
+    ha_thd()->send_kill_message();
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_WRONG_MRG_TABLE_DEF:
+    textno=ER_WRONG_MRG_TABLE;
+    break;
+  case HA_ERR_FOUND_DUPP_KEY:
+  {
+    if (table)
+    {
+      uint key_nr=get_dup_key(error);
+      if ((int) key_nr >= 0 && key_nr < table->s->keys)
+      {
+        print_keydup_error(table, &table->key_info[key_nr], errflag);
+        DBUG_VOID_RETURN;
+      }
+    }
+    textno=ER_DUP_KEY;
+    break;
+  }
+  case HA_ERR_FOREIGN_DUPLICATE_KEY:
+  {
+    char rec_buf[MAX_KEY_LENGTH];
+    String rec(rec_buf, sizeof(rec_buf), system_charset_info);
+    /* Table is opened and defined at this point */
+
+    /*
+      Just print the subset of fields that are part of the first index,
+      printing the whole row from there is not easy.
+    */
+    key_unpack(&rec, table, &table->key_info[0]);
+
+    char child_table_name[NAME_LEN + 1];
+    char child_key_name[NAME_LEN + 1];
+    if (get_foreign_dup_key(child_table_name, sizeof(child_table_name),
+                            child_key_name, sizeof(child_key_name)))
+    {
+      my_error(ER_FOREIGN_DUPLICATE_KEY_WITH_CHILD_INFO, errflag,
+               table_share->table_name.str, rec.c_ptr_safe(),
+               child_table_name, child_key_name);
+      }
+    else
+    {
+      my_error(ER_FOREIGN_DUPLICATE_KEY_WITHOUT_CHILD_INFO, errflag,
+               table_share->table_name.str, rec.c_ptr_safe());
+    }
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_NULL_IN_SPATIAL:
+    my_error(ER_CANT_CREATE_GEOMETRY_OBJECT, errflag);
+    DBUG_VOID_RETURN;
+  case HA_ERR_FOUND_DUPP_UNIQUE:
+    textno=ER_DUP_UNIQUE;
+    break;
+  case HA_ERR_RECORD_CHANGED:
+    /*
+      This is not fatal error when using HANDLER interface
+      SET_FATAL_ERROR;
+    */
+    textno=ER_CHECKREAD;
+    break;
+  case HA_ERR_CRASHED:
+    SET_FATAL_ERROR;
+    textno=ER_NOT_KEYFILE;
+    break;
+  case HA_ERR_WRONG_IN_RECORD:
+    SET_FATAL_ERROR;
+    textno= ER_CRASHED_ON_USAGE;
+    break;
+  case HA_ERR_CRASHED_ON_USAGE:
+    SET_FATAL_ERROR;
+    textno=ER_CRASHED_ON_USAGE;
+    break;
+  case HA_ERR_NOT_A_TABLE:
+    textno= error;
+    break;
+  case HA_ERR_CRASHED_ON_REPAIR:
+    SET_FATAL_ERROR;
+    textno=ER_CRASHED_ON_REPAIR;
+    break;
+  case HA_ERR_OUT_OF_MEM:
+    textno=ER_OUT_OF_RESOURCES;
+    break;
+  case HA_ERR_WRONG_COMMAND:
+    my_error(ER_ILLEGAL_HA, MYF(0), table_type(), table_share->db.str,
+             table_share->table_name.str);
+    DBUG_VOID_RETURN;
+    break;
+  case HA_ERR_OLD_FILE:
+    textno=ER_OLD_KEYFILE;
+    break;
+  case HA_ERR_UNSUPPORTED:
+    textno=ER_UNSUPPORTED_EXTENSION;
+    break;
+  case HA_ERR_RECORD_FILE_FULL:
+  {
+    textno=ER_RECORD_FILE_FULL;
+    /* Write the error message to error log */
+    errflag|= ME_ERROR_LOG;
+    break;
+  }
+  case HA_ERR_INDEX_FILE_FULL:
+  {
+    textno=ER_INDEX_FILE_FULL;
+    /* Write the error message to error log */
+    errflag|= ME_ERROR_LOG;
+    break;
+  }
+  case HA_ERR_LOCK_WAIT_TIMEOUT:
+    textno=ER_LOCK_WAIT_TIMEOUT;
+    break;
+  case HA_ERR_LOCK_TABLE_FULL:
+    textno=ER_LOCK_TABLE_FULL;
+    break;
+  case HA_ERR_LOCK_DEADLOCK:
+  {
+    String str, full_err_msg(ER_DEFAULT(ER_LOCK_DEADLOCK), system_charset_info);
+
+    get_error_message(error, &str);
+    full_err_msg.append(str);
+    my_printf_error(ER_LOCK_DEADLOCK, ""%s"", errflag, full_err_msg.c_ptr_safe());
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_READ_ONLY_TRANSACTION:
+    textno=ER_READ_ONLY_TRANSACTION;
+    break;
+  case HA_ERR_CANNOT_ADD_FOREIGN:
+    textno=ER_CANNOT_ADD_FOREIGN;
+    break;
+  case HA_ERR_ROW_IS_REFERENCED:
+  {
+    String str;
+    get_error_message(error, &str);
+    my_printf_error(ER_ROW_IS_REFERENCED_2,
+                    ER(str.length() ? ER_ROW_IS_REFERENCED_2 : ER_ROW_IS_REFERENCED),
+                    errflag, str.c_ptr_safe());
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_NO_REFERENCED_ROW:
+  {
+    String str;
+    get_error_message(error, &str);
+    my_printf_error(ER_NO_REFERENCED_ROW_2,
+                    ER(str.length() ? ER_NO_REFERENCED_ROW_2 : ER_NO_REFERENCED_ROW),
+                    errflag, str.c_ptr_safe());
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_TABLE_DEF_CHANGED:
+    textno=ER_TABLE_DEF_CHANGED;
+    break;
+  case HA_ERR_NO_SUCH_TABLE:
+    my_error(ER_NO_SUCH_TABLE_IN_ENGINE, errflag, table_share->db.str,
+             table_share->table_name.str);
+    DBUG_VOID_RETURN;
+  case HA_ERR_RBR_LOGGING_FAILED:
+    textno= ER_BINLOG_ROW_LOGGING_FAILED;
+    break;
+  case HA_ERR_DROP_INDEX_FK:
+  {
+    const char *ptr= ""???"";
+    uint key_nr= get_dup_key(error);
+    if ((int) key_nr >= 0)
+      ptr= table->key_info[key_nr].name.str;
+    my_error(ER_DROP_INDEX_FK, errflag, ptr);
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_TABLE_NEEDS_UPGRADE:
+    textno= ER_TABLE_NEEDS_UPGRADE;
+    my_error(ER_TABLE_NEEDS_UPGRADE, errflag,
+             ""TABLE"", table_share->table_name.str);
+    DBUG_VOID_RETURN;
+  case HA_ERR_NO_PARTITION_FOUND:
+    textno=ER_WRONG_PARTITION_NAME;
+    break;
+  case HA_ERR_TABLE_READONLY:
+    textno= ER_OPEN_AS_READONLY;
+    break;
+  case HA_ERR_AUTOINC_READ_FAILED:
+    textno= ER_AUTOINC_READ_FAILED;
+    break;
+  case HA_ERR_AUTOINC_ERANGE:
+    textno= error;
+    my_error(textno, errflag, table->next_number_field->field_name.str,
+             table->in_use->get_stmt_da()->current_row_for_warning());
+    DBUG_VOID_RETURN;
+    break;
+  case HA_ERR_TOO_MANY_CONCURRENT_TRXS:
+    textno= ER_TOO_MANY_CONCURRENT_TRXS;
+    break;
+  case HA_ERR_INDEX_COL_TOO_LONG:
+    textno= ER_INDEX_COLUMN_TOO_LONG;
+    break;
+  case HA_ERR_NOT_IN_LOCK_PARTITIONS:
+    textno=ER_ROW_DOES_NOT_MATCH_GIVEN_PARTITION_SET;
+    break;
+  case HA_ERR_INDEX_CORRUPT:
+    textno= ER_INDEX_CORRUPT;
+    break;
+  case HA_ERR_UNDO_REC_TOO_BIG:
+    textno= ER_UNDO_RECORD_TOO_BIG;
+    break;
+  case HA_ERR_TABLE_IN_FK_CHECK:
+    textno= ER_TABLE_IN_FK_CHECK;
+    break;
+  case HA_ERR_PARTITION_LIST:
+    my_error(ER_VERS_NOT_ALLOWED, errflag, table->s->db.str, table->s->table_name.str);
+    DBUG_VOID_RETURN;
+  default:
+    {
+      /* The error was ""unknown"" to this function.
+	 Ask handler if it has got a message for this error */
+      bool temporary= FALSE;
+      String str;
+      temporary= get_error_message(error, &str);
+      if (!str.is_empty())
+      {
+	const char* engine= table_type();
+	if (temporary)
+	  my_error(ER_GET_TEMPORARY_ERRMSG, errflag, error, str.c_ptr(),
+                   engine);
+	else
+        {
+          SET_FATAL_ERROR;
+	  my_error(ER_GET_ERRMSG, errflag, error, str.c_ptr(), engine);
+        }
+      }
+      else
+        my_error(ER_GET_ERRNO, errflag, error, table_type());
+      DBUG_VOID_RETURN;
+    }
+  }
+  DBUG_ASSERT(textno > 0);
+  if (unlikely(fatal_error))
+  {
+    /* Ensure this becomes a true error */
+    errflag&= ~(ME_WARNING | ME_NOTE);
+    if ((debug_assert_if_crashed_table ||
+                      global_system_variables.log_warnings > 1))
+    {
+      /*
+        Log error to log before we crash or if extended warnings are requested
+      */
+      errflag|= ME_ERROR_LOG;
+    }
+  }
+
+  /* if we got an OS error from a file-based engine, specify a path of error */
+  if (error < HA_ERR_FIRST && bas_ext()[0])
+  {
+    char buff[FN_REFLEN];
+    strxnmov(buff, sizeof(buff),
+             table_share->normalized_path.str, bas_ext()[0], NULL);
+    my_error(textno, errflag, buff, error);
+  }
+  else
+    my_error(textno, errflag, table_share->table_name.str, error);
+  DBUG_VOID_RETURN;
+}","void handler::print_error(int error, myf errflag)
+{
+  bool fatal_error= 0;
+  DBUG_ENTER(""handler::print_error"");
+  DBUG_PRINT(""enter"",(""error: %d"",error));
+
+  if (ha_thd()->transaction_rollback_request)
+  {
+    /* Ensure this becomes a true error */
+    errflag&= ~(ME_WARNING | ME_NOTE);
+  }
+
+  int textno= -1; // impossible value
+  switch (error) {
+  case EACCES:
+    textno=ER_OPEN_AS_READONLY;
+    break;
+  case EAGAIN:
+    textno=ER_FILE_USED;
+    break;
+  case ENOENT:
+  case ENOTDIR:
+  case ELOOP:
+    textno=ER_FILE_NOT_FOUND;
+    break;
+  case ENOSPC:
+  case HA_ERR_DISK_FULL:
+    textno= ER_DISK_FULL;
+    SET_FATAL_ERROR;                            // Ensure error is logged
+    break;
+  case HA_ERR_KEY_NOT_FOUND:
+  case HA_ERR_NO_ACTIVE_RECORD:
+  case HA_ERR_RECORD_DELETED:
+  case HA_ERR_END_OF_FILE:
+    /*
+      This errors is not not normally fatal (for example for reads). However
+      if you get it during an update or delete, then its fatal.
+      As the user is calling print_error() (which is not done on read), we
+      assume something when wrong with the update or delete.
+    */
+    SET_FATAL_ERROR;
+    textno=ER_KEY_NOT_FOUND;
+    break;
+  case HA_ERR_ABORTED_BY_USER:
+  {
+    DBUG_ASSERT(ha_thd()->killed);
+    ha_thd()->send_kill_message();
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_WRONG_MRG_TABLE_DEF:
+    textno=ER_WRONG_MRG_TABLE;
+    break;
+  case HA_ERR_FOUND_DUPP_KEY:
+  {
+    if (table)
+    {
+      uint key_nr=get_dup_key(error);
+      if ((int) key_nr >= 0 && key_nr < table->s->keys)
+      {
+        print_keydup_error(table, &table->key_info[key_nr], errflag);
+        table->file->errkey= -1;
+        DBUG_VOID_RETURN;
+      }
+    }
+    textno=ER_DUP_KEY;
+    break;
+  }
+  case HA_ERR_FOREIGN_DUPLICATE_KEY:
+  {
+    char rec_buf[MAX_KEY_LENGTH];
+    String rec(rec_buf, sizeof(rec_buf), system_charset_info);
+    /* Table is opened and defined at this point */
+
+    /*
+      Just print the subset of fields that are part of the first index,
+      printing the whole row from there is not easy.
+    */
+    key_unpack(&rec, table, &table->key_info[0]);
+
+    char child_table_name[NAME_LEN + 1];
+    char child_key_name[NAME_LEN + 1];
+    if (get_foreign_dup_key(child_table_name, sizeof(child_table_name),
+                            child_key_name, sizeof(child_key_name)))
+    {
+      my_error(ER_FOREIGN_DUPLICATE_KEY_WITH_CHILD_INFO, errflag,
+               table_share->table_name.str, rec.c_ptr_safe(),
+               child_table_name, child_key_name);
+      }
+    else
+    {
+      my_error(ER_FOREIGN_DUPLICATE_KEY_WITHOUT_CHILD_INFO, errflag,
+               table_share->table_name.str, rec.c_ptr_safe());
+    }
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_NULL_IN_SPATIAL:
+    my_error(ER_CANT_CREATE_GEOMETRY_OBJECT, errflag);
+    DBUG_VOID_RETURN;
+  case HA_ERR_FOUND_DUPP_UNIQUE:
+    textno=ER_DUP_UNIQUE;
+    break;
+  case HA_ERR_RECORD_CHANGED:
+    /*
+      This is not fatal error when using HANDLER interface
+      SET_FATAL_ERROR;
+    */
+    textno=ER_CHECKREAD;
+    break;
+  case HA_ERR_CRASHED:
+    SET_FATAL_ERROR;
+    textno=ER_NOT_KEYFILE;
+    break;
+  case HA_ERR_WRONG_IN_RECORD:
+    SET_FATAL_ERROR;
+    textno= ER_CRASHED_ON_USAGE;
+    break;
+  case HA_ERR_CRASHED_ON_USAGE:
+    SET_FATAL_ERROR;
+    textno=ER_CRASHED_ON_USAGE;
+    break;
+  case HA_ERR_NOT_A_TABLE:
+    textno= error;
+    break;
+  case HA_ERR_CRASHED_ON_REPAIR:
+    SET_FATAL_ERROR;
+    textno=ER_CRASHED_ON_REPAIR;
+    break;
+  case HA_ERR_OUT_OF_MEM:
+    textno=ER_OUT_OF_RESOURCES;
+    break;
+  case HA_ERR_WRONG_COMMAND:
+    my_error(ER_ILLEGAL_HA, MYF(0), table_type(), table_share->db.str,
+             table_share->table_name.str);
+    DBUG_VOID_RETURN;
+    break;
+  case HA_ERR_OLD_FILE:
+    textno=ER_OLD_KEYFILE;
+    break;
+  case HA_ERR_UNSUPPORTED:
+    textno=ER_UNSUPPORTED_EXTENSION;
+    break;
+  case HA_ERR_RECORD_FILE_FULL:
+  {
+    textno=ER_RECORD_FILE_FULL;
+    /* Write the error message to error log */
+    errflag|= ME_ERROR_LOG;
+    break;
+  }
+  case HA_ERR_INDEX_FILE_FULL:
+  {
+    textno=ER_INDEX_FILE_FULL;
+    /* Write the error message to error log */
+    errflag|= ME_ERROR_LOG;
+    break;
+  }
+  case HA_ERR_LOCK_WAIT_TIMEOUT:
+    textno=ER_LOCK_WAIT_TIMEOUT;
+    break;
+  case HA_ERR_LOCK_TABLE_FULL:
+    textno=ER_LOCK_TABLE_FULL;
+    break;
+  case HA_ERR_LOCK_DEADLOCK:
+  {
+    String str, full_err_msg(ER_DEFAULT(ER_LOCK_DEADLOCK), system_charset_info);
+
+    get_error_message(error, &str);
+    full_err_msg.append(str);
+    my_printf_error(ER_LOCK_DEADLOCK, ""%s"", errflag, full_err_msg.c_ptr_safe());
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_READ_ONLY_TRANSACTION:
+    textno=ER_READ_ONLY_TRANSACTION;
+    break;
+  case HA_ERR_CANNOT_ADD_FOREIGN:
+    textno=ER_CANNOT_ADD_FOREIGN;
+    break;
+  case HA_ERR_ROW_IS_REFERENCED:
+  {
+    String str;
+    get_error_message(error, &str);
+    my_printf_error(ER_ROW_IS_REFERENCED_2,
+                    ER(str.length() ? ER_ROW_IS_REFERENCED_2 : ER_ROW_IS_REFERENCED),
+                    errflag, str.c_ptr_safe());
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_NO_REFERENCED_ROW:
+  {
+    String str;
+    get_error_message(error, &str);
+    my_printf_error(ER_NO_REFERENCED_ROW_2,
+                    ER(str.length() ? ER_NO_REFERENCED_ROW_2 : ER_NO_REFERENCED_ROW),
+                    errflag, str.c_ptr_safe());
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_TABLE_DEF_CHANGED:
+    textno=ER_TABLE_DEF_CHANGED;
+    break;
+  case HA_ERR_NO_SUCH_TABLE:
+    my_error(ER_NO_SUCH_TABLE_IN_ENGINE, errflag, table_share->db.str,
+             table_share->table_name.str);
+    DBUG_VOID_RETURN;
+  case HA_ERR_RBR_LOGGING_FAILED:
+    textno= ER_BINLOG_ROW_LOGGING_FAILED;
+    break;
+  case HA_ERR_DROP_INDEX_FK:
+  {
+    const char *ptr= ""???"";
+    uint key_nr= get_dup_key(error);
+    if ((int) key_nr >= 0)
+      ptr= table->key_info[key_nr].name.str;
+    my_error(ER_DROP_INDEX_FK, errflag, ptr);
+    DBUG_VOID_RETURN;
+  }
+  case HA_ERR_TABLE_NEEDS_UPGRADE:
+    textno= ER_TABLE_NEEDS_UPGRADE;
+    my_error(ER_TABLE_NEEDS_UPGRADE, errflag,
+             ""TABLE"", table_share->table_name.str);
+    DBUG_VOID_RETURN;
+  case HA_ERR_NO_PARTITION_FOUND:
+    textno=ER_WRONG_PARTITION_NAME;
+    break;
+  case HA_ERR_TABLE_READONLY:
+    textno= ER_OPEN_AS_READONLY;
+    break;
+  case HA_ERR_AUTOINC_READ_FAILED:
+    textno= ER_AUTOINC_READ_FAILED;
+    break;
+  case HA_ERR_AUTOINC_ERANGE:
+    textno= error;
+    my_error(textno, errflag, table->next_number_field->field_name.str,
+             table->in_use->get_stmt_da()->current_row_for_warning());
+    DBUG_VOID_RETURN;
+    break;
+  case HA_ERR_TOO_MANY_CONCURRENT_TRXS:
+    textno= ER_TOO_MANY_CONCURRENT_TRXS;
+    break;
+  case HA_ERR_INDEX_COL_TOO_LONG:
+    textno= ER_INDEX_COLUMN_TOO_LONG;
+    break;
+  case HA_ERR_NOT_IN_LOCK_PARTITIONS:
+    textno=ER_ROW_DOES_NOT_MATCH_GIVEN_PARTITION_SET;
+    break;
+  case HA_ERR_INDEX_CORRUPT:
+    textno= ER_INDEX_CORRUPT;
+    break;
+  case HA_ERR_UNDO_REC_TOO_BIG:
+    textno= ER_UNDO_RECORD_TOO_BIG;
+    break;
+  case HA_ERR_TABLE_IN_FK_CHECK:
+    textno= ER_TABLE_IN_FK_CHECK;
+    break;
+  case HA_ERR_PARTITION_LIST:
+    my_error(ER_VERS_NOT_ALLOWED, errflag, table->s->db.str, table->s->table_name.str);
+    DBUG_VOID_RETURN;
+  default:
+    {
+      /* The error was ""unknown"" to this function.
+	 Ask handler if it has got a message for this error */
+      bool temporary= FALSE;
+      String str;
+      temporary= get_error_message(error, &str);
+      if (!str.is_empty())
+      {
+	const char* engine= table_type();
+	if (temporary)
+	  my_error(ER_GET_TEMPORARY_ERRMSG, errflag, error, str.c_ptr(),
+                   engine);
+	else
+        {
+          SET_FATAL_ERROR;
+	  my_error(ER_GET_ERRMSG, errflag, error, str.c_ptr(), engine);
+        }
+      }
+      else
+        my_error(ER_GET_ERRNO, errflag, error, table_type());
+      DBUG_VOID_RETURN;
+    }
+  }
+  DBUG_ASSERT(textno > 0);
+  if (unlikely(fatal_error))
+  {
+    /* Ensure this becomes a true error */
+    errflag&= ~(ME_WARNING | ME_NOTE);
+    if ((debug_assert_if_crashed_table ||
+                      global_system_variables.log_warnings > 1))
+    {
+      /*
+        Log error to log before we crash or if extended warnings are requested
+      */
+      errflag|= ME_ERROR_LOG;
+    }
+  }
+
+  /* if we got an OS error from a file-based engine, specify a path of error */
+  if (error < HA_ERR_FIRST && bas_ext()[0])
+  {
+    char buff[FN_REFLEN];
+    strxnmov(buff, sizeof(buff),
+             table_share->normalized_path.str, bas_ext()[0], NULL);
+    my_error(textno, errflag, buff, error);
+  }
+  else
+    my_error(textno, errflag, table_share->table_name.str, error);
+  DBUG_VOID_RETURN;
+}",
+3250,"[""CWE-416""]",server,0beed9b5e933f0ff79b3bb346524f7a451d14e38,0beed9b5e933f0ff79b3bb346524f7a451d14e38,0,514568,1.9455967195457995e+38,81.0,"MDEV-28097 use-after-free when WHERE has subquery with an outer reference in HAVING
+
+when resolving WHERE and ON clauses, do not look in
+SELECT list/aliases.",other,"int setup_conds(THD *thd, TABLE_LIST *tables, List<TABLE_LIST> &leaves,
+                COND **conds)
+{
+  SELECT_LEX *select_lex= thd->lex->current_select;
+  TABLE_LIST *table= NULL;	// For HP compilers
+  /*
+    it_is_update set to TRUE when tables of primary SELECT_LEX (SELECT_LEX
+    which belong to LEX, i.e. most up SELECT) will be updated by
+    INSERT/UPDATE/LOAD
+    NOTE: using this condition helps to prevent call of prepare_check_option()
+    from subquery of VIEW, because tables of subquery belongs to VIEW
+    (see condition before prepare_check_option() call)
+  */
+  bool it_is_update= (select_lex == thd->lex->first_select_lex()) &&
+    thd->lex->which_check_option_applicable();
+  bool save_is_item_list_lookup= select_lex->is_item_list_lookup;
+  TABLE_LIST *derived= select_lex->master_unit()->derived;
+  DBUG_ENTER(""setup_conds"");
+
+  select_lex->is_item_list_lookup= 0;
+
+  thd->column_usage= MARK_COLUMNS_READ;
+  DBUG_PRINT(""info"", (""thd->column_usage: %d"", thd->column_usage));
+  select_lex->cond_count= 0;
+  select_lex->between_count= 0;
+  select_lex->max_equal_elems= 0;
+
+  for (table= tables; table; table= table->next_local)
+  {
+    if (select_lex == thd->lex->first_select_lex() &&
+        select_lex->first_cond_optimization &&
+        table->merged_for_insert &&
+        table->prepare_where(thd, conds, FALSE))
+      goto err_no_arena;
+  }
+
+  if (*conds)
+  {
+    thd->where=""where clause"";
+    DBUG_EXECUTE(""where"",
+                 print_where(*conds,
+                             ""WHERE in setup_conds"",
+                             QT_ORDINARY););
+    /*
+      Wrap alone field in WHERE clause in case it will be outer field of subquery
+      which need persistent pointer on it, but conds could be changed by optimizer
+    */
+    if ((*conds)->type() == Item::FIELD_ITEM && !derived)
+      wrap_ident(thd, conds);
+    (*conds)->mark_as_condition_AND_part(NO_JOIN_NEST);
+    if ((*conds)->fix_fields_if_needed_for_bool(thd, conds))
+      goto err_no_arena;
+  }
+
+  /*
+    Apply fix_fields() to all ON clauses at all levels of nesting,
+    including the ones inside view definitions.
+  */
+  if (setup_on_expr(thd, tables, it_is_update))
+    goto err_no_arena;
+
+  if (!thd->stmt_arena->is_conventional())
+  {
+    /*
+      We are in prepared statement preparation code => we should store
+      WHERE clause changing for next executions.
+
+      We do this ON -> WHERE transformation only once per PS/SP statement.
+    */
+    select_lex->where= *conds;
+  }
+  thd->lex->current_select->is_item_list_lookup= save_is_item_list_lookup;
+  DBUG_RETURN(thd->is_error());
+
+err_no_arena:
+  select_lex->is_item_list_lookup= save_is_item_list_lookup;
+  DBUG_RETURN(1);
+}","int setup_conds(THD *thd, TABLE_LIST *tables, List<TABLE_LIST> &leaves,
+                COND **conds)
+{
+  SELECT_LEX *select_lex= thd->lex->current_select;
+  TABLE_LIST *table= NULL;	// For HP compilers
+  /*
+    it_is_update set to TRUE when tables of primary SELECT_LEX (SELECT_LEX
+    which belong to LEX, i.e. most up SELECT) will be updated by
+    INSERT/UPDATE/LOAD
+    NOTE: using this condition helps to prevent call of prepare_check_option()
+    from subquery of VIEW, because tables of subquery belongs to VIEW
+    (see condition before prepare_check_option() call)
+  */
+  bool it_is_update= (select_lex == thd->lex->first_select_lex()) &&
+    thd->lex->which_check_option_applicable();
+  bool save_is_item_list_lookup= select_lex->is_item_list_lookup;
+  TABLE_LIST *derived= select_lex->master_unit()->derived;
+  bool save_resolve_in_select_list= select_lex->context.resolve_in_select_list;
+  DBUG_ENTER(""setup_conds"");
+
+  select_lex->is_item_list_lookup= 0;
+  select_lex->context.resolve_in_select_list= false;
+
+  thd->column_usage= MARK_COLUMNS_READ;
+  DBUG_PRINT(""info"", (""thd->column_usage: %d"", thd->column_usage));
+  select_lex->cond_count= 0;
+  select_lex->between_count= 0;
+  select_lex->max_equal_elems= 0;
+
+  for (table= tables; table; table= table->next_local)
+  {
+    if (select_lex == thd->lex->first_select_lex() &&
+        select_lex->first_cond_optimization &&
+        table->merged_for_insert &&
+        table->prepare_where(thd, conds, FALSE))
+      goto err_no_arena;
+  }
+
+  if (*conds)
+  {
+    thd->where=""where clause"";
+    DBUG_EXECUTE(""where"",
+                 print_where(*conds,
+                             ""WHERE in setup_conds"",
+                             QT_ORDINARY););
+    /*
+      Wrap alone field in WHERE clause in case it will be outer field of subquery
+      which need persistent pointer on it, but conds could be changed by optimizer
+    */
+    if ((*conds)->type() == Item::FIELD_ITEM && !derived)
+      wrap_ident(thd, conds);
+    (*conds)->mark_as_condition_AND_part(NO_JOIN_NEST);
+    if ((*conds)->fix_fields_if_needed_for_bool(thd, conds))
+      goto err_no_arena;
+  }
+
+  /*
+    Apply fix_fields() to all ON clauses at all levels of nesting,
+    including the ones inside view definitions.
+  */
+  if (setup_on_expr(thd, tables, it_is_update))
+    goto err_no_arena;
+
+  if (!thd->stmt_arena->is_conventional())
+  {
+    /*
+      We are in prepared statement preparation code => we should store
+      WHERE clause changing for next executions.
+
+      We do this ON -> WHERE transformation only once per PS/SP statement.
+    */
+    select_lex->where= *conds;
+  }
+  thd->lex->current_select->is_item_list_lookup= save_is_item_list_lookup;
+  select_lex->context.resolve_in_select_list= save_resolve_in_select_list;
+  DBUG_RETURN(thd->is_error());
+
+err_no_arena:
+  select_lex->is_item_list_lookup= save_is_item_list_lookup;
+  DBUG_RETURN(1);
+}",

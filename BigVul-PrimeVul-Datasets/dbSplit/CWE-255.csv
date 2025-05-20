@@ -1,0 +1,1687 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+1711,179447,,Remote,Single system,,CVE-2014-5351,https://www.cvedetails.com/cve/CVE-2014-5351/,CWE-255,High,Partial,,,2014-10-09,2.1,"The kadm5_randkey_principal_3 function in lib/kadm5/srv/svr_principal.c in kadmind in MIT Kerberos 5 (aka krb5) before 1.13 sends old keys in a response to a -randkey -keepold request, which allows remote authenticated users to forge tickets by leveraging administrative access.",2018-02-03,,4,https://github.com/krb5/krb5/commit/af0ed4df4dfae762ab5fb605f5a0c8f59cb4f6ca,af0ed4df4dfae762ab5fb605f5a0c8f59cb4f6ca,"Return only new keys in randkey [CVE-2014-5351]
+
+In kadmind's randkey operation, if a client specifies the keepold
+flag, do not include the preserved old keys in the response.
+
+CVE-2014-5351:
+
+An authenticated remote attacker can retrieve the current keys for a
+service principal when generating a new set of keys for that
+principal.  The attacker needs to be authenticated as a user who has
+the elevated privilege for randomizing the keys of other principals.
+
+Normally, when a Kerberos administrator randomizes the keys of a
+service principal, kadmind returns only the new keys.  This prevents
+an administrator who lacks legitimate privileged access to a service
+from forging tickets to authenticate to that service.  If the
+""keepold"" flag to the kadmin randkey RPC operation is true, kadmind
+retains the old keys in the KDC database as intended, but also
+unexpectedly returns the old keys to the client, which exposes the
+service to ticket forgery attacks from the administrator.
+
+A mitigating factor is that legitimate clients of the affected service
+will start failing to authenticate to the service once they begin to
+receive service tickets encrypted in the new keys.  The affected
+service will be unable to decrypt the newly issued tickets, possibly
+alerting the legitimate administrator of the affected service.
+
+CVSSv2: AV:N/AC:H/Au:S/C:P/I:N/A:N/E:POC/RL:OF/RC:C
+
+[tlyu@mit.edu: CVE description and CVSS score]
+
+ticket: 8018 (new)
+target_version: 1.13
+tags: pullup",3,src/lib/kadm5/srv/svr_principal.c,"{""sha"": ""d4e74cc267f441c52f99377a98ae852e4b2df14b"", ""filename"": ""src/lib/kadm5/srv/svr_principal.c"", ""status"": ""modified"", ""additions"": 18, ""deletions"": 3, ""changes"": 21, ""blob_url"": ""https://github.com/krb5/krb5/blob/af0ed4df4dfae762ab5fb605f5a0c8f59cb4f6ca/src/lib/kadm5/srv/svr_principal.c"", ""raw_url"": ""https://github.com/krb5/krb5/raw/af0ed4df4dfae762ab5fb605f5a0c8f59cb4f6ca/src/lib/kadm5/srv/svr_principal.c"", ""contents_url"": ""https://api.github.com/repos/krb5/krb5/contents/src/lib/kadm5/srv/svr_principal.c?ref=af0ed4df4dfae762ab5fb605f5a0c8f59cb4f6ca"", ""patch"": ""@@ -344,6 +344,20 @@ check_1_6_dummy(kadm5_principal_ent_t entry, long mask,\n     *passptr = NULL;\n }\n \n+/* Return the number of keys with the newest kvno.  Assumes that all key data\n+ * with the newest kvno are at the front of the key data array. */\n+static int\n+count_new_keys(int n_key_data, krb5_key_data *key_data)\n+{\n+    int n;\n+\n+    for (n = 1; n < n_key_data; n++) {\n+        if (key_data[n - 1].key_data_kvno != key_data[n].key_data_kvno)\n+            return n;\n+    }\n+    return n_key_data;\n+}\n+\n kadm5_ret_t\n kadm5_create_principal(void *server_handle,\n                        kadm5_principal_ent_t entry, long mask,\n@@ -1593,7 +1607,7 @@ kadm5_randkey_principal_3(void *server_handle,\n     osa_princ_ent_rec           adb;\n     krb5_int32                  now;\n     kadm5_policy_ent_rec        pol;\n-    int                         ret, last_pwd;\n+    int                         ret, last_pwd, n_new_keys;\n     krb5_boolean                have_pol = FALSE;\n     kadm5_server_handle_t       handle = server_handle;\n     krb5_keyblock               *act_mkey;\n@@ -1686,8 +1700,9 @@ kadm5_randkey_principal_3(void *server_handle,\n     kdb->fail_auth_count = 0;\n \n     if (keyblocks) {\n-        ret = decrypt_key_data(handle->context,\n-                               kdb->n_key_data, kdb->key_data,\n+        /* Return only the new keys added by krb5_dbe_crk. */\n+        n_new_keys = count_new_keys(kdb->n_key_data, kdb->key_data);\n+        ret = decrypt_key_data(handle->context, n_new_keys, kdb->key_data,\n                                keyblocks, n_keys);\n         if (ret)\n             goto done;""}","kadm5_randkey_principal_3(void *server_handle,
+                          krb5_principal principal,
+                          krb5_boolean keepold,
+                          int n_ks_tuple, krb5_key_salt_tuple *ks_tuple,
+                          krb5_keyblock **keyblocks,
+                          int *n_keys)
+{
+    krb5_db_entry               *kdb;
+     osa_princ_ent_rec           adb;
+     krb5_int32                  now;
+     kadm5_policy_ent_rec        pol;
+    int                         ret, last_pwd, n_new_keys;
+     krb5_boolean                have_pol = FALSE;
+     kadm5_server_handle_t       handle = server_handle;
+     krb5_keyblock               *act_mkey;
+    krb5_kvno                   act_kvno;
+    int                         new_n_ks_tuple = 0;
+    krb5_key_salt_tuple         *new_ks_tuple = NULL;
+
+    if (keyblocks)
+        *keyblocks = NULL;
+
+    CHECK_HANDLE(server_handle);
+
+    krb5_clear_error_message(handle->context);
+
+    if (principal == NULL)
+        return EINVAL;
+
+    if ((ret = kdb_get_entry(handle, principal, &kdb, &adb)))
+        return(ret);
+
+    ret = apply_keysalt_policy(handle, adb.policy, n_ks_tuple, ks_tuple,
+                               &new_n_ks_tuple, &new_ks_tuple);
+    if (ret)
+        goto done;
+
+    if (krb5_principal_compare(handle->context, principal, hist_princ)) {
+        /* If changing the history entry, the new entry must have exactly one
+         * key. */
+        if (keepold)
+            return KADM5_PROTECT_PRINCIPAL;
+        new_n_ks_tuple = 1;
+    }
+
+    ret = kdb_get_active_mkey(handle, &act_kvno, &act_mkey);
+    if (ret)
+        goto done;
+
+    ret = krb5_dbe_crk(handle->context, act_mkey, new_ks_tuple, new_n_ks_tuple,
+                       keepold, kdb);
+    if (ret)
+        goto done;
+
+    ret = krb5_dbe_update_mkvno(handle->context, kdb, act_kvno);
+    if (ret)
+        goto done;
+
+    kdb->attributes &= ~KRB5_KDB_REQUIRES_PWCHANGE;
+
+    ret = krb5_timeofday(handle->context, &now);
+    if (ret)
+        goto done;
+
+    if ((adb.aux_attributes & KADM5_POLICY)) {
+        ret = get_policy(handle, adb.policy, &pol, &have_pol);
+        if (ret)
+            goto done;
+    }
+    if (have_pol) {
+        ret = krb5_dbe_lookup_last_pwd_change(handle->context, kdb, &last_pwd);
+        if (ret)
+            goto done;
+
+#if 0
+        /*
+         * The spec says this check is overridden if the caller has
+         * modify privilege.  The admin server therefore makes this
+         * check itself (in chpass_principal_wrapper, misc.c).  A
+         * local caller implicitly has all authorization bits.
+         */
+        if((now - last_pwd) < pol.pw_min_life &&
+           !(kdb->attributes & KRB5_KDB_REQUIRES_PWCHANGE)) {
+            ret = KADM5_PASS_TOOSOON;
+            goto done;
+        }
+#endif
+
+        if (pol.pw_max_life)
+            kdb->pw_expiration = now + pol.pw_max_life;
+        else
+            kdb->pw_expiration = 0;
+    } else {
+        kdb->pw_expiration = 0;
+    }
+
+    ret = krb5_dbe_update_last_pwd_change(handle->context, kdb, now);
+    if (ret)
+        goto done;
+
+    /* unlock principal on this KDC */
+     kdb->fail_auth_count = 0;
+ 
+     if (keyblocks) {
+        /* Return only the new keys added by krb5_dbe_crk. */
+        n_new_keys = count_new_keys(kdb->n_key_data, kdb->key_data);
+        ret = decrypt_key_data(handle->context, n_new_keys, kdb->key_data,
+                                keyblocks, n_keys);
+         if (ret)
+             goto done;
+    }
+
+    /* key data changed, let the database provider know */
+    kdb->mask = KADM5_KEY_DATA | KADM5_FAIL_AUTH_COUNT;
+    /* | KADM5_RANDKEY_USED */;
+
+    ret = k5_kadm5_hook_chpass(handle->context, handle->hook_handles,
+                               KADM5_HOOK_STAGE_PRECOMMIT, principal, keepold,
+                               new_n_ks_tuple, new_ks_tuple, NULL);
+    if (ret)
+        goto done;
+    if ((ret = kdb_put_entry(handle, kdb, &adb)))
+        goto done;
+
+    (void) k5_kadm5_hook_chpass(handle->context, handle->hook_handles,
+                                KADM5_HOOK_STAGE_POSTCOMMIT, principal,
+                                keepold, new_n_ks_tuple, new_ks_tuple, NULL);
+    ret = KADM5_OK;
+done:
+    free(new_ks_tuple);
+    kdb_free_entry(handle, kdb, &adb);
+    if (have_pol)
+        kadm5_free_policy_ent(handle->lhandle, &pol);
+
+    return ret;
+}
+","kadm5_randkey_principal_3(void *server_handle,
+                          krb5_principal principal,
+                          krb5_boolean keepold,
+                          int n_ks_tuple, krb5_key_salt_tuple *ks_tuple,
+                          krb5_keyblock **keyblocks,
+                          int *n_keys)
+{
+    krb5_db_entry               *kdb;
+     osa_princ_ent_rec           adb;
+     krb5_int32                  now;
+     kadm5_policy_ent_rec        pol;
+    int                         ret, last_pwd;
+     krb5_boolean                have_pol = FALSE;
+     kadm5_server_handle_t       handle = server_handle;
+     krb5_keyblock               *act_mkey;
+    krb5_kvno                   act_kvno;
+    int                         new_n_ks_tuple = 0;
+    krb5_key_salt_tuple         *new_ks_tuple = NULL;
+
+    if (keyblocks)
+        *keyblocks = NULL;
+
+    CHECK_HANDLE(server_handle);
+
+    krb5_clear_error_message(handle->context);
+
+    if (principal == NULL)
+        return EINVAL;
+
+    if ((ret = kdb_get_entry(handle, principal, &kdb, &adb)))
+        return(ret);
+
+    ret = apply_keysalt_policy(handle, adb.policy, n_ks_tuple, ks_tuple,
+                               &new_n_ks_tuple, &new_ks_tuple);
+    if (ret)
+        goto done;
+
+    if (krb5_principal_compare(handle->context, principal, hist_princ)) {
+        /* If changing the history entry, the new entry must have exactly one
+         * key. */
+        if (keepold)
+            return KADM5_PROTECT_PRINCIPAL;
+        new_n_ks_tuple = 1;
+    }
+
+    ret = kdb_get_active_mkey(handle, &act_kvno, &act_mkey);
+    if (ret)
+        goto done;
+
+    ret = krb5_dbe_crk(handle->context, act_mkey, new_ks_tuple, new_n_ks_tuple,
+                       keepold, kdb);
+    if (ret)
+        goto done;
+
+    ret = krb5_dbe_update_mkvno(handle->context, kdb, act_kvno);
+    if (ret)
+        goto done;
+
+    kdb->attributes &= ~KRB5_KDB_REQUIRES_PWCHANGE;
+
+    ret = krb5_timeofday(handle->context, &now);
+    if (ret)
+        goto done;
+
+    if ((adb.aux_attributes & KADM5_POLICY)) {
+        ret = get_policy(handle, adb.policy, &pol, &have_pol);
+        if (ret)
+            goto done;
+    }
+    if (have_pol) {
+        ret = krb5_dbe_lookup_last_pwd_change(handle->context, kdb, &last_pwd);
+        if (ret)
+            goto done;
+
+#if 0
+        /*
+         * The spec says this check is overridden if the caller has
+         * modify privilege.  The admin server therefore makes this
+         * check itself (in chpass_principal_wrapper, misc.c).  A
+         * local caller implicitly has all authorization bits.
+         */
+        if((now - last_pwd) < pol.pw_min_life &&
+           !(kdb->attributes & KRB5_KDB_REQUIRES_PWCHANGE)) {
+            ret = KADM5_PASS_TOOSOON;
+            goto done;
+        }
+#endif
+
+        if (pol.pw_max_life)
+            kdb->pw_expiration = now + pol.pw_max_life;
+        else
+            kdb->pw_expiration = 0;
+    } else {
+        kdb->pw_expiration = 0;
+    }
+
+    ret = krb5_dbe_update_last_pwd_change(handle->context, kdb, now);
+    if (ret)
+        goto done;
+
+    /* unlock principal on this KDC */
+     kdb->fail_auth_count = 0;
+ 
+     if (keyblocks) {
+        ret = decrypt_key_data(handle->context,
+                               kdb->n_key_data, kdb->key_data,
+                                keyblocks, n_keys);
+         if (ret)
+             goto done;
+    }
+
+    /* key data changed, let the database provider know */
+    kdb->mask = KADM5_KEY_DATA | KADM5_FAIL_AUTH_COUNT;
+    /* | KADM5_RANDKEY_USED */;
+
+    ret = k5_kadm5_hook_chpass(handle->context, handle->hook_handles,
+                               KADM5_HOOK_STAGE_PRECOMMIT, principal, keepold,
+                               new_n_ks_tuple, new_ks_tuple, NULL);
+    if (ret)
+        goto done;
+    if ((ret = kdb_put_entry(handle, kdb, &adb)))
+        goto done;
+
+    (void) k5_kadm5_hook_chpass(handle->context, handle->hook_handles,
+                                KADM5_HOOK_STAGE_POSTCOMMIT, principal,
+                                keepold, new_n_ks_tuple, new_ks_tuple, NULL);
+    ret = KADM5_OK;
+done:
+    free(new_ks_tuple);
+    kdb_free_entry(handle, kdb, &adb);
+    if (have_pol)
+        kadm5_free_policy_ent(handle->lhandle, &pol);
+
+    return ret;
+}
+",C,"    int                         ret, last_pwd, n_new_keys;
+        /* Return only the new keys added by krb5_dbe_crk. */
+        n_new_keys = count_new_keys(kdb->n_key_data, kdb->key_data);
+        ret = decrypt_key_data(handle->context, n_new_keys, kdb->key_data,
+","    int                         ret, last_pwd;
+        ret = decrypt_key_data(handle->context,
+                               kdb->n_key_data, kdb->key_data,
+",,"@@ -344,6 +344,20 @@ check_1_6_dummy(kadm5_principal_ent_t entry, long mask,
+     *passptr = NULL;
+ }
+ 
++/* Return the number of keys with the newest kvno.  Assumes that all key data
++ * with the newest kvno are at the front of the key data array. */
++static int
++count_new_keys(int n_key_data, krb5_key_data *key_data)
++{
++    int n;
++
++    for (n = 1; n < n_key_data; n++) {
++        if (key_data[n - 1].key_data_kvno != key_data[n].key_data_kvno)
++            return n;
++    }
++    return n_key_data;
++}
++
+ kadm5_ret_t
+ kadm5_create_principal(void *server_handle,
+                        kadm5_principal_ent_t entry, long mask,
+@@ -1593,7 +1607,7 @@ kadm5_randkey_principal_3(void *server_handle,
+     osa_princ_ent_rec           adb;
+     krb5_int32                  now;
+     kadm5_policy_ent_rec        pol;
+-    int                         ret, last_pwd;
++    int                         ret, last_pwd, n_new_keys;
+     krb5_boolean                have_pol = FALSE;
+     kadm5_server_handle_t       handle = server_handle;
+     krb5_keyblock               *act_mkey;
+@@ -1686,8 +1700,9 @@ kadm5_randkey_principal_3(void *server_handle,
+     kdb->fail_auth_count = 0;
+ 
+     if (keyblocks) {
+-        ret = decrypt_key_data(handle->context,
+-                               kdb->n_key_data, kdb->key_data,
++        /* Return only the new keys added by krb5_dbe_crk. */
++        n_new_keys = count_new_keys(kdb->n_key_data, kdb->key_data);
++        ret = decrypt_key_data(handle->context, n_new_keys, kdb->key_data,
+                                keyblocks, n_keys);
+         if (ret)
+             goto done;",krb5,af0ed4df4dfae762ab5fb605f5a0c8f59cb4f6ca,17689700b27c6fb6d26156330d11b57ef79385d3,1,"kadm5_randkey_principal_3(void *server_handle,
+                          krb5_principal principal,
+                          krb5_boolean keepold,
+                          int n_ks_tuple, krb5_key_salt_tuple *ks_tuple,
+                          krb5_keyblock **keyblocks,
+                          int *n_keys)
+{
+    krb5_db_entry               *kdb;
+     osa_princ_ent_rec           adb;
+     krb5_int32                  now;
+     kadm5_policy_ent_rec        pol;
+//flaw_line_below:
+    int                         ret, last_pwd;
+//fix_flaw_line_below:
+//    int                         ret, last_pwd, n_new_keys;
+     krb5_boolean                have_pol = FALSE;
+     kadm5_server_handle_t       handle = server_handle;
+     krb5_keyblock               *act_mkey;
+    krb5_kvno                   act_kvno;
+    int                         new_n_ks_tuple = 0;
+    krb5_key_salt_tuple         *new_ks_tuple = NULL;
+
+    if (keyblocks)
+        *keyblocks = NULL;
+
+    CHECK_HANDLE(server_handle);
+
+    krb5_clear_error_message(handle->context);
+
+    if (principal == NULL)
+        return EINVAL;
+
+    if ((ret = kdb_get_entry(handle, principal, &kdb, &adb)))
+        return(ret);
+
+    ret = apply_keysalt_policy(handle, adb.policy, n_ks_tuple, ks_tuple,
+                               &new_n_ks_tuple, &new_ks_tuple);
+    if (ret)
+        goto done;
+
+    if (krb5_principal_compare(handle->context, principal, hist_princ)) {
+        /* If changing the history entry, the new entry must have exactly one
+         * key. */
+        if (keepold)
+            return KADM5_PROTECT_PRINCIPAL;
+        new_n_ks_tuple = 1;
+    }
+
+    ret = kdb_get_active_mkey(handle, &act_kvno, &act_mkey);
+    if (ret)
+        goto done;
+
+    ret = krb5_dbe_crk(handle->context, act_mkey, new_ks_tuple, new_n_ks_tuple,
+                       keepold, kdb);
+    if (ret)
+        goto done;
+
+    ret = krb5_dbe_update_mkvno(handle->context, kdb, act_kvno);
+    if (ret)
+        goto done;
+
+    kdb->attributes &= ~KRB5_KDB_REQUIRES_PWCHANGE;
+
+    ret = krb5_timeofday(handle->context, &now);
+    if (ret)
+        goto done;
+
+    if ((adb.aux_attributes & KADM5_POLICY)) {
+        ret = get_policy(handle, adb.policy, &pol, &have_pol);
+        if (ret)
+            goto done;
+    }
+    if (have_pol) {
+        ret = krb5_dbe_lookup_last_pwd_change(handle->context, kdb, &last_pwd);
+        if (ret)
+            goto done;
+
+#if 0
+        /*
+         * The spec says this check is overridden if the caller has
+         * modify privilege.  The admin server therefore makes this
+         * check itself (in chpass_principal_wrapper, misc.c).  A
+         * local caller implicitly has all authorization bits.
+         */
+        if((now - last_pwd) < pol.pw_min_life &&
+           !(kdb->attributes & KRB5_KDB_REQUIRES_PWCHANGE)) {
+            ret = KADM5_PASS_TOOSOON;
+            goto done;
+        }
+#endif
+
+        if (pol.pw_max_life)
+            kdb->pw_expiration = now + pol.pw_max_life;
+        else
+            kdb->pw_expiration = 0;
+    } else {
+        kdb->pw_expiration = 0;
+    }
+
+    ret = krb5_dbe_update_last_pwd_change(handle->context, kdb, now);
+    if (ret)
+        goto done;
+
+    /* unlock principal on this KDC */
+     kdb->fail_auth_count = 0;
+ 
+     if (keyblocks) {
+//flaw_line_below:
+        ret = decrypt_key_data(handle->context,
+//flaw_line_below:
+                               kdb->n_key_data, kdb->key_data,
+//fix_flaw_line_below:
+//        /* Return only the new keys added by krb5_dbe_crk. */
+//fix_flaw_line_below:
+//        n_new_keys = count_new_keys(kdb->n_key_data, kdb->key_data);
+//fix_flaw_line_below:
+//        ret = decrypt_key_data(handle->context, n_new_keys, kdb->key_data,
+                                keyblocks, n_keys);
+         if (ret)
+             goto done;
+    }
+
+    /* key data changed, let the database provider know */
+    kdb->mask = KADM5_KEY_DATA | KADM5_FAIL_AUTH_COUNT;
+    /* | KADM5_RANDKEY_USED */;
+
+    ret = k5_kadm5_hook_chpass(handle->context, handle->hook_handles,
+                               KADM5_HOOK_STAGE_PRECOMMIT, principal, keepold,
+                               new_n_ks_tuple, new_ks_tuple, NULL);
+    if (ret)
+        goto done;
+    if ((ret = kdb_put_entry(handle, kdb, &adb)))
+        goto done;
+
+    (void) k5_kadm5_hook_chpass(handle->context, handle->hook_handles,
+                                KADM5_HOOK_STAGE_POSTCOMMIT, principal,
+                                keepold, new_n_ks_tuple, new_ks_tuple, NULL);
+    ret = KADM5_OK;
+done:
+    free(new_ks_tuple);
+    kdb_free_entry(handle, kdb, &adb);
+    if (have_pol)
+        kadm5_free_policy_ent(handle->lhandle, &pol);
+
+    return ret;
+}
+"
+5212,182948,,Remote,Not required,,CVE-2018-20839,https://www.cvedetails.com/cve/CVE-2018-20839/,CWE-255,Low,Partial,,,2019-05-17,5.0,"systemd 242 changes the VT1 mode upon a logout, which allows attackers to read cleartext passwords in certain circumstances, such as watching a shutdown, or using Ctrl-Alt-F1 and Ctrl-Alt-F2. This occurs because the KDGKBMODE (aka current keyboard mode) check is mishandled.",2019-05-30,,8,https://github.com/systemd/systemd/commit/9725f1a10f80f5e0ae7d9b60547458622aeb322f,9725f1a10f80f5e0ae7d9b60547458622aeb322f,"Merge pull request #12378 from rbalint/vt-kbd-reset-check
+
+VT kbd reset check",1,src/basic/terminal-util.c,"{""sha"": ""71238ac9c43579079f9182be18f62f1e97c47513"", ""filename"": ""src/basic/terminal-util.c"", ""status"": ""modified"", ""additions"": 25, ""deletions"": 1, ""changes"": 26, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {\n         return parse_boolean(b);\n }\n \n+int vt_verify_kbmode(int fd) {\n+        int curr_mode;\n+\n+        /*\n+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n+         * Otherwise we would (likely) interfere with X11's processing of the\n+         * key events.\n+         *\n+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n+         */\n+\n+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n+                return -errno;\n+\n+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n+}\n+\n int vt_reset_keyboard(int fd) {\n-        int kb;\n+        int kb, r;\n \n         /* If we can't read the default, then default to unicode. It's 2017 after all. */\n         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_debug_errno(r, \""Keyboard is not in XLATE or UNICODE mode, not resetting: %m\"");\n+                return 0;\n+        } else if (r < 0)\n+                return r;\n+\n         if (ioctl(fd, KDSKBMODE, kb) < 0)\n                 return -errno;\n ""}<_**next**_>{""sha"": ""2a1851c0f163244a4e05b76f082ee84a7a1506e1"", ""filename"": ""src/basic/terminal-util.h"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.h?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -156,6 +156,7 @@ int openpt_in_namespace(pid_t pid, int flags);\n int open_terminal_in_namespace(pid_t pid, const char *name, int mode);\n \n int vt_default_utf8(void);\n+int vt_verify_kbmode(int fd);\n int vt_reset_keyboard(int fd);\n int vt_restore(int fd);\n int vt_release(int fd, bool restore_vt);""}<_**next**_>{""sha"": ""d2bc3921d281deeb1ce262298355af74325c84f4"", ""filename"": ""src/vconsole/vconsole-setup.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 20, ""changes"": 30, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/vconsole/vconsole-setup.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {\n         return verify_vc_allocation(vcs.v_active);\n }\n \n-static int verify_vc_kbmode(int fd) {\n-        int curr_mode;\n-\n-        /*\n-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n-         * Otherwise we would (likely) interfere with X11's processing of the\n-         * key events.\n-         *\n-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n-         */\n-\n-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n-                return -errno;\n-\n-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n-}\n-\n static int toggle_utf8(const char *name, int fd, bool utf8) {\n         int r;\n         struct termios tc = {};\n \n         assert(name);\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_warning_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", name);\n+                return 0;\n+        } else if (r < 0)\n+                return log_warning_errno(r, \""Failed to verify kbdmode on %s: %m\"", name);\n+\n         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);\n         if (r < 0)\n                 return log_warning_errno(errno, \""Failed to %s UTF-8 kbdmode on %s: %m\"", enable_disable(utf8), name);\n@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {\n                         continue;\n                 }\n \n-                if (verify_vc_kbmode(fd_d) < 0)\n+                if (vt_verify_kbmode(fd_d) < 0)\n                         continue;\n \n                 toggle_utf8(ttyname, fd_d, utf8);\n@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {\n                                 err = -fd;\n                         continue;\n                 }\n-                r = verify_vc_kbmode(fd);\n+                r = vt_verify_kbmode(fd);\n                 if (r < 0) {\n                         if (!err)\n                                 err = -r;\n@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not allocated: %m\"", src_vc);\n \n-        r = verify_vc_kbmode(fd);\n+        r = vt_verify_kbmode(fd);\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", src_vc);\n ""}"," int vt_reset_keyboard(int fd) {
+        int kb, r;
+ 
+         /* If we can't read the default, then default to unicode. It's 2017 after all. */
+         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;
+ 
+        r = vt_verify_kbmode(fd);
+        if (r == -EBUSY) {
+                log_debug_errno(r, ""Keyboard is not in XLATE or UNICODE mode, not resetting: %m"");
+                return 0;
+        } else if (r < 0)
+                return r;
+
+         if (ioctl(fd, KDSKBMODE, kb) < 0)
+                 return -errno;
+ 
+        return 0;
+}
+"," int vt_reset_keyboard(int fd) {
+        int kb;
+ 
+         /* If we can't read the default, then default to unicode. It's 2017 after all. */
+         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;
+ 
+         if (ioctl(fd, KDSKBMODE, kb) < 0)
+                 return -errno;
+ 
+        return 0;
+}
+",C,"        int kb, r;
+        r = vt_verify_kbmode(fd);
+        if (r == -EBUSY) {
+                log_debug_errno(r, ""Keyboard is not in XLATE or UNICODE mode, not resetting: %m"");
+                return 0;
+        } else if (r < 0)
+                return r;
+
+","        int kb;
+",,"@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {
+         return parse_boolean(b);
+ }
+ 
++int vt_verify_kbmode(int fd) {
++        int curr_mode;
++
++        /*
++         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
++         * Otherwise we would (likely) interfere with X11's processing of the
++         * key events.
++         *
++         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
++         */
++
++        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
++                return -errno;
++
++        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
++}
++
+ int vt_reset_keyboard(int fd) {
+-        int kb;
++        int kb, r;
+ 
+         /* If we can't read the default, then default to unicode. It's 2017 after all. */
+         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;
+ 
++        r = vt_verify_kbmode(fd);
++        if (r == -EBUSY) {
++                log_debug_errno(r, ""Keyboard is not in XLATE or UNICODE mode, not resetting: %m"");
++                return 0;
++        } else if (r < 0)
++                return r;
++
+         if (ioctl(fd, KDSKBMODE, kb) < 0)
+                 return -errno;
+ ",systemd,9725f1a10f80f5e0ae7d9b60547458622aeb322f,a32a00831ca8226bf25a9686ddb58326f4b756cd,1," int vt_reset_keyboard(int fd) {
+//flaw_line_below:
+        int kb;
+//fix_flaw_line_below:
+//        int kb, r;
+ 
+         /* If we can't read the default, then default to unicode. It's 2017 after all. */
+         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;
+ 
+//fix_flaw_line_below:
+//        r = vt_verify_kbmode(fd);
+//fix_flaw_line_below:
+//        if (r == -EBUSY) {
+//fix_flaw_line_below:
+//                log_debug_errno(r, ""Keyboard is not in XLATE or UNICODE mode, not resetting: %m"");
+//fix_flaw_line_below:
+//                return 0;
+//fix_flaw_line_below:
+//        } else if (r < 0)
+//fix_flaw_line_below:
+//                return r;
+//fix_flaw_line_below:
+//
+         if (ioctl(fd, KDSKBMODE, kb) < 0)
+                 return -errno;
+ 
+        return 0;
+}
+"
+5213,182949,,Remote,Not required,,CVE-2018-20839,https://www.cvedetails.com/cve/CVE-2018-20839/,CWE-255,Low,Partial,,,2019-05-17,5.0,"systemd 242 changes the VT1 mode upon a logout, which allows attackers to read cleartext passwords in certain circumstances, such as watching a shutdown, or using Ctrl-Alt-F1 and Ctrl-Alt-F2. This occurs because the KDGKBMODE (aka current keyboard mode) check is mishandled.",2019-05-30,,1,https://github.com/systemd/systemd/commit/9725f1a10f80f5e0ae7d9b60547458622aeb322f,9725f1a10f80f5e0ae7d9b60547458622aeb322f,"Merge pull request #12378 from rbalint/vt-kbd-reset-check
+
+VT kbd reset check",1,src/vconsole/vconsole-setup.c,"{""sha"": ""71238ac9c43579079f9182be18f62f1e97c47513"", ""filename"": ""src/basic/terminal-util.c"", ""status"": ""modified"", ""additions"": 25, ""deletions"": 1, ""changes"": 26, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {\n         return parse_boolean(b);\n }\n \n+int vt_verify_kbmode(int fd) {\n+        int curr_mode;\n+\n+        /*\n+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n+         * Otherwise we would (likely) interfere with X11's processing of the\n+         * key events.\n+         *\n+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n+         */\n+\n+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n+                return -errno;\n+\n+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n+}\n+\n int vt_reset_keyboard(int fd) {\n-        int kb;\n+        int kb, r;\n \n         /* If we can't read the default, then default to unicode. It's 2017 after all. */\n         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_debug_errno(r, \""Keyboard is not in XLATE or UNICODE mode, not resetting: %m\"");\n+                return 0;\n+        } else if (r < 0)\n+                return r;\n+\n         if (ioctl(fd, KDSKBMODE, kb) < 0)\n                 return -errno;\n ""}<_**next**_>{""sha"": ""2a1851c0f163244a4e05b76f082ee84a7a1506e1"", ""filename"": ""src/basic/terminal-util.h"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.h?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -156,6 +156,7 @@ int openpt_in_namespace(pid_t pid, int flags);\n int open_terminal_in_namespace(pid_t pid, const char *name, int mode);\n \n int vt_default_utf8(void);\n+int vt_verify_kbmode(int fd);\n int vt_reset_keyboard(int fd);\n int vt_restore(int fd);\n int vt_release(int fd, bool restore_vt);""}<_**next**_>{""sha"": ""d2bc3921d281deeb1ce262298355af74325c84f4"", ""filename"": ""src/vconsole/vconsole-setup.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 20, ""changes"": 30, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/vconsole/vconsole-setup.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {\n         return verify_vc_allocation(vcs.v_active);\n }\n \n-static int verify_vc_kbmode(int fd) {\n-        int curr_mode;\n-\n-        /*\n-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n-         * Otherwise we would (likely) interfere with X11's processing of the\n-         * key events.\n-         *\n-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n-         */\n-\n-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n-                return -errno;\n-\n-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n-}\n-\n static int toggle_utf8(const char *name, int fd, bool utf8) {\n         int r;\n         struct termios tc = {};\n \n         assert(name);\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_warning_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", name);\n+                return 0;\n+        } else if (r < 0)\n+                return log_warning_errno(r, \""Failed to verify kbdmode on %s: %m\"", name);\n+\n         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);\n         if (r < 0)\n                 return log_warning_errno(errno, \""Failed to %s UTF-8 kbdmode on %s: %m\"", enable_disable(utf8), name);\n@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {\n                         continue;\n                 }\n \n-                if (verify_vc_kbmode(fd_d) < 0)\n+                if (vt_verify_kbmode(fd_d) < 0)\n                         continue;\n \n                 toggle_utf8(ttyname, fd_d, utf8);\n@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {\n                                 err = -fd;\n                         continue;\n                 }\n-                r = verify_vc_kbmode(fd);\n+                r = vt_verify_kbmode(fd);\n                 if (r < 0) {\n                         if (!err)\n                                 err = -r;\n@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not allocated: %m\"", src_vc);\n \n-        r = verify_vc_kbmode(fd);\n+        r = vt_verify_kbmode(fd);\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", src_vc);\n ""}","static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+        _cleanup_free_ char *path = NULL;
+        int r, err = 0;
+        unsigned i;
+
+        path = new(char, sizeof(""/dev/tty63""));
+        if (!path)
+                return log_oom();
+
+        for (i = 1; i <= 63; i++) {
+                _cleanup_close_ int fd = -1;
+
+                r = verify_vc_allocation(i);
+                if (r < 0) {
+                        if (!err)
+                                err = -r;
+                        continue;
+                }
+
+                sprintf(path, ""/dev/tty%u"", i);
+                fd = open_terminal(path, O_RDWR|O_CLOEXEC|O_NOCTTY);
+                if (fd < 0) {
+                        if (!err)
+                                 err = -fd;
+                         continue;
+                 }
+                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+                        continue;
+                }
+
+                /* all checks passed, return this one as a source console */
+                *ret_idx = i;
+                *ret_path = TAKE_PTR(path);
+                return TAKE_FD(fd);
+        }
+
+        return log_error_errno(err, ""No usable source console found: %m"");
+}
+","static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+        _cleanup_free_ char *path = NULL;
+        int r, err = 0;
+        unsigned i;
+
+        path = new(char, sizeof(""/dev/tty63""));
+        if (!path)
+                return log_oom();
+
+        for (i = 1; i <= 63; i++) {
+                _cleanup_close_ int fd = -1;
+
+                r = verify_vc_allocation(i);
+                if (r < 0) {
+                        if (!err)
+                                err = -r;
+                        continue;
+                }
+
+                sprintf(path, ""/dev/tty%u"", i);
+                fd = open_terminal(path, O_RDWR|O_CLOEXEC|O_NOCTTY);
+                if (fd < 0) {
+                        if (!err)
+                                 err = -fd;
+                         continue;
+                 }
+                r = verify_vc_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+                        continue;
+                }
+
+                /* all checks passed, return this one as a source console */
+                *ret_idx = i;
+                *ret_path = TAKE_PTR(path);
+                return TAKE_FD(fd);
+        }
+
+        return log_error_errno(err, ""No usable source console found: %m"");
+}
+",C,"                r = vt_verify_kbmode(fd);
+","                r = verify_vc_kbmode(fd);
+",,"@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {
+         return verify_vc_allocation(vcs.v_active);
+ }
+ 
+-static int verify_vc_kbmode(int fd) {
+-        int curr_mode;
+-
+-        /*
+-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+-         * Otherwise we would (likely) interfere with X11's processing of the
+-         * key events.
+-         *
+-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+-         */
+-
+-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+-                return -errno;
+-
+-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+-}
+-
+ static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
++        r = vt_verify_kbmode(fd);
++        if (r == -EBUSY) {
++                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
++                return 0;
++        } else if (r < 0)
++                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
++
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+                         continue;
+                 }
+ 
+-                if (verify_vc_kbmode(fd_d) < 0)
++                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+                                 err = -fd;
+                         continue;
+                 }
+-                r = verify_vc_kbmode(fd);
++                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+-        r = verify_vc_kbmode(fd);
++        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ ",systemd,9725f1a10f80f5e0ae7d9b60547458622aeb322f,a32a00831ca8226bf25a9686ddb58326f4b756cd,1,"static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+        _cleanup_free_ char *path = NULL;
+        int r, err = 0;
+        unsigned i;
+
+        path = new(char, sizeof(""/dev/tty63""));
+        if (!path)
+                return log_oom();
+
+        for (i = 1; i <= 63; i++) {
+                _cleanup_close_ int fd = -1;
+
+                r = verify_vc_allocation(i);
+                if (r < 0) {
+                        if (!err)
+                                err = -r;
+                        continue;
+                }
+
+                sprintf(path, ""/dev/tty%u"", i);
+                fd = open_terminal(path, O_RDWR|O_CLOEXEC|O_NOCTTY);
+                if (fd < 0) {
+                        if (!err)
+                                 err = -fd;
+                         continue;
+                 }
+//flaw_line_below:
+                r = verify_vc_kbmode(fd);
+//fix_flaw_line_below:
+//                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+                        continue;
+                }
+
+                /* all checks passed, return this one as a source console */
+                *ret_idx = i;
+                *ret_path = TAKE_PTR(path);
+                return TAKE_FD(fd);
+        }
+
+        return log_error_errno(err, ""No usable source console found: %m"");
+}
+"
+5214,182950,,Remote,Not required,,CVE-2018-20839,https://www.cvedetails.com/cve/CVE-2018-20839/,CWE-255,Low,Partial,,,2019-05-17,5.0,"systemd 242 changes the VT1 mode upon a logout, which allows attackers to read cleartext passwords in certain circumstances, such as watching a shutdown, or using Ctrl-Alt-F1 and Ctrl-Alt-F2. This occurs because the KDGKBMODE (aka current keyboard mode) check is mishandled.",2019-05-30,,1,https://github.com/systemd/systemd/commit/9725f1a10f80f5e0ae7d9b60547458622aeb322f,9725f1a10f80f5e0ae7d9b60547458622aeb322f,"Merge pull request #12378 from rbalint/vt-kbd-reset-check
+
+VT kbd reset check",1,src/vconsole/vconsole-setup.c,"{""sha"": ""71238ac9c43579079f9182be18f62f1e97c47513"", ""filename"": ""src/basic/terminal-util.c"", ""status"": ""modified"", ""additions"": 25, ""deletions"": 1, ""changes"": 26, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {\n         return parse_boolean(b);\n }\n \n+int vt_verify_kbmode(int fd) {\n+        int curr_mode;\n+\n+        /*\n+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n+         * Otherwise we would (likely) interfere with X11's processing of the\n+         * key events.\n+         *\n+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n+         */\n+\n+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n+                return -errno;\n+\n+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n+}\n+\n int vt_reset_keyboard(int fd) {\n-        int kb;\n+        int kb, r;\n \n         /* If we can't read the default, then default to unicode. It's 2017 after all. */\n         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_debug_errno(r, \""Keyboard is not in XLATE or UNICODE mode, not resetting: %m\"");\n+                return 0;\n+        } else if (r < 0)\n+                return r;\n+\n         if (ioctl(fd, KDSKBMODE, kb) < 0)\n                 return -errno;\n ""}<_**next**_>{""sha"": ""2a1851c0f163244a4e05b76f082ee84a7a1506e1"", ""filename"": ""src/basic/terminal-util.h"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.h?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -156,6 +156,7 @@ int openpt_in_namespace(pid_t pid, int flags);\n int open_terminal_in_namespace(pid_t pid, const char *name, int mode);\n \n int vt_default_utf8(void);\n+int vt_verify_kbmode(int fd);\n int vt_reset_keyboard(int fd);\n int vt_restore(int fd);\n int vt_release(int fd, bool restore_vt);""}<_**next**_>{""sha"": ""d2bc3921d281deeb1ce262298355af74325c84f4"", ""filename"": ""src/vconsole/vconsole-setup.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 20, ""changes"": 30, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/vconsole/vconsole-setup.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {\n         return verify_vc_allocation(vcs.v_active);\n }\n \n-static int verify_vc_kbmode(int fd) {\n-        int curr_mode;\n-\n-        /*\n-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n-         * Otherwise we would (likely) interfere with X11's processing of the\n-         * key events.\n-         *\n-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n-         */\n-\n-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n-                return -errno;\n-\n-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n-}\n-\n static int toggle_utf8(const char *name, int fd, bool utf8) {\n         int r;\n         struct termios tc = {};\n \n         assert(name);\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_warning_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", name);\n+                return 0;\n+        } else if (r < 0)\n+                return log_warning_errno(r, \""Failed to verify kbdmode on %s: %m\"", name);\n+\n         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);\n         if (r < 0)\n                 return log_warning_errno(errno, \""Failed to %s UTF-8 kbdmode on %s: %m\"", enable_disable(utf8), name);\n@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {\n                         continue;\n                 }\n \n-                if (verify_vc_kbmode(fd_d) < 0)\n+                if (vt_verify_kbmode(fd_d) < 0)\n                         continue;\n \n                 toggle_utf8(ttyname, fd_d, utf8);\n@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {\n                                 err = -fd;\n                         continue;\n                 }\n-                r = verify_vc_kbmode(fd);\n+                r = vt_verify_kbmode(fd);\n                 if (r < 0) {\n                         if (!err)\n                                 err = -r;\n@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not allocated: %m\"", src_vc);\n \n-        r = verify_vc_kbmode(fd);\n+        r = vt_verify_kbmode(fd);\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", src_vc);\n ""}","static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+        struct console_font_op cfo = {
+                .op = KD_FONT_OP_GET,
+                .width = UINT_MAX, .height = UINT_MAX,
+                .charcount = UINT_MAX,
+        };
+        struct unimapinit adv = {};
+        struct unimapdesc unimapd;
+        _cleanup_free_ struct unipair* unipairs = NULL;
+        _cleanup_free_ void *fontbuf = NULL;
+        unsigned i;
+        int r;
+
+        unipairs = new(struct unipair, USHRT_MAX);
+        if (!unipairs) {
+                log_oom();
+                return;
+        }
+
+        /* get metadata of the current font (width, height, count) */
+        r = ioctl(src_fd, KDFONTOP, &cfo);
+        if (r < 0)
+                log_warning_errno(errno, ""KD_FONT_OP_GET failed while trying to get the font metadata: %m"");
+        else {
+                /* verify parameter sanity first */
+                if (cfo.width > 32 || cfo.height > 32 || cfo.charcount > 512)
+                        log_warning(""Invalid font metadata - width: %u (max 32), height: %u (max 32), count: %u (max 512)"",
+                                    cfo.width, cfo.height, cfo.charcount);
+                else {
+                        /*
+                         * Console fonts supported by the kernel are limited in size to 32 x 32 and maximum 512
+                         * characters. Thus with 1 bit per pixel it requires up to 65536 bytes. The height always
+                         * requires 32 per glyph, regardless of the actual height - see the comment above #define
+                         * max_font_size 65536 in drivers/tty/vt/vt.c for more details.
+                         */
+                        fontbuf = malloc_multiply((cfo.width + 7) / 8 * 32, cfo.charcount);
+                        if (!fontbuf) {
+                                log_oom();
+                                return;
+                        }
+                        /* get fonts from the source console */
+                        cfo.data = fontbuf;
+                        r = ioctl(src_fd, KDFONTOP, &cfo);
+                        if (r < 0)
+                                log_warning_errno(errno, ""KD_FONT_OP_GET failed while trying to read the font data: %m"");
+                        else {
+                                unimapd.entries  = unipairs;
+                                unimapd.entry_ct = USHRT_MAX;
+                                r = ioctl(src_fd, GIO_UNIMAP, &unimapd);
+                                if (r < 0)
+                                        log_warning_errno(errno, ""GIO_UNIMAP failed while trying to read unicode mappings: %m"");
+                                else
+                                        cfo.op = KD_FONT_OP_SET;
+                        }
+                }
+        }
+
+        if (cfo.op != KD_FONT_OP_SET)
+                log_warning(""Fonts will not be copied to remaining consoles"");
+
+        for (i = 1; i <= 63; i++) {
+                char ttyname[sizeof(""/dev/tty63"")];
+                _cleanup_close_ int fd_d = -1;
+
+                if (i == src_idx || verify_vc_allocation(i) < 0)
+                        continue;
+
+                /* try to open terminal */
+                xsprintf(ttyname, ""/dev/tty%u"", i);
+                fd_d = open_terminal(ttyname, O_RDWR|O_CLOEXEC|O_NOCTTY);
+                if (fd_d < 0) {
+                        log_warning_errno(fd_d, ""Unable to open tty%u, fonts will not be copied: %m"", i);
+                         continue;
+                 }
+ 
+                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+
+                if (cfo.op != KD_FONT_OP_SET)
+                        continue;
+
+                r = ioctl(fd_d, KDFONTOP, &cfo);
+                if (r < 0) {
+                        int last_errno, mode;
+
+                        /* The fonts couldn't have been copied. It might be due to the
+                         * terminal being in graphical mode. In this case the kernel
+                         * returns -EINVAL which is too generic for distinguishing this
+                         * specific case. So we need to retrieve the terminal mode and if
+                         * the graphical mode is in used, let's assume that something else
+                         * is using the terminal and the failure was expected as we
+                         * shouldn't have tried to copy the fonts. */
+
+                        last_errno = errno;
+                        if (ioctl(fd_d, KDGETMODE, &mode) >= 0 && mode != KD_TEXT)
+                                log_debug(""KD_FONT_OP_SET skipped: tty%u is not in text mode"", i);
+                        else
+                                log_warning_errno(last_errno, ""KD_FONT_OP_SET failed, fonts will not be copied to tty%u: %m"", i);
+
+                        continue;
+                }
+
+                /*
+                 * copy unicode translation table unimapd is a ushort count and a pointer
+                 * to an array of struct unipair { ushort, ushort }
+                 */
+                r = ioctl(fd_d, PIO_UNIMAPCLR, &adv);
+                if (r < 0) {
+                        log_warning_errno(errno, ""PIO_UNIMAPCLR failed, unimaps might be incorrect for tty%u: %m"", i);
+                        continue;
+                }
+
+                r = ioctl(fd_d, PIO_UNIMAP, &unimapd);
+                if (r < 0) {
+                        log_warning_errno(errno, ""PIO_UNIMAP failed, unimaps might be incorrect for tty%u: %m"", i);
+                        continue;
+                }
+
+                log_debug(""Font and unimap successfully copied to %s"", ttyname);
+        }
+}
+","static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+        struct console_font_op cfo = {
+                .op = KD_FONT_OP_GET,
+                .width = UINT_MAX, .height = UINT_MAX,
+                .charcount = UINT_MAX,
+        };
+        struct unimapinit adv = {};
+        struct unimapdesc unimapd;
+        _cleanup_free_ struct unipair* unipairs = NULL;
+        _cleanup_free_ void *fontbuf = NULL;
+        unsigned i;
+        int r;
+
+        unipairs = new(struct unipair, USHRT_MAX);
+        if (!unipairs) {
+                log_oom();
+                return;
+        }
+
+        /* get metadata of the current font (width, height, count) */
+        r = ioctl(src_fd, KDFONTOP, &cfo);
+        if (r < 0)
+                log_warning_errno(errno, ""KD_FONT_OP_GET failed while trying to get the font metadata: %m"");
+        else {
+                /* verify parameter sanity first */
+                if (cfo.width > 32 || cfo.height > 32 || cfo.charcount > 512)
+                        log_warning(""Invalid font metadata - width: %u (max 32), height: %u (max 32), count: %u (max 512)"",
+                                    cfo.width, cfo.height, cfo.charcount);
+                else {
+                        /*
+                         * Console fonts supported by the kernel are limited in size to 32 x 32 and maximum 512
+                         * characters. Thus with 1 bit per pixel it requires up to 65536 bytes. The height always
+                         * requires 32 per glyph, regardless of the actual height - see the comment above #define
+                         * max_font_size 65536 in drivers/tty/vt/vt.c for more details.
+                         */
+                        fontbuf = malloc_multiply((cfo.width + 7) / 8 * 32, cfo.charcount);
+                        if (!fontbuf) {
+                                log_oom();
+                                return;
+                        }
+                        /* get fonts from the source console */
+                        cfo.data = fontbuf;
+                        r = ioctl(src_fd, KDFONTOP, &cfo);
+                        if (r < 0)
+                                log_warning_errno(errno, ""KD_FONT_OP_GET failed while trying to read the font data: %m"");
+                        else {
+                                unimapd.entries  = unipairs;
+                                unimapd.entry_ct = USHRT_MAX;
+                                r = ioctl(src_fd, GIO_UNIMAP, &unimapd);
+                                if (r < 0)
+                                        log_warning_errno(errno, ""GIO_UNIMAP failed while trying to read unicode mappings: %m"");
+                                else
+                                        cfo.op = KD_FONT_OP_SET;
+                        }
+                }
+        }
+
+        if (cfo.op != KD_FONT_OP_SET)
+                log_warning(""Fonts will not be copied to remaining consoles"");
+
+        for (i = 1; i <= 63; i++) {
+                char ttyname[sizeof(""/dev/tty63"")];
+                _cleanup_close_ int fd_d = -1;
+
+                if (i == src_idx || verify_vc_allocation(i) < 0)
+                        continue;
+
+                /* try to open terminal */
+                xsprintf(ttyname, ""/dev/tty%u"", i);
+                fd_d = open_terminal(ttyname, O_RDWR|O_CLOEXEC|O_NOCTTY);
+                if (fd_d < 0) {
+                        log_warning_errno(fd_d, ""Unable to open tty%u, fonts will not be copied: %m"", i);
+                         continue;
+                 }
+ 
+                if (verify_vc_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+
+                if (cfo.op != KD_FONT_OP_SET)
+                        continue;
+
+                r = ioctl(fd_d, KDFONTOP, &cfo);
+                if (r < 0) {
+                        int last_errno, mode;
+
+                        /* The fonts couldn't have been copied. It might be due to the
+                         * terminal being in graphical mode. In this case the kernel
+                         * returns -EINVAL which is too generic for distinguishing this
+                         * specific case. So we need to retrieve the terminal mode and if
+                         * the graphical mode is in used, let's assume that something else
+                         * is using the terminal and the failure was expected as we
+                         * shouldn't have tried to copy the fonts. */
+
+                        last_errno = errno;
+                        if (ioctl(fd_d, KDGETMODE, &mode) >= 0 && mode != KD_TEXT)
+                                log_debug(""KD_FONT_OP_SET skipped: tty%u is not in text mode"", i);
+                        else
+                                log_warning_errno(last_errno, ""KD_FONT_OP_SET failed, fonts will not be copied to tty%u: %m"", i);
+
+                        continue;
+                }
+
+                /*
+                 * copy unicode translation table unimapd is a ushort count and a pointer
+                 * to an array of struct unipair { ushort, ushort }
+                 */
+                r = ioctl(fd_d, PIO_UNIMAPCLR, &adv);
+                if (r < 0) {
+                        log_warning_errno(errno, ""PIO_UNIMAPCLR failed, unimaps might be incorrect for tty%u: %m"", i);
+                        continue;
+                }
+
+                r = ioctl(fd_d, PIO_UNIMAP, &unimapd);
+                if (r < 0) {
+                        log_warning_errno(errno, ""PIO_UNIMAP failed, unimaps might be incorrect for tty%u: %m"", i);
+                        continue;
+                }
+
+                log_debug(""Font and unimap successfully copied to %s"", ttyname);
+        }
+}
+",C,"                if (vt_verify_kbmode(fd_d) < 0)
+","                if (verify_vc_kbmode(fd_d) < 0)
+",,"@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {
+         return verify_vc_allocation(vcs.v_active);
+ }
+ 
+-static int verify_vc_kbmode(int fd) {
+-        int curr_mode;
+-
+-        /*
+-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+-         * Otherwise we would (likely) interfere with X11's processing of the
+-         * key events.
+-         *
+-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+-         */
+-
+-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+-                return -errno;
+-
+-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+-}
+-
+ static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
++        r = vt_verify_kbmode(fd);
++        if (r == -EBUSY) {
++                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
++                return 0;
++        } else if (r < 0)
++                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
++
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+                         continue;
+                 }
+ 
+-                if (verify_vc_kbmode(fd_d) < 0)
++                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+                                 err = -fd;
+                         continue;
+                 }
+-                r = verify_vc_kbmode(fd);
++                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+-        r = verify_vc_kbmode(fd);
++        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ ",systemd,9725f1a10f80f5e0ae7d9b60547458622aeb322f,a32a00831ca8226bf25a9686ddb58326f4b756cd,1,"static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+        struct console_font_op cfo = {
+                .op = KD_FONT_OP_GET,
+                .width = UINT_MAX, .height = UINT_MAX,
+                .charcount = UINT_MAX,
+        };
+        struct unimapinit adv = {};
+        struct unimapdesc unimapd;
+        _cleanup_free_ struct unipair* unipairs = NULL;
+        _cleanup_free_ void *fontbuf = NULL;
+        unsigned i;
+        int r;
+
+        unipairs = new(struct unipair, USHRT_MAX);
+        if (!unipairs) {
+                log_oom();
+                return;
+        }
+
+        /* get metadata of the current font (width, height, count) */
+        r = ioctl(src_fd, KDFONTOP, &cfo);
+        if (r < 0)
+                log_warning_errno(errno, ""KD_FONT_OP_GET failed while trying to get the font metadata: %m"");
+        else {
+                /* verify parameter sanity first */
+                if (cfo.width > 32 || cfo.height > 32 || cfo.charcount > 512)
+                        log_warning(""Invalid font metadata - width: %u (max 32), height: %u (max 32), count: %u (max 512)"",
+                                    cfo.width, cfo.height, cfo.charcount);
+                else {
+                        /*
+                         * Console fonts supported by the kernel are limited in size to 32 x 32 and maximum 512
+                         * characters. Thus with 1 bit per pixel it requires up to 65536 bytes. The height always
+                         * requires 32 per glyph, regardless of the actual height - see the comment above #define
+                         * max_font_size 65536 in drivers/tty/vt/vt.c for more details.
+                         */
+                        fontbuf = malloc_multiply((cfo.width + 7) / 8 * 32, cfo.charcount);
+                        if (!fontbuf) {
+                                log_oom();
+                                return;
+                        }
+                        /* get fonts from the source console */
+                        cfo.data = fontbuf;
+                        r = ioctl(src_fd, KDFONTOP, &cfo);
+                        if (r < 0)
+                                log_warning_errno(errno, ""KD_FONT_OP_GET failed while trying to read the font data: %m"");
+                        else {
+                                unimapd.entries  = unipairs;
+                                unimapd.entry_ct = USHRT_MAX;
+                                r = ioctl(src_fd, GIO_UNIMAP, &unimapd);
+                                if (r < 0)
+                                        log_warning_errno(errno, ""GIO_UNIMAP failed while trying to read unicode mappings: %m"");
+                                else
+                                        cfo.op = KD_FONT_OP_SET;
+                        }
+                }
+        }
+
+        if (cfo.op != KD_FONT_OP_SET)
+                log_warning(""Fonts will not be copied to remaining consoles"");
+
+        for (i = 1; i <= 63; i++) {
+                char ttyname[sizeof(""/dev/tty63"")];
+                _cleanup_close_ int fd_d = -1;
+
+                if (i == src_idx || verify_vc_allocation(i) < 0)
+                        continue;
+
+                /* try to open terminal */
+                xsprintf(ttyname, ""/dev/tty%u"", i);
+                fd_d = open_terminal(ttyname, O_RDWR|O_CLOEXEC|O_NOCTTY);
+                if (fd_d < 0) {
+                        log_warning_errno(fd_d, ""Unable to open tty%u, fonts will not be copied: %m"", i);
+                         continue;
+                 }
+ 
+//flaw_line_below:
+                if (verify_vc_kbmode(fd_d) < 0)
+//fix_flaw_line_below:
+//                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+
+                if (cfo.op != KD_FONT_OP_SET)
+                        continue;
+
+                r = ioctl(fd_d, KDFONTOP, &cfo);
+                if (r < 0) {
+                        int last_errno, mode;
+
+                        /* The fonts couldn't have been copied. It might be due to the
+                         * terminal being in graphical mode. In this case the kernel
+                         * returns -EINVAL which is too generic for distinguishing this
+                         * specific case. So we need to retrieve the terminal mode and if
+                         * the graphical mode is in used, let's assume that something else
+                         * is using the terminal and the failure was expected as we
+                         * shouldn't have tried to copy the fonts. */
+
+                        last_errno = errno;
+                        if (ioctl(fd_d, KDGETMODE, &mode) >= 0 && mode != KD_TEXT)
+                                log_debug(""KD_FONT_OP_SET skipped: tty%u is not in text mode"", i);
+                        else
+                                log_warning_errno(last_errno, ""KD_FONT_OP_SET failed, fonts will not be copied to tty%u: %m"", i);
+
+                        continue;
+                }
+
+                /*
+                 * copy unicode translation table unimapd is a ushort count and a pointer
+                 * to an array of struct unipair { ushort, ushort }
+                 */
+                r = ioctl(fd_d, PIO_UNIMAPCLR, &adv);
+                if (r < 0) {
+                        log_warning_errno(errno, ""PIO_UNIMAPCLR failed, unimaps might be incorrect for tty%u: %m"", i);
+                        continue;
+                }
+
+                r = ioctl(fd_d, PIO_UNIMAP, &unimapd);
+                if (r < 0) {
+                        log_warning_errno(errno, ""PIO_UNIMAP failed, unimaps might be incorrect for tty%u: %m"", i);
+                        continue;
+                }
+
+                log_debug(""Font and unimap successfully copied to %s"", ttyname);
+        }
+}
+"
+5215,182951,,Remote,Not required,,CVE-2018-20839,https://www.cvedetails.com/cve/CVE-2018-20839/,CWE-255,Low,Partial,,,2019-05-17,5.0,"systemd 242 changes the VT1 mode upon a logout, which allows attackers to read cleartext passwords in certain circumstances, such as watching a shutdown, or using Ctrl-Alt-F1 and Ctrl-Alt-F2. This occurs because the KDGKBMODE (aka current keyboard mode) check is mishandled.",2019-05-30,,7,https://github.com/systemd/systemd/commit/9725f1a10f80f5e0ae7d9b60547458622aeb322f,9725f1a10f80f5e0ae7d9b60547458622aeb322f,"Merge pull request #12378 from rbalint/vt-kbd-reset-check
+
+VT kbd reset check",0,src/vconsole/vconsole-setup.c,"{""sha"": ""71238ac9c43579079f9182be18f62f1e97c47513"", ""filename"": ""src/basic/terminal-util.c"", ""status"": ""modified"", ""additions"": 25, ""deletions"": 1, ""changes"": 26, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {\n         return parse_boolean(b);\n }\n \n+int vt_verify_kbmode(int fd) {\n+        int curr_mode;\n+\n+        /*\n+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n+         * Otherwise we would (likely) interfere with X11's processing of the\n+         * key events.\n+         *\n+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n+         */\n+\n+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n+                return -errno;\n+\n+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n+}\n+\n int vt_reset_keyboard(int fd) {\n-        int kb;\n+        int kb, r;\n \n         /* If we can't read the default, then default to unicode. It's 2017 after all. */\n         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_debug_errno(r, \""Keyboard is not in XLATE or UNICODE mode, not resetting: %m\"");\n+                return 0;\n+        } else if (r < 0)\n+                return r;\n+\n         if (ioctl(fd, KDSKBMODE, kb) < 0)\n                 return -errno;\n ""}<_**next**_>{""sha"": ""2a1851c0f163244a4e05b76f082ee84a7a1506e1"", ""filename"": ""src/basic/terminal-util.h"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.h?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -156,6 +156,7 @@ int openpt_in_namespace(pid_t pid, int flags);\n int open_terminal_in_namespace(pid_t pid, const char *name, int mode);\n \n int vt_default_utf8(void);\n+int vt_verify_kbmode(int fd);\n int vt_reset_keyboard(int fd);\n int vt_restore(int fd);\n int vt_release(int fd, bool restore_vt);""}<_**next**_>{""sha"": ""d2bc3921d281deeb1ce262298355af74325c84f4"", ""filename"": ""src/vconsole/vconsole-setup.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 20, ""changes"": 30, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/vconsole/vconsole-setup.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {\n         return verify_vc_allocation(vcs.v_active);\n }\n \n-static int verify_vc_kbmode(int fd) {\n-        int curr_mode;\n-\n-        /*\n-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n-         * Otherwise we would (likely) interfere with X11's processing of the\n-         * key events.\n-         *\n-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n-         */\n-\n-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n-                return -errno;\n-\n-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n-}\n-\n static int toggle_utf8(const char *name, int fd, bool utf8) {\n         int r;\n         struct termios tc = {};\n \n         assert(name);\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_warning_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", name);\n+                return 0;\n+        } else if (r < 0)\n+                return log_warning_errno(r, \""Failed to verify kbdmode on %s: %m\"", name);\n+\n         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);\n         if (r < 0)\n                 return log_warning_errno(errno, \""Failed to %s UTF-8 kbdmode on %s: %m\"", enable_disable(utf8), name);\n@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {\n                         continue;\n                 }\n \n-                if (verify_vc_kbmode(fd_d) < 0)\n+                if (vt_verify_kbmode(fd_d) < 0)\n                         continue;\n \n                 toggle_utf8(ttyname, fd_d, utf8);\n@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {\n                                 err = -fd;\n                         continue;\n                 }\n-                r = verify_vc_kbmode(fd);\n+                r = vt_verify_kbmode(fd);\n                 if (r < 0) {\n                         if (!err)\n                                 err = -r;\n@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not allocated: %m\"", src_vc);\n \n-        r = verify_vc_kbmode(fd);\n+        r = vt_verify_kbmode(fd);\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", src_vc);\n ""}"," static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
+        r = vt_verify_kbmode(fd);
+        if (r == -EBUSY) {
+                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
+                return 0;
+        } else if (r < 0)
+                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
+
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+
+        r = loop_write(fd, utf8 ? ""\033%G"" : ""\033%@"", 3, false);
+        if (r < 0)
+                return log_warning_errno(r, ""Failed to %s UTF-8 term processing on %s: %m"", enable_disable(utf8), name);
+
+        r = tcgetattr(fd, &tc);
+        if (r >= 0) {
+                SET_FLAG(tc.c_iflag, IUTF8, utf8);
+                r = tcsetattr(fd, TCSANOW, &tc);
+        }
+        if (r < 0)
+                return log_warning_errno(errno, ""Failed to %s iutf8 flag on %s: %m"", enable_disable(utf8), name);
+
+        log_debug(""UTF-8 kbdmode %sd on %s"", enable_disable(utf8), name);
+        return 0;
+}
+"," static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+
+        r = loop_write(fd, utf8 ? ""\033%G"" : ""\033%@"", 3, false);
+        if (r < 0)
+                return log_warning_errno(r, ""Failed to %s UTF-8 term processing on %s: %m"", enable_disable(utf8), name);
+
+        r = tcgetattr(fd, &tc);
+        if (r >= 0) {
+                SET_FLAG(tc.c_iflag, IUTF8, utf8);
+                r = tcsetattr(fd, TCSANOW, &tc);
+        }
+        if (r < 0)
+                return log_warning_errno(errno, ""Failed to %s iutf8 flag on %s: %m"", enable_disable(utf8), name);
+
+        log_debug(""UTF-8 kbdmode %sd on %s"", enable_disable(utf8), name);
+        return 0;
+}
+",C,"        r = vt_verify_kbmode(fd);
+        if (r == -EBUSY) {
+                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
+                return 0;
+        } else if (r < 0)
+                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
+
+",,,"@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {
+         return verify_vc_allocation(vcs.v_active);
+ }
+ 
+-static int verify_vc_kbmode(int fd) {
+-        int curr_mode;
+-
+-        /*
+-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+-         * Otherwise we would (likely) interfere with X11's processing of the
+-         * key events.
+-         *
+-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+-         */
+-
+-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+-                return -errno;
+-
+-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+-}
+-
+ static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
++        r = vt_verify_kbmode(fd);
++        if (r == -EBUSY) {
++                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
++                return 0;
++        } else if (r < 0)
++                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
++
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+                         continue;
+                 }
+ 
+-                if (verify_vc_kbmode(fd_d) < 0)
++                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+                                 err = -fd;
+                         continue;
+                 }
+-                r = verify_vc_kbmode(fd);
++                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+-        r = verify_vc_kbmode(fd);
++        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ ",systemd,9725f1a10f80f5e0ae7d9b60547458622aeb322f,a32a00831ca8226bf25a9686ddb58326f4b756cd,1," static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
+//fix_flaw_line_below:
+//        r = vt_verify_kbmode(fd);
+//fix_flaw_line_below:
+//        if (r == -EBUSY) {
+//fix_flaw_line_below:
+//                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
+//fix_flaw_line_below:
+//                return 0;
+//fix_flaw_line_below:
+//        } else if (r < 0)
+//fix_flaw_line_below:
+//                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
+//fix_flaw_line_below:
+//
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+
+        r = loop_write(fd, utf8 ? ""\033%G"" : ""\033%@"", 3, false);
+        if (r < 0)
+                return log_warning_errno(r, ""Failed to %s UTF-8 term processing on %s: %m"", enable_disable(utf8), name);
+
+        r = tcgetattr(fd, &tc);
+        if (r >= 0) {
+                SET_FLAG(tc.c_iflag, IUTF8, utf8);
+                r = tcsetattr(fd, TCSANOW, &tc);
+        }
+        if (r < 0)
+                return log_warning_errno(errno, ""Failed to %s iutf8 flag on %s: %m"", enable_disable(utf8), name);
+
+        log_debug(""UTF-8 kbdmode %sd on %s"", enable_disable(utf8), name);
+        return 0;
+}
+"
+5216,182952,,Remote,Not required,,CVE-2018-20839,https://www.cvedetails.com/cve/CVE-2018-20839/,CWE-255,Low,Partial,,,2019-05-17,5.0,"systemd 242 changes the VT1 mode upon a logout, which allows attackers to read cleartext passwords in certain circumstances, such as watching a shutdown, or using Ctrl-Alt-F1 and Ctrl-Alt-F2. This occurs because the KDGKBMODE (aka current keyboard mode) check is mishandled.",2019-05-30,,1,https://github.com/systemd/systemd/commit/9725f1a10f80f5e0ae7d9b60547458622aeb322f,9725f1a10f80f5e0ae7d9b60547458622aeb322f,"Merge pull request #12378 from rbalint/vt-kbd-reset-check
+
+VT kbd reset check",1,src/vconsole/vconsole-setup.c,"{""sha"": ""71238ac9c43579079f9182be18f62f1e97c47513"", ""filename"": ""src/basic/terminal-util.c"", ""status"": ""modified"", ""additions"": 25, ""deletions"": 1, ""changes"": 26, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {\n         return parse_boolean(b);\n }\n \n+int vt_verify_kbmode(int fd) {\n+        int curr_mode;\n+\n+        /*\n+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n+         * Otherwise we would (likely) interfere with X11's processing of the\n+         * key events.\n+         *\n+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n+         */\n+\n+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n+                return -errno;\n+\n+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n+}\n+\n int vt_reset_keyboard(int fd) {\n-        int kb;\n+        int kb, r;\n \n         /* If we can't read the default, then default to unicode. It's 2017 after all. */\n         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_debug_errno(r, \""Keyboard is not in XLATE or UNICODE mode, not resetting: %m\"");\n+                return 0;\n+        } else if (r < 0)\n+                return r;\n+\n         if (ioctl(fd, KDSKBMODE, kb) < 0)\n                 return -errno;\n ""}<_**next**_>{""sha"": ""2a1851c0f163244a4e05b76f082ee84a7a1506e1"", ""filename"": ""src/basic/terminal-util.h"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.h?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -156,6 +156,7 @@ int openpt_in_namespace(pid_t pid, int flags);\n int open_terminal_in_namespace(pid_t pid, const char *name, int mode);\n \n int vt_default_utf8(void);\n+int vt_verify_kbmode(int fd);\n int vt_reset_keyboard(int fd);\n int vt_restore(int fd);\n int vt_release(int fd, bool restore_vt);""}<_**next**_>{""sha"": ""d2bc3921d281deeb1ce262298355af74325c84f4"", ""filename"": ""src/vconsole/vconsole-setup.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 20, ""changes"": 30, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/vconsole/vconsole-setup.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {\n         return verify_vc_allocation(vcs.v_active);\n }\n \n-static int verify_vc_kbmode(int fd) {\n-        int curr_mode;\n-\n-        /*\n-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n-         * Otherwise we would (likely) interfere with X11's processing of the\n-         * key events.\n-         *\n-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n-         */\n-\n-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n-                return -errno;\n-\n-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n-}\n-\n static int toggle_utf8(const char *name, int fd, bool utf8) {\n         int r;\n         struct termios tc = {};\n \n         assert(name);\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_warning_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", name);\n+                return 0;\n+        } else if (r < 0)\n+                return log_warning_errno(r, \""Failed to verify kbdmode on %s: %m\"", name);\n+\n         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);\n         if (r < 0)\n                 return log_warning_errno(errno, \""Failed to %s UTF-8 kbdmode on %s: %m\"", enable_disable(utf8), name);\n@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {\n                         continue;\n                 }\n \n-                if (verify_vc_kbmode(fd_d) < 0)\n+                if (vt_verify_kbmode(fd_d) < 0)\n                         continue;\n \n                 toggle_utf8(ttyname, fd_d, utf8);\n@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {\n                                 err = -fd;\n                         continue;\n                 }\n-                r = verify_vc_kbmode(fd);\n+                r = vt_verify_kbmode(fd);\n                 if (r < 0) {\n                         if (!err)\n                                 err = -r;\n@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not allocated: %m\"", src_vc);\n \n-        r = verify_vc_kbmode(fd);\n+        r = vt_verify_kbmode(fd);\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", src_vc);\n ""}","static int verify_source_vc(char **ret_path, const char *src_vc) {
+        _cleanup_close_ int fd = -1;
+        char *path;
+        int r;
+
+        fd = open_terminal(src_vc, O_RDWR|O_CLOEXEC|O_NOCTTY);
+        if (fd < 0)
+                return log_error_errno(fd, ""Failed to open %s: %m"", src_vc);
+
+        r = verify_vc_device(fd);
+        if (r < 0)
+                return log_error_errno(r, ""Device %s is not a virtual console: %m"", src_vc);
+
+        r = verify_vc_allocation_byfd(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ 
+        path = strdup(src_vc);
+        if (!path)
+                return log_oom();
+
+        *ret_path = path;
+        return TAKE_FD(fd);
+}
+","static int verify_source_vc(char **ret_path, const char *src_vc) {
+        _cleanup_close_ int fd = -1;
+        char *path;
+        int r;
+
+        fd = open_terminal(src_vc, O_RDWR|O_CLOEXEC|O_NOCTTY);
+        if (fd < 0)
+                return log_error_errno(fd, ""Failed to open %s: %m"", src_vc);
+
+        r = verify_vc_device(fd);
+        if (r < 0)
+                return log_error_errno(r, ""Device %s is not a virtual console: %m"", src_vc);
+
+        r = verify_vc_allocation_byfd(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+        r = verify_vc_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ 
+        path = strdup(src_vc);
+        if (!path)
+                return log_oom();
+
+        *ret_path = path;
+        return TAKE_FD(fd);
+}
+",C,"        r = vt_verify_kbmode(fd);
+","        r = verify_vc_kbmode(fd);
+",,"@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {
+         return verify_vc_allocation(vcs.v_active);
+ }
+ 
+-static int verify_vc_kbmode(int fd) {
+-        int curr_mode;
+-
+-        /*
+-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+-         * Otherwise we would (likely) interfere with X11's processing of the
+-         * key events.
+-         *
+-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+-         */
+-
+-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+-                return -errno;
+-
+-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+-}
+-
+ static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
++        r = vt_verify_kbmode(fd);
++        if (r == -EBUSY) {
++                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
++                return 0;
++        } else if (r < 0)
++                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
++
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+                         continue;
+                 }
+ 
+-                if (verify_vc_kbmode(fd_d) < 0)
++                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+                                 err = -fd;
+                         continue;
+                 }
+-                r = verify_vc_kbmode(fd);
++                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+-        r = verify_vc_kbmode(fd);
++        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ ",systemd,9725f1a10f80f5e0ae7d9b60547458622aeb322f,a32a00831ca8226bf25a9686ddb58326f4b756cd,1,"static int verify_source_vc(char **ret_path, const char *src_vc) {
+        _cleanup_close_ int fd = -1;
+        char *path;
+        int r;
+
+        fd = open_terminal(src_vc, O_RDWR|O_CLOEXEC|O_NOCTTY);
+        if (fd < 0)
+                return log_error_errno(fd, ""Failed to open %s: %m"", src_vc);
+
+        r = verify_vc_device(fd);
+        if (r < 0)
+                return log_error_errno(r, ""Device %s is not a virtual console: %m"", src_vc);
+
+        r = verify_vc_allocation_byfd(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+//flaw_line_below:
+        r = verify_vc_kbmode(fd);
+//fix_flaw_line_below:
+//        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ 
+        path = strdup(src_vc);
+        if (!path)
+                return log_oom();
+
+        *ret_path = path;
+        return TAKE_FD(fd);
+}
+"
+5217,182953,,Remote,Not required,,CVE-2018-20839,https://www.cvedetails.com/cve/CVE-2018-20839/,CWE-255,Low,Partial,,,2019-05-17,5.0,"systemd 242 changes the VT1 mode upon a logout, which allows attackers to read cleartext passwords in certain circumstances, such as watching a shutdown, or using Ctrl-Alt-F1 and Ctrl-Alt-F2. This occurs because the KDGKBMODE (aka current keyboard mode) check is mishandled.",2019-05-30,,0,https://github.com/systemd/systemd/commit/9725f1a10f80f5e0ae7d9b60547458622aeb322f,9725f1a10f80f5e0ae7d9b60547458622aeb322f,"Merge pull request #12378 from rbalint/vt-kbd-reset-check
+
+VT kbd reset check",12,src/vconsole/vconsole-setup.c,"{""sha"": ""71238ac9c43579079f9182be18f62f1e97c47513"", ""filename"": ""src/basic/terminal-util.c"", ""status"": ""modified"", ""additions"": 25, ""deletions"": 1, ""changes"": 26, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -1249,12 +1249,36 @@ int vt_default_utf8(void) {\n         return parse_boolean(b);\n }\n \n+int vt_verify_kbmode(int fd) {\n+        int curr_mode;\n+\n+        /*\n+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n+         * Otherwise we would (likely) interfere with X11's processing of the\n+         * key events.\n+         *\n+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n+         */\n+\n+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n+                return -errno;\n+\n+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n+}\n+\n int vt_reset_keyboard(int fd) {\n-        int kb;\n+        int kb, r;\n \n         /* If we can't read the default, then default to unicode. It's 2017 after all. */\n         kb = vt_default_utf8() != 0 ? K_UNICODE : K_XLATE;\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_debug_errno(r, \""Keyboard is not in XLATE or UNICODE mode, not resetting: %m\"");\n+                return 0;\n+        } else if (r < 0)\n+                return r;\n+\n         if (ioctl(fd, KDSKBMODE, kb) < 0)\n                 return -errno;\n ""}<_**next**_>{""sha"": ""2a1851c0f163244a4e05b76f082ee84a7a1506e1"", ""filename"": ""src/basic/terminal-util.h"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 0, ""changes"": 1, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/basic/terminal-util.h"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/basic/terminal-util.h?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -156,6 +156,7 @@ int openpt_in_namespace(pid_t pid, int flags);\n int open_terminal_in_namespace(pid_t pid, const char *name, int mode);\n \n int vt_default_utf8(void);\n+int vt_verify_kbmode(int fd);\n int vt_reset_keyboard(int fd);\n int vt_restore(int fd);\n int vt_release(int fd, bool restore_vt);""}<_**next**_>{""sha"": ""d2bc3921d281deeb1ce262298355af74325c84f4"", ""filename"": ""src/vconsole/vconsole-setup.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 20, ""changes"": 30, ""blob_url"": ""https://github.com/systemd/systemd/blob/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""raw_url"": ""https://github.com/systemd/systemd/raw/9725f1a10f80f5e0ae7d9b60547458622aeb322f/src/vconsole/vconsole-setup.c"", ""contents_url"": ""https://api.github.com/repos/systemd/systemd/contents/src/vconsole/vconsole-setup.c?ref=9725f1a10f80f5e0ae7d9b60547458622aeb322f"", ""patch"": ""@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {\n         return verify_vc_allocation(vcs.v_active);\n }\n \n-static int verify_vc_kbmode(int fd) {\n-        int curr_mode;\n-\n-        /*\n-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.\n-         * Otherwise we would (likely) interfere with X11's processing of the\n-         * key events.\n-         *\n-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html\n-         */\n-\n-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)\n-                return -errno;\n-\n-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;\n-}\n-\n static int toggle_utf8(const char *name, int fd, bool utf8) {\n         int r;\n         struct termios tc = {};\n \n         assert(name);\n \n+        r = vt_verify_kbmode(fd);\n+        if (r == -EBUSY) {\n+                log_warning_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", name);\n+                return 0;\n+        } else if (r < 0)\n+                return log_warning_errno(r, \""Failed to verify kbdmode on %s: %m\"", name);\n+\n         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);\n         if (r < 0)\n                 return log_warning_errno(errno, \""Failed to %s UTF-8 kbdmode on %s: %m\"", enable_disable(utf8), name);\n@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {\n                         continue;\n                 }\n \n-                if (verify_vc_kbmode(fd_d) < 0)\n+                if (vt_verify_kbmode(fd_d) < 0)\n                         continue;\n \n                 toggle_utf8(ttyname, fd_d, utf8);\n@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {\n                                 err = -fd;\n                         continue;\n                 }\n-                r = verify_vc_kbmode(fd);\n+                r = vt_verify_kbmode(fd);\n                 if (r < 0) {\n                         if (!err)\n                                 err = -r;\n@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not allocated: %m\"", src_vc);\n \n-        r = verify_vc_kbmode(fd);\n+        r = vt_verify_kbmode(fd);\n         if (r < 0)\n                 return log_error_errno(r, \""Virtual console %s is not in K_XLATE or K_UNICODE: %m\"", src_vc);\n ""}","static int verify_vc_kbmode(int fd) {
+","static int verify_vc_kbmode(int fd) {
+        int curr_mode;
+        /*
+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+         * Otherwise we would (likely) interfere with X11's processing of the
+         * key events.
+         *
+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+         */
+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+                return -errno;
+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+}
+",C,,"        int curr_mode;
+        /*
+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+         * Otherwise we would (likely) interfere with X11's processing of the
+         * key events.
+         *
+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+         */
+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+                return -errno;
+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+}
+",,"@@ -70,29 +70,19 @@ static int verify_vc_allocation_byfd(int fd) {
+         return verify_vc_allocation(vcs.v_active);
+ }
+ 
+-static int verify_vc_kbmode(int fd) {
+-        int curr_mode;
+-
+-        /*
+-         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+-         * Otherwise we would (likely) interfere with X11's processing of the
+-         * key events.
+-         *
+-         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+-         */
+-
+-        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+-                return -errno;
+-
+-        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+-}
+-
+ static int toggle_utf8(const char *name, int fd, bool utf8) {
+         int r;
+         struct termios tc = {};
+ 
+         assert(name);
+ 
++        r = vt_verify_kbmode(fd);
++        if (r == -EBUSY) {
++                log_warning_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", name);
++                return 0;
++        } else if (r < 0)
++                return log_warning_errno(r, ""Failed to verify kbdmode on %s: %m"", name);
++
+         r = ioctl(fd, KDSKBMODE, utf8 ? K_UNICODE : K_XLATE);
+         if (r < 0)
+                 return log_warning_errno(errno, ""Failed to %s UTF-8 kbdmode on %s: %m"", enable_disable(utf8), name);
+@@ -290,7 +280,7 @@ static void setup_remaining_vcs(int src_fd, unsigned src_idx, bool utf8) {
+                         continue;
+                 }
+ 
+-                if (verify_vc_kbmode(fd_d) < 0)
++                if (vt_verify_kbmode(fd_d) < 0)
+                         continue;
+ 
+                 toggle_utf8(ttyname, fd_d, utf8);
+@@ -365,7 +355,7 @@ static int find_source_vc(char **ret_path, unsigned *ret_idx) {
+                                 err = -fd;
+                         continue;
+                 }
+-                r = verify_vc_kbmode(fd);
++                r = vt_verify_kbmode(fd);
+                 if (r < 0) {
+                         if (!err)
+                                 err = -r;
+@@ -398,7 +388,7 @@ static int verify_source_vc(char **ret_path, const char *src_vc) {
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not allocated: %m"", src_vc);
+ 
+-        r = verify_vc_kbmode(fd);
++        r = vt_verify_kbmode(fd);
+         if (r < 0)
+                 return log_error_errno(r, ""Virtual console %s is not in K_XLATE or K_UNICODE: %m"", src_vc);
+ ",systemd,9725f1a10f80f5e0ae7d9b60547458622aeb322f,a32a00831ca8226bf25a9686ddb58326f4b756cd,1,"static int verify_vc_kbmode(int fd) {
+//flaw_line_below:
+        int curr_mode;
+//flaw_line_below:
+
+//flaw_line_below:
+        /*
+//flaw_line_below:
+         * Make sure we only adjust consoles in K_XLATE or K_UNICODE mode.
+//flaw_line_below:
+         * Otherwise we would (likely) interfere with X11's processing of the
+//flaw_line_below:
+         * key events.
+//flaw_line_below:
+         *
+//flaw_line_below:
+         * http://lists.freedesktop.org/archives/systemd-devel/2013-February/008573.html
+//flaw_line_below:
+         */
+//flaw_line_below:
+
+//flaw_line_below:
+        if (ioctl(fd, KDGKBMODE, &curr_mode) < 0)
+//flaw_line_below:
+                return -errno;
+//flaw_line_below:
+
+//flaw_line_below:
+        return IN_SET(curr_mode, K_XLATE, K_UNICODE) ? 0 : -EBUSY;
+//flaw_line_below:
+}
+"

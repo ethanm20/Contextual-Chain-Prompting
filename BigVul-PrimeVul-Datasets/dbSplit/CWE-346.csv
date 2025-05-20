@@ -1,0 +1,628 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+3818,181554,,Remote,Not required,,CVE-2017-5592,https://www.cvedetails.com/cve/CVE-2017-5592/,CWE-346,Medium,,Partial,,2017-02-09,4.3,"An incorrect implementation of *XEP-0280: Message Carbons* in multiple XMPP clients allows a remote attacker to impersonate any user, including contacts, in the vulnerable application's display. This allows for various kinds of social engineering attacks. This CVE is for profanity (0.4.7 - 0.5.0).",2017-02-28,,8,https://github.com/boothj5/profanity/commit/8e75437a7e43d4c55e861691f74892e666e29b0b,8e75437a7e43d4c55e861691f74892e666e29b0b,Add carbons from check,1,src/xmpp/message.c,"{""sha"": ""3f8ad5a0acb7ce4446847e9f9fc5ab19260cda3e"", ""filename"": ""src/xmpp/message.c"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 1, ""changes"": 9, ""blob_url"": ""https://github.com/profanity-im/profanity/blob/8e75437a7e43d4c55e861691f74892e666e29b0b/src/xmpp/message.c"", ""raw_url"": ""https://github.com/profanity-im/profanity/raw/8e75437a7e43d4c55e861691f74892e666e29b0b/src/xmpp/message.c"", ""contents_url"": ""https://api.github.com/repos/profanity-im/profanity/contents/src/xmpp/message.c?ref=8e75437a7e43d4c55e861691f74892e666e29b0b"", ""patch"": ""@@ -714,6 +714,14 @@ _handle_carbons(xmpp_stanza_t *const stanza)\n         return TRUE;\n     }\n \n+    Jid *my_jid = jid_create(connection_get_fulljid());\n+    const char *const stanza_from = xmpp_stanza_get_from(stanza);\n+    Jid *msg_jid = jid_create(stanza_from);\n+    if (g_strcmp0(my_jid->barejid, msg_jid->barejid) != 0) {\n+        log_warning(\""Invalid carbon received, from: %s\"", stanza_from);\n+        return TRUE;\n+    }\n+\n     const gchar *to = xmpp_stanza_get_to(message);\n     const gchar *from = xmpp_stanza_get_from(message);\n \n@@ -722,7 +730,6 @@ _handle_carbons(xmpp_stanza_t *const stanza)\n \n     Jid *jid_from = jid_create(from);\n     Jid *jid_to = jid_create(to);\n-    Jid *my_jid = jid_create(connection_get_fulljid());\n \n     // check for pgp encrypted message\n     char *enc_message = NULL;""}<_**next**_>{""sha"": ""7926a76fa22158af397be61112eb210ea18dc7c5"", ""filename"": ""tests/functionaltests/test_carbons.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/profanity-im/profanity/blob/8e75437a7e43d4c55e861691f74892e666e29b0b/tests/functionaltests/test_carbons.c"", ""raw_url"": ""https://github.com/profanity-im/profanity/raw/8e75437a7e43d4c55e861691f74892e666e29b0b/tests/functionaltests/test_carbons.c"", ""contents_url"": ""https://api.github.com/repos/profanity-im/profanity/contents/tests/functionaltests/test_carbons.c?ref=8e75437a7e43d4c55e861691f74892e666e29b0b"", ""patch"": ""@@ -70,7 +70,7 @@ receive_carbon(void **state)\n     assert_true(prof_output_exact(\""unencrypted\""));\n \n     stbbr_send(\n-        \""<message type='chat' to='stabber@localhost/profanity' from='buddy1@localhost'>\""\n+        \""<message type='chat' to='stabber@localhost/profanity' from='stabber@localhost'>\""\n             \""<received xmlns='urn:xmpp:carbons:2'>\""\n                 \""<forwarded xmlns='urn:xmpp:forward:0'>\""\n                     \""<message id='prof_msg_7' xmlns='jabber:client' type='chat' lang='en' to='stabber@localhost/profanity' from='buddy1@localhost/mobile'>\""""}","_handle_carbons(xmpp_stanza_t *const stanza)
+{
+    xmpp_stanza_t *carbons = xmpp_stanza_get_child_by_ns(stanza, STANZA_NS_CARBONS);
+    if (!carbons) {
+        return FALSE;
+    }
+
+    const char *name = xmpp_stanza_get_name(carbons);
+    if (!name) {
+        log_error(""Unable to retrieve stanza name for Carbon"");
+        return TRUE;
+    }
+
+    if (g_strcmp0(name, ""private"") == 0) {
+        log_info(""Carbon received with private element."");
+        return FALSE;
+    }
+
+    if ((g_strcmp0(name, ""received"") != 0) && (g_strcmp0(name, ""sent"") != 0)) {
+        log_warning(""Carbon received with unrecognised stanza name: %s"", name);
+        return TRUE;
+    }
+
+    xmpp_stanza_t *forwarded = xmpp_stanza_get_child_by_ns(carbons, STANZA_NS_FORWARD);
+    if (!forwarded) {
+        log_warning(""Carbon received with no forwarded element"");
+        return TRUE;
+    }
+
+    xmpp_stanza_t *message = xmpp_stanza_get_child_by_name(forwarded, STANZA_NAME_MESSAGE);
+    if (!message) {
+        log_warning(""Carbon received with no message element"");
+        return TRUE;
+    }
+
+    char *message_txt = xmpp_message_get_body(message);
+    if (!message_txt) {
+        log_warning(""Carbon received with no message."");
+         return TRUE;
+     }
+ 
+    Jid *my_jid = jid_create(connection_get_fulljid());
+    const char *const stanza_from = xmpp_stanza_get_from(stanza);
+    Jid *msg_jid = jid_create(stanza_from);
+    if (g_strcmp0(my_jid->barejid, msg_jid->barejid) != 0) {
+        log_warning(""Invalid carbon received, from: %s"", stanza_from);
+        return TRUE;
+    }
+
+     const gchar *to = xmpp_stanza_get_to(message);
+     const gchar *from = xmpp_stanza_get_from(message);
+ 
+    if (!to) to = from;
+ 
+     Jid *jid_from = jid_create(from);
+     Jid *jid_to = jid_create(to);
+ 
+     char *enc_message = NULL;
+    xmpp_stanza_t *x = xmpp_stanza_get_child_by_ns(message, STANZA_NS_ENCRYPTED);
+    if (x) {
+        enc_message = xmpp_stanza_get_text(x);
+    }
+
+    if (g_strcmp0(my_jid->barejid, jid_to->barejid) == 0) {
+        sv_ev_incoming_carbon(jid_from->barejid, jid_from->resourcepart, message_txt, enc_message);
+
+    } else {
+        sv_ev_outgoing_carbon(jid_to->barejid, message_txt, enc_message);
+    }
+
+    xmpp_ctx_t *ctx = connection_get_ctx();
+    xmpp_free(ctx, message_txt);
+    xmpp_free(ctx, enc_message);
+
+    jid_destroy(jid_from);
+    jid_destroy(jid_to);
+    jid_destroy(my_jid);
+
+    return TRUE;
+}
+","_handle_carbons(xmpp_stanza_t *const stanza)
+{
+    xmpp_stanza_t *carbons = xmpp_stanza_get_child_by_ns(stanza, STANZA_NS_CARBONS);
+    if (!carbons) {
+        return FALSE;
+    }
+
+    const char *name = xmpp_stanza_get_name(carbons);
+    if (!name) {
+        log_error(""Unable to retrieve stanza name for Carbon"");
+        return TRUE;
+    }
+
+    if (g_strcmp0(name, ""private"") == 0) {
+        log_info(""Carbon received with private element."");
+        return FALSE;
+    }
+
+    if ((g_strcmp0(name, ""received"") != 0) && (g_strcmp0(name, ""sent"") != 0)) {
+        log_warning(""Carbon received with unrecognised stanza name: %s"", name);
+        return TRUE;
+    }
+
+    xmpp_stanza_t *forwarded = xmpp_stanza_get_child_by_ns(carbons, STANZA_NS_FORWARD);
+    if (!forwarded) {
+        log_warning(""Carbon received with no forwarded element"");
+        return TRUE;
+    }
+
+    xmpp_stanza_t *message = xmpp_stanza_get_child_by_name(forwarded, STANZA_NAME_MESSAGE);
+    if (!message) {
+        log_warning(""Carbon received with no message element"");
+        return TRUE;
+    }
+
+    char *message_txt = xmpp_message_get_body(message);
+    if (!message_txt) {
+        log_warning(""Carbon received with no message."");
+         return TRUE;
+     }
+ 
+     const gchar *to = xmpp_stanza_get_to(message);
+     const gchar *from = xmpp_stanza_get_from(message);
+ 
+    if (!to) to = from;
+ 
+     Jid *jid_from = jid_create(from);
+     Jid *jid_to = jid_create(to);
+    Jid *my_jid = jid_create(connection_get_fulljid());
+ 
+     char *enc_message = NULL;
+    xmpp_stanza_t *x = xmpp_stanza_get_child_by_ns(message, STANZA_NS_ENCRYPTED);
+    if (x) {
+        enc_message = xmpp_stanza_get_text(x);
+    }
+
+    if (g_strcmp0(my_jid->barejid, jid_to->barejid) == 0) {
+        sv_ev_incoming_carbon(jid_from->barejid, jid_from->resourcepart, message_txt, enc_message);
+
+    } else {
+        sv_ev_outgoing_carbon(jid_to->barejid, message_txt, enc_message);
+    }
+
+    xmpp_ctx_t *ctx = connection_get_ctx();
+    xmpp_free(ctx, message_txt);
+    xmpp_free(ctx, enc_message);
+
+    jid_destroy(jid_from);
+    jid_destroy(jid_to);
+    jid_destroy(my_jid);
+
+    return TRUE;
+}
+",C,"    Jid *my_jid = jid_create(connection_get_fulljid());
+    const char *const stanza_from = xmpp_stanza_get_from(stanza);
+    Jid *msg_jid = jid_create(stanza_from);
+    if (g_strcmp0(my_jid->barejid, msg_jid->barejid) != 0) {
+        log_warning(""Invalid carbon received, from: %s"", stanza_from);
+        return TRUE;
+    }
+
+","    Jid *my_jid = jid_create(connection_get_fulljid());
+",,"@@ -714,6 +714,14 @@ _handle_carbons(xmpp_stanza_t *const stanza)
+         return TRUE;
+     }
+ 
++    Jid *my_jid = jid_create(connection_get_fulljid());
++    const char *const stanza_from = xmpp_stanza_get_from(stanza);
++    Jid *msg_jid = jid_create(stanza_from);
++    if (g_strcmp0(my_jid->barejid, msg_jid->barejid) != 0) {
++        log_warning(""Invalid carbon received, from: %s"", stanza_from);
++        return TRUE;
++    }
++
+     const gchar *to = xmpp_stanza_get_to(message);
+     const gchar *from = xmpp_stanza_get_from(message);
+ 
+@@ -722,7 +730,6 @@ _handle_carbons(xmpp_stanza_t *const stanza)
+ 
+     Jid *jid_from = jid_create(from);
+     Jid *jid_to = jid_create(to);
+-    Jid *my_jid = jid_create(connection_get_fulljid());
+ 
+     // check for pgp encrypted message
+     char *enc_message = NULL;",profanity,8e75437a7e43d4c55e861691f74892e666e29b0b,c07341830670819b4dc4a16c56fcac9ad21be16d,1,"_handle_carbons(xmpp_stanza_t *const stanza)
+{
+    xmpp_stanza_t *carbons = xmpp_stanza_get_child_by_ns(stanza, STANZA_NS_CARBONS);
+    if (!carbons) {
+        return FALSE;
+    }
+
+    const char *name = xmpp_stanza_get_name(carbons);
+    if (!name) {
+        log_error(""Unable to retrieve stanza name for Carbon"");
+        return TRUE;
+    }
+
+    if (g_strcmp0(name, ""private"") == 0) {
+        log_info(""Carbon received with private element."");
+        return FALSE;
+    }
+
+    if ((g_strcmp0(name, ""received"") != 0) && (g_strcmp0(name, ""sent"") != 0)) {
+        log_warning(""Carbon received with unrecognised stanza name: %s"", name);
+        return TRUE;
+    }
+
+    xmpp_stanza_t *forwarded = xmpp_stanza_get_child_by_ns(carbons, STANZA_NS_FORWARD);
+    if (!forwarded) {
+        log_warning(""Carbon received with no forwarded element"");
+        return TRUE;
+    }
+
+    xmpp_stanza_t *message = xmpp_stanza_get_child_by_name(forwarded, STANZA_NAME_MESSAGE);
+    if (!message) {
+        log_warning(""Carbon received with no message element"");
+        return TRUE;
+    }
+
+    char *message_txt = xmpp_message_get_body(message);
+    if (!message_txt) {
+        log_warning(""Carbon received with no message."");
+         return TRUE;
+     }
+ 
+//fix_flaw_line_below:
+//    Jid *my_jid = jid_create(connection_get_fulljid());
+//fix_flaw_line_below:
+//    const char *const stanza_from = xmpp_stanza_get_from(stanza);
+//fix_flaw_line_below:
+//    Jid *msg_jid = jid_create(stanza_from);
+//fix_flaw_line_below:
+//    if (g_strcmp0(my_jid->barejid, msg_jid->barejid) != 0) {
+//fix_flaw_line_below:
+//        log_warning(""Invalid carbon received, from: %s"", stanza_from);
+//fix_flaw_line_below:
+//        return TRUE;
+//fix_flaw_line_below:
+//    }
+//fix_flaw_line_below:
+//
+     const gchar *to = xmpp_stanza_get_to(message);
+     const gchar *from = xmpp_stanza_get_from(message);
+ 
+    // happens when receive a carbon of a self sent message
+    if (!to) to = from;
+ 
+     Jid *jid_from = jid_create(from);
+     Jid *jid_to = jid_create(to);
+//flaw_line_below:
+    Jid *my_jid = jid_create(connection_get_fulljid());
+ 
+     // check for pgp encrypted message
+     char *enc_message = NULL;
+    xmpp_stanza_t *x = xmpp_stanza_get_child_by_ns(message, STANZA_NS_ENCRYPTED);
+    if (x) {
+        enc_message = xmpp_stanza_get_text(x);
+    }
+
+    // if we are the recipient, treat as standard incoming message
+    if (g_strcmp0(my_jid->barejid, jid_to->barejid) == 0) {
+        sv_ev_incoming_carbon(jid_from->barejid, jid_from->resourcepart, message_txt, enc_message);
+
+    // else treat as a sent message
+    } else {
+        sv_ev_outgoing_carbon(jid_to->barejid, message_txt, enc_message);
+    }
+
+    xmpp_ctx_t *ctx = connection_get_ctx();
+    xmpp_free(ctx, message_txt);
+    xmpp_free(ctx, enc_message);
+
+    jid_destroy(jid_from);
+    jid_destroy(jid_to);
+    jid_destroy(my_jid);
+
+    return TRUE;
+}
+"
+3819,181555,,Remote,Not required,,CVE-2017-5592,https://www.cvedetails.com/cve/CVE-2017-5592/,CWE-346,Medium,,Partial,,2017-02-09,4.3,"An incorrect implementation of *XEP-0280: Message Carbons* in multiple XMPP clients allows a remote attacker to impersonate any user, including contacts, in the vulnerable application's display. This allows for various kinds of social engineering attacks. This CVE is for profanity (0.4.7 - 0.5.0).",2017-02-28,,1,https://github.com/boothj5/profanity/commit/8e75437a7e43d4c55e861691f74892e666e29b0b,8e75437a7e43d4c55e861691f74892e666e29b0b,Add carbons from check,1,tests/functionaltests/test_carbons.c,"{""sha"": ""3f8ad5a0acb7ce4446847e9f9fc5ab19260cda3e"", ""filename"": ""src/xmpp/message.c"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 1, ""changes"": 9, ""blob_url"": ""https://github.com/profanity-im/profanity/blob/8e75437a7e43d4c55e861691f74892e666e29b0b/src/xmpp/message.c"", ""raw_url"": ""https://github.com/profanity-im/profanity/raw/8e75437a7e43d4c55e861691f74892e666e29b0b/src/xmpp/message.c"", ""contents_url"": ""https://api.github.com/repos/profanity-im/profanity/contents/src/xmpp/message.c?ref=8e75437a7e43d4c55e861691f74892e666e29b0b"", ""patch"": ""@@ -714,6 +714,14 @@ _handle_carbons(xmpp_stanza_t *const stanza)\n         return TRUE;\n     }\n \n+    Jid *my_jid = jid_create(connection_get_fulljid());\n+    const char *const stanza_from = xmpp_stanza_get_from(stanza);\n+    Jid *msg_jid = jid_create(stanza_from);\n+    if (g_strcmp0(my_jid->barejid, msg_jid->barejid) != 0) {\n+        log_warning(\""Invalid carbon received, from: %s\"", stanza_from);\n+        return TRUE;\n+    }\n+\n     const gchar *to = xmpp_stanza_get_to(message);\n     const gchar *from = xmpp_stanza_get_from(message);\n \n@@ -722,7 +730,6 @@ _handle_carbons(xmpp_stanza_t *const stanza)\n \n     Jid *jid_from = jid_create(from);\n     Jid *jid_to = jid_create(to);\n-    Jid *my_jid = jid_create(connection_get_fulljid());\n \n     // check for pgp encrypted message\n     char *enc_message = NULL;""}<_**next**_>{""sha"": ""7926a76fa22158af397be61112eb210ea18dc7c5"", ""filename"": ""tests/functionaltests/test_carbons.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/profanity-im/profanity/blob/8e75437a7e43d4c55e861691f74892e666e29b0b/tests/functionaltests/test_carbons.c"", ""raw_url"": ""https://github.com/profanity-im/profanity/raw/8e75437a7e43d4c55e861691f74892e666e29b0b/tests/functionaltests/test_carbons.c"", ""contents_url"": ""https://api.github.com/repos/profanity-im/profanity/contents/tests/functionaltests/test_carbons.c?ref=8e75437a7e43d4c55e861691f74892e666e29b0b"", ""patch"": ""@@ -70,7 +70,7 @@ receive_carbon(void **state)\n     assert_true(prof_output_exact(\""unencrypted\""));\n \n     stbbr_send(\n-        \""<message type='chat' to='stabber@localhost/profanity' from='buddy1@localhost'>\""\n+        \""<message type='chat' to='stabber@localhost/profanity' from='stabber@localhost'>\""\n             \""<received xmlns='urn:xmpp:carbons:2'>\""\n                 \""<forwarded xmlns='urn:xmpp:forward:0'>\""\n                     \""<message id='prof_msg_7' xmlns='jabber:client' type='chat' lang='en' to='stabber@localhost/profanity' from='buddy1@localhost/mobile'>\""""}","receive_carbon(void **state)
+{
+    prof_input(""/carbons on"");
+
+    prof_connect();
+    assert_true(stbbr_received(
+        ""<iq id='*' type='set'><enable xmlns='urn:xmpp:carbons:2'/></iq>""
+    ));
+
+    stbbr_send(
+        ""<presence to='stabber@localhost' from='buddy1@localhost/mobile'>""
+            ""<priority>10</priority>""
+            ""<status>On my mobile</status>""
+        ""</presence>""
+    );
+    assert_true(prof_output_exact(""Buddy1 (mobile) is online, \""On my mobile\""""));
+    prof_input(""/msg Buddy1"");
+     assert_true(prof_output_exact(""unencrypted""));
+ 
+     stbbr_send(
+        ""<message type='chat' to='stabber@localhost/profanity' from='stabber@localhost'>""
+             ""<received xmlns='urn:xmpp:carbons:2'>""
+                 ""<forwarded xmlns='urn:xmpp:forward:0'>""
+                     ""<message id='prof_msg_7' xmlns='jabber:client' type='chat' lang='en' to='stabber@localhost/profanity' from='buddy1@localhost/mobile'>""
+                        ""<body>test carbon from recipient</body>""
+                    ""</message>""
+                ""</forwarded>""
+            ""</received>""
+        ""</message>""
+    );
+
+    assert_true(prof_output_regex(""Buddy1/mobile: .+test carbon from recipient""));
+}
+","receive_carbon(void **state)
+{
+    prof_input(""/carbons on"");
+
+    prof_connect();
+    assert_true(stbbr_received(
+        ""<iq id='*' type='set'><enable xmlns='urn:xmpp:carbons:2'/></iq>""
+    ));
+
+    stbbr_send(
+        ""<presence to='stabber@localhost' from='buddy1@localhost/mobile'>""
+            ""<priority>10</priority>""
+            ""<status>On my mobile</status>""
+        ""</presence>""
+    );
+    assert_true(prof_output_exact(""Buddy1 (mobile) is online, \""On my mobile\""""));
+    prof_input(""/msg Buddy1"");
+     assert_true(prof_output_exact(""unencrypted""));
+ 
+     stbbr_send(
+        ""<message type='chat' to='stabber@localhost/profanity' from='buddy1@localhost'>""
+             ""<received xmlns='urn:xmpp:carbons:2'>""
+                 ""<forwarded xmlns='urn:xmpp:forward:0'>""
+                     ""<message id='prof_msg_7' xmlns='jabber:client' type='chat' lang='en' to='stabber@localhost/profanity' from='buddy1@localhost/mobile'>""
+                        ""<body>test carbon from recipient</body>""
+                    ""</message>""
+                ""</forwarded>""
+            ""</received>""
+        ""</message>""
+    );
+
+    assert_true(prof_output_regex(""Buddy1/mobile: .+test carbon from recipient""));
+}
+",C,"        ""<message type='chat' to='stabber@localhost/profanity' from='stabber@localhost'>""
+","        ""<message type='chat' to='stabber@localhost/profanity' from='buddy1@localhost'>""
+",,"@@ -70,7 +70,7 @@ receive_carbon(void **state)
+     assert_true(prof_output_exact(""unencrypted""));
+ 
+     stbbr_send(
+-        ""<message type='chat' to='stabber@localhost/profanity' from='buddy1@localhost'>""
++        ""<message type='chat' to='stabber@localhost/profanity' from='stabber@localhost'>""
+             ""<received xmlns='urn:xmpp:carbons:2'>""
+                 ""<forwarded xmlns='urn:xmpp:forward:0'>""
+                     ""<message id='prof_msg_7' xmlns='jabber:client' type='chat' lang='en' to='stabber@localhost/profanity' from='buddy1@localhost/mobile'>""",profanity,8e75437a7e43d4c55e861691f74892e666e29b0b,c07341830670819b4dc4a16c56fcac9ad21be16d,1,"receive_carbon(void **state)
+{
+    prof_input(""/carbons on"");
+
+    prof_connect();
+    assert_true(stbbr_received(
+        ""<iq id='*' type='set'><enable xmlns='urn:xmpp:carbons:2'/></iq>""
+    ));
+
+    stbbr_send(
+        ""<presence to='stabber@localhost' from='buddy1@localhost/mobile'>""
+            ""<priority>10</priority>""
+            ""<status>On my mobile</status>""
+        ""</presence>""
+    );
+    assert_true(prof_output_exact(""Buddy1 (mobile) is online, \""On my mobile\""""));
+    prof_input(""/msg Buddy1"");
+     assert_true(prof_output_exact(""unencrypted""));
+ 
+     stbbr_send(
+//flaw_line_below:
+        ""<message type='chat' to='stabber@localhost/profanity' from='buddy1@localhost'>""
+//fix_flaw_line_below:
+//        ""<message type='chat' to='stabber@localhost/profanity' from='stabber@localhost'>""
+             ""<received xmlns='urn:xmpp:carbons:2'>""
+                 ""<forwarded xmlns='urn:xmpp:forward:0'>""
+                     ""<message id='prof_msg_7' xmlns='jabber:client' type='chat' lang='en' to='stabber@localhost/profanity' from='buddy1@localhost/mobile'>""
+                        ""<body>test carbon from recipient</body>""
+                    ""</message>""
+                ""</forwarded>""
+            ""</received>""
+        ""</message>""
+    );
+
+    assert_true(prof_output_regex(""Buddy1/mobile: .+test carbon from recipient""));
+}
+"
+9433,187169,,Remote,Not required,,CVE-2018-16072,https://www.cvedetails.com/cve/CVE-2018-16072/,CWE-346,Medium,Partial,,,2019-01-09,4.3,A missing origin check related to HLS manifests in Blink in Google Chrome prior to 69.0.3497.81 allowed a remote attacker to bypass same origin policy via a crafted HTML page.,2019-10-02,Bypass ,6,https://github.com/chromium/chromium/commit/153f8457c7867d5c9b627c11b52f5de0671d2fff,153f8457c7867d5c9b627c11b52f5de0671d2fff,"Fix HasSingleSecurityOrigin for HLS
+
+HLS manifests can request segments from a different origin than the
+original manifest's origin. We do not inspect HLS manifests within
+Chromium, and instead delegate to Android's MediaPlayer. This means we
+need to be conservative, and always assume segments might come from a
+different origin. HasSingleSecurityOrigin should always return false
+when decoding HLS.
+
+Bug: 864283
+Change-Id: Ie16849ac6f29ae7eaa9caf342ad0509a226228ef
+Reviewed-on: https://chromium-review.googlesource.com/1142691
+Reviewed-by: Dale Curtis <dalecurtis@chromium.org>
+Reviewed-by: Dominick Ng <dominickn@chromium.org>
+Commit-Queue: Thomas Guilbert <tguilbert@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#576378}",0,media/blink/webmediaplayer_impl.cc,"{""sha"": ""bfda27779624e035aa85bc8218a7b4d0d40f578d"", ""filename"": ""media/blink/webmediaplayer_impl.cc"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 0, ""changes"": 8, ""blob_url"": ""https://github.com/chromium/chromium/blob/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/media/blink/webmediaplayer_impl.cc?ref=153f8457c7867d5c9b627c11b52f5de0671d2fff"", ""patch"": ""@@ -1126,6 +1126,12 @@ bool WebMediaPlayerImpl::DidGetOpaqueResponseFromServiceWorker() const {\n }\n \n bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {\n+  if (demuxer_found_hls_) {\n+    // HLS manifests might pull segments from a different origin. We can't know\n+    // for sure, so we conservatively say no here.\n+    return false;\n+  }\n+\n   if (data_source_)\n     return data_source_->HasSingleOrigin();\n   return true;\n@@ -1530,6 +1536,8 @@ void WebMediaPlayerImpl::OnError(PipelineStatus status) {\n \n #if defined(OS_ANDROID)\n   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {\n+    demuxer_found_hls_ = true;\n+\n     renderer_factory_selector_->SetUseMediaPlayer(true);\n \n     pipeline_controller_.Stop();""}<_**next**_>{""sha"": ""c5797852f1d123746d66fdba07c08d62d4fab456"", ""filename"": ""media/blink/webmediaplayer_impl.h"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 0, ""changes"": 5, ""blob_url"": ""https://github.com/chromium/chromium/blob/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.h"", ""raw_url"": ""https://github.com/chromium/chromium/raw/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.h"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/media/blink/webmediaplayer_impl.h?ref=153f8457c7867d5c9b627c11b52f5de0671d2fff"", ""patch"": ""@@ -788,6 +788,11 @@ class MEDIA_BLINK_EXPORT WebMediaPlayerImpl\n   // removing |cast_impl_|.\n   bool using_media_player_renderer_ = false;\n \n+  // Set whenever the demuxer encounters an HLS file.\n+  // This flag is distinct from |using_media_player_renderer_|, because on older\n+  // devices we might use MediaPlayerRenderer for non HLS playback.\n+  bool demuxer_found_hls_ = false;\n+\n   // Called sometime after the media is suspended in a playing state in\n   // OnFrameHidden(), causing the state to change to paused.\n   base::OneShotTimer background_pause_timer_;""}"," bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {
+  if (demuxer_found_hls_) {
+    // HLS manifests might pull segments from a different origin. We can't know
+    // for sure, so we conservatively say no here.
+    return false;
+  }
+
+   if (data_source_)
+     return data_source_->HasSingleOrigin();
+   return true;
+}
+"," bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {
+   if (data_source_)
+     return data_source_->HasSingleOrigin();
+   return true;
+}
+",C,"  if (demuxer_found_hls_) {
+    // HLS manifests might pull segments from a different origin. We can't know
+    // for sure, so we conservatively say no here.
+    return false;
+  }
+
+",,,"@@ -1126,6 +1126,12 @@ bool WebMediaPlayerImpl::DidGetOpaqueResponseFromServiceWorker() const {
+ }
+ 
+ bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {
++  if (demuxer_found_hls_) {
++    // HLS manifests might pull segments from a different origin. We can't know
++    // for sure, so we conservatively say no here.
++    return false;
++  }
++
+   if (data_source_)
+     return data_source_->HasSingleOrigin();
+   return true;
+@@ -1530,6 +1536,8 @@ void WebMediaPlayerImpl::OnError(PipelineStatus status) {
+ 
+ #if defined(OS_ANDROID)
+   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {
++    demuxer_found_hls_ = true;
++
+     renderer_factory_selector_->SetUseMediaPlayer(true);
+ 
+     pipeline_controller_.Stop();",Chrome,153f8457c7867d5c9b627c11b52f5de0671d2fff,13ca4169102b342e7c514ad5f47c86a555e2f94c,1," bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {
+//fix_flaw_line_below:
+//  if (demuxer_found_hls_) {
+//fix_flaw_line_below:
+//    // HLS manifests might pull segments from a different origin. We can't know
+//fix_flaw_line_below:
+//    // for sure, so we conservatively say no here.
+//fix_flaw_line_below:
+//    return false;
+//fix_flaw_line_below:
+//  }
+//fix_flaw_line_below:
+//
+   if (data_source_)
+     return data_source_->HasSingleOrigin();
+   return true;
+}
+"
+9434,187170,,Remote,Not required,,CVE-2018-16072,https://www.cvedetails.com/cve/CVE-2018-16072/,CWE-346,Medium,Partial,,,2019-01-09,4.3,A missing origin check related to HLS manifests in Blink in Google Chrome prior to 69.0.3497.81 allowed a remote attacker to bypass same origin policy via a crafted HTML page.,2019-10-02,Bypass ,2,https://github.com/chromium/chromium/commit/153f8457c7867d5c9b627c11b52f5de0671d2fff,153f8457c7867d5c9b627c11b52f5de0671d2fff,"Fix HasSingleSecurityOrigin for HLS
+
+HLS manifests can request segments from a different origin than the
+original manifest's origin. We do not inspect HLS manifests within
+Chromium, and instead delegate to Android's MediaPlayer. This means we
+need to be conservative, and always assume segments might come from a
+different origin. HasSingleSecurityOrigin should always return false
+when decoding HLS.
+
+Bug: 864283
+Change-Id: Ie16849ac6f29ae7eaa9caf342ad0509a226228ef
+Reviewed-on: https://chromium-review.googlesource.com/1142691
+Reviewed-by: Dale Curtis <dalecurtis@chromium.org>
+Reviewed-by: Dominick Ng <dominickn@chromium.org>
+Commit-Queue: Thomas Guilbert <tguilbert@chromium.org>
+Cr-Commit-Position: refs/heads/master@{#576378}",0,media/blink/webmediaplayer_impl.cc,"{""sha"": ""bfda27779624e035aa85bc8218a7b4d0d40f578d"", ""filename"": ""media/blink/webmediaplayer_impl.cc"", ""status"": ""modified"", ""additions"": 8, ""deletions"": 0, ""changes"": 8, ""blob_url"": ""https://github.com/chromium/chromium/blob/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.cc"", ""raw_url"": ""https://github.com/chromium/chromium/raw/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.cc"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/media/blink/webmediaplayer_impl.cc?ref=153f8457c7867d5c9b627c11b52f5de0671d2fff"", ""patch"": ""@@ -1126,6 +1126,12 @@ bool WebMediaPlayerImpl::DidGetOpaqueResponseFromServiceWorker() const {\n }\n \n bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {\n+  if (demuxer_found_hls_) {\n+    // HLS manifests might pull segments from a different origin. We can't know\n+    // for sure, so we conservatively say no here.\n+    return false;\n+  }\n+\n   if (data_source_)\n     return data_source_->HasSingleOrigin();\n   return true;\n@@ -1530,6 +1536,8 @@ void WebMediaPlayerImpl::OnError(PipelineStatus status) {\n \n #if defined(OS_ANDROID)\n   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {\n+    demuxer_found_hls_ = true;\n+\n     renderer_factory_selector_->SetUseMediaPlayer(true);\n \n     pipeline_controller_.Stop();""}<_**next**_>{""sha"": ""c5797852f1d123746d66fdba07c08d62d4fab456"", ""filename"": ""media/blink/webmediaplayer_impl.h"", ""status"": ""modified"", ""additions"": 5, ""deletions"": 0, ""changes"": 5, ""blob_url"": ""https://github.com/chromium/chromium/blob/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.h"", ""raw_url"": ""https://github.com/chromium/chromium/raw/153f8457c7867d5c9b627c11b52f5de0671d2fff/media/blink/webmediaplayer_impl.h"", ""contents_url"": ""https://api.github.com/repos/chromium/chromium/contents/media/blink/webmediaplayer_impl.h?ref=153f8457c7867d5c9b627c11b52f5de0671d2fff"", ""patch"": ""@@ -788,6 +788,11 @@ class MEDIA_BLINK_EXPORT WebMediaPlayerImpl\n   // removing |cast_impl_|.\n   bool using_media_player_renderer_ = false;\n \n+  // Set whenever the demuxer encounters an HLS file.\n+  // This flag is distinct from |using_media_player_renderer_|, because on older\n+  // devices we might use MediaPlayerRenderer for non HLS playback.\n+  bool demuxer_found_hls_ = false;\n+\n   // Called sometime after the media is suspended in a playing state in\n   // OnFrameHidden(), causing the state to change to paused.\n   base::OneShotTimer background_pause_timer_;""}","void WebMediaPlayerImpl::OnError(PipelineStatus status) {
+  DVLOG(1) << __func__;
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  DCHECK_NE(status, PIPELINE_OK);
+
+  if (suppress_destruction_errors_)
+    return;
+ 
+ #if defined(OS_ANDROID)
+   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {
+    demuxer_found_hls_ = true;
+
+     renderer_factory_selector_->SetUseMediaPlayer(true);
+ 
+     pipeline_controller_.Stop();
+    SetMemoryReportingState(false);
+
+    main_task_runner_->PostTask(
+        FROM_HERE, base::Bind(&WebMediaPlayerImpl::StartPipeline, AsWeakPtr()));
+    return;
+  }
+#endif
+
+  ReportPipelineError(load_type_, status, media_log_.get());
+  media_log_->AddEvent(media_log_->CreatePipelineErrorEvent(status));
+  media_metrics_provider_->OnError(status);
+  if (watch_time_reporter_)
+    watch_time_reporter_->OnError(status);
+
+  if (ready_state_ == WebMediaPlayer::kReadyStateHaveNothing) {
+    SetNetworkState(WebMediaPlayer::kNetworkStateFormatError);
+  } else {
+    SetNetworkState(PipelineErrorToNetworkState(status));
+  }
+
+  pipeline_controller_.Stop();
+
+  UpdatePlayState();
+}
+","void WebMediaPlayerImpl::OnError(PipelineStatus status) {
+  DVLOG(1) << __func__;
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  DCHECK_NE(status, PIPELINE_OK);
+
+  if (suppress_destruction_errors_)
+    return;
+ 
+ #if defined(OS_ANDROID)
+   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {
+     renderer_factory_selector_->SetUseMediaPlayer(true);
+ 
+     pipeline_controller_.Stop();
+    SetMemoryReportingState(false);
+
+    main_task_runner_->PostTask(
+        FROM_HERE, base::Bind(&WebMediaPlayerImpl::StartPipeline, AsWeakPtr()));
+    return;
+  }
+#endif
+
+  ReportPipelineError(load_type_, status, media_log_.get());
+  media_log_->AddEvent(media_log_->CreatePipelineErrorEvent(status));
+  media_metrics_provider_->OnError(status);
+  if (watch_time_reporter_)
+    watch_time_reporter_->OnError(status);
+
+  if (ready_state_ == WebMediaPlayer::kReadyStateHaveNothing) {
+    SetNetworkState(WebMediaPlayer::kNetworkStateFormatError);
+  } else {
+    SetNetworkState(PipelineErrorToNetworkState(status));
+  }
+
+  pipeline_controller_.Stop();
+
+  UpdatePlayState();
+}
+",C,"    demuxer_found_hls_ = true;
+
+",,,"@@ -1126,6 +1126,12 @@ bool WebMediaPlayerImpl::DidGetOpaqueResponseFromServiceWorker() const {
+ }
+ 
+ bool WebMediaPlayerImpl::HasSingleSecurityOrigin() const {
++  if (demuxer_found_hls_) {
++    // HLS manifests might pull segments from a different origin. We can't know
++    // for sure, so we conservatively say no here.
++    return false;
++  }
++
+   if (data_source_)
+     return data_source_->HasSingleOrigin();
+   return true;
+@@ -1530,6 +1536,8 @@ void WebMediaPlayerImpl::OnError(PipelineStatus status) {
+ 
+ #if defined(OS_ANDROID)
+   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {
++    demuxer_found_hls_ = true;
++
+     renderer_factory_selector_->SetUseMediaPlayer(true);
+ 
+     pipeline_controller_.Stop();",Chrome,153f8457c7867d5c9b627c11b52f5de0671d2fff,13ca4169102b342e7c514ad5f47c86a555e2f94c,1,"void WebMediaPlayerImpl::OnError(PipelineStatus status) {
+  DVLOG(1) << __func__;
+  DCHECK(main_task_runner_->BelongsToCurrentThread());
+  DCHECK_NE(status, PIPELINE_OK);
+
+  if (suppress_destruction_errors_)
+    return;
+ 
+ #if defined(OS_ANDROID)
+   if (status == PipelineStatus::DEMUXER_ERROR_DETECTED_HLS) {
+//fix_flaw_line_below:
+//    demuxer_found_hls_ = true;
+//fix_flaw_line_below:
+//
+     renderer_factory_selector_->SetUseMediaPlayer(true);
+ 
+     pipeline_controller_.Stop();
+    SetMemoryReportingState(false);
+
+    main_task_runner_->PostTask(
+        FROM_HERE, base::Bind(&WebMediaPlayerImpl::StartPipeline, AsWeakPtr()));
+    return;
+  }
+#endif
+
+  ReportPipelineError(load_type_, status, media_log_.get());
+  media_log_->AddEvent(media_log_->CreatePipelineErrorEvent(status));
+  media_metrics_provider_->OnError(status);
+  if (watch_time_reporter_)
+    watch_time_reporter_->OnError(status);
+
+  if (ready_state_ == WebMediaPlayer::kReadyStateHaveNothing) {
+    // Any error that occurs before reaching ReadyStateHaveMetadata should
+    // be considered a format error.
+    SetNetworkState(WebMediaPlayer::kNetworkStateFormatError);
+  } else {
+    SetNetworkState(PipelineErrorToNetworkState(status));
+  }
+
+  // PipelineController::Stop() is idempotent.
+  pipeline_controller_.Stop();
+
+  UpdatePlayState();
+}
+"

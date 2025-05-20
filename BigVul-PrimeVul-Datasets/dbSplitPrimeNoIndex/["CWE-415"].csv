@@ -1,0 +1,427 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2519,"[""CWE-415""]",linux-2.6,27f7ad53829f79e799a253285318bff79ece15bd,27f7ad53829f79e799a253285318bff79ece15bd,0,492851,1.6083881715112205e+38,116.0,"ALSA: seq/oss - Fix double-free at error path of snd_seq_oss_open()
+
+The error handling in snd_seq_oss_open() has several bad codes that
+do dereferecing released pointers and double-free of kmalloc'ed data.
+The object dp is release in free_devinfo() that is called via
+private_free callback.  The rest shouldn't touch this object any more.
+
+The patch changes delete_port() to call kfree() in any case, and gets
+rid of unnecessary calls of destructors in snd_seq_oss_open().
+
+Fixes CVE-2010-3080.
+
+Reported-and-tested-by: Tavis Ormandy <taviso@cmpxchg8b.com>
+Cc: <stable@kernel.org>
+Signed-off-by: Takashi Iwai <tiwai@suse.de>",other,"snd_seq_oss_open(struct file *file, int level)
+{
+	int i, rc;
+	struct seq_oss_devinfo *dp;
+
+	dp = kzalloc(sizeof(*dp), GFP_KERNEL);
+	if (!dp) {
+		snd_printk(KERN_ERR ""can't malloc device info\n"");
+		return -ENOMEM;
+	}
+	debug_printk((""oss_open: dp = %p\n"", dp));
+
+	dp->cseq = system_client;
+	dp->port = -1;
+	dp->queue = -1;
+
+	for (i = 0; i < SNDRV_SEQ_OSS_MAX_CLIENTS; i++) {
+		if (client_table[i] == NULL)
+			break;
+	}
+
+	dp->index = i;
+	if (i >= SNDRV_SEQ_OSS_MAX_CLIENTS) {
+		snd_printk(KERN_ERR ""too many applications\n"");
+		rc = -ENOMEM;
+		goto _error;
+	}
+
+	/* look up synth and midi devices */
+	snd_seq_oss_synth_setup(dp);
+	snd_seq_oss_midi_setup(dp);
+
+	if (dp->synth_opened == 0 && dp->max_mididev == 0) {
+		/* snd_printk(KERN_ERR ""no device found\n""); */
+		rc = -ENODEV;
+		goto _error;
+	}
+
+	/* create port */
+	debug_printk((""create new port\n""));
+	rc = create_port(dp);
+	if (rc < 0) {
+		snd_printk(KERN_ERR ""can't create port\n"");
+		goto _error;
+	}
+
+	/* allocate queue */
+	debug_printk((""allocate queue\n""));
+	rc = alloc_seq_queue(dp);
+	if (rc < 0)
+		goto _error;
+
+	/* set address */
+	dp->addr.client = dp->cseq;
+	dp->addr.port = dp->port;
+	/*dp->addr.queue = dp->queue;*/
+	/*dp->addr.channel = 0;*/
+
+	dp->seq_mode = level;
+
+	/* set up file mode */
+	dp->file_mode = translate_mode(file);
+
+	/* initialize read queue */
+	debug_printk((""initialize read queue\n""));
+	if (is_read_mode(dp->file_mode)) {
+		dp->readq = snd_seq_oss_readq_new(dp, maxqlen);
+		if (!dp->readq) {
+			rc = -ENOMEM;
+			goto _error;
+		}
+	}
+
+	/* initialize write queue */
+	debug_printk((""initialize write queue\n""));
+	if (is_write_mode(dp->file_mode)) {
+		dp->writeq = snd_seq_oss_writeq_new(dp, maxqlen);
+		if (!dp->writeq) {
+			rc = -ENOMEM;
+			goto _error;
+		}
+	}
+
+	/* initialize timer */
+	debug_printk((""initialize timer\n""));
+	dp->timer = snd_seq_oss_timer_new(dp);
+	if (!dp->timer) {
+		snd_printk(KERN_ERR ""can't alloc timer\n"");
+		rc = -ENOMEM;
+		goto _error;
+	}
+	debug_printk((""timer initialized\n""));
+
+	/* set private data pointer */
+	file->private_data = dp;
+
+	/* set up for mode2 */
+	if (level == SNDRV_SEQ_OSS_MODE_MUSIC)
+		snd_seq_oss_synth_setup_midi(dp);
+	else if (is_read_mode(dp->file_mode))
+		snd_seq_oss_midi_open_all(dp, SNDRV_SEQ_OSS_FILE_READ);
+
+	client_table[dp->index] = dp;
+	num_clients++;
+
+	debug_printk((""open done\n""));
+	return 0;
+
+ _error:
+	snd_seq_oss_writeq_delete(dp->writeq);
+	snd_seq_oss_readq_delete(dp->readq);
+	snd_seq_oss_synth_cleanup(dp);
+	snd_seq_oss_midi_cleanup(dp);
+	delete_port(dp);
+	delete_seq_queue(dp->queue);
+	kfree(dp);
+
+	return rc;
+}","snd_seq_oss_open(struct file *file, int level)
+{
+	int i, rc;
+	struct seq_oss_devinfo *dp;
+
+	dp = kzalloc(sizeof(*dp), GFP_KERNEL);
+	if (!dp) {
+		snd_printk(KERN_ERR ""can't malloc device info\n"");
+		return -ENOMEM;
+	}
+	debug_printk((""oss_open: dp = %p\n"", dp));
+
+	dp->cseq = system_client;
+	dp->port = -1;
+	dp->queue = -1;
+
+	for (i = 0; i < SNDRV_SEQ_OSS_MAX_CLIENTS; i++) {
+		if (client_table[i] == NULL)
+			break;
+	}
+
+	dp->index = i;
+	if (i >= SNDRV_SEQ_OSS_MAX_CLIENTS) {
+		snd_printk(KERN_ERR ""too many applications\n"");
+		rc = -ENOMEM;
+		goto _error;
+	}
+
+	/* look up synth and midi devices */
+	snd_seq_oss_synth_setup(dp);
+	snd_seq_oss_midi_setup(dp);
+
+	if (dp->synth_opened == 0 && dp->max_mididev == 0) {
+		/* snd_printk(KERN_ERR ""no device found\n""); */
+		rc = -ENODEV;
+		goto _error;
+	}
+
+	/* create port */
+	debug_printk((""create new port\n""));
+	rc = create_port(dp);
+	if (rc < 0) {
+		snd_printk(KERN_ERR ""can't create port\n"");
+		goto _error;
+	}
+
+	/* allocate queue */
+	debug_printk((""allocate queue\n""));
+	rc = alloc_seq_queue(dp);
+	if (rc < 0)
+		goto _error;
+
+	/* set address */
+	dp->addr.client = dp->cseq;
+	dp->addr.port = dp->port;
+	/*dp->addr.queue = dp->queue;*/
+	/*dp->addr.channel = 0;*/
+
+	dp->seq_mode = level;
+
+	/* set up file mode */
+	dp->file_mode = translate_mode(file);
+
+	/* initialize read queue */
+	debug_printk((""initialize read queue\n""));
+	if (is_read_mode(dp->file_mode)) {
+		dp->readq = snd_seq_oss_readq_new(dp, maxqlen);
+		if (!dp->readq) {
+			rc = -ENOMEM;
+			goto _error;
+		}
+	}
+
+	/* initialize write queue */
+	debug_printk((""initialize write queue\n""));
+	if (is_write_mode(dp->file_mode)) {
+		dp->writeq = snd_seq_oss_writeq_new(dp, maxqlen);
+		if (!dp->writeq) {
+			rc = -ENOMEM;
+			goto _error;
+		}
+	}
+
+	/* initialize timer */
+	debug_printk((""initialize timer\n""));
+	dp->timer = snd_seq_oss_timer_new(dp);
+	if (!dp->timer) {
+		snd_printk(KERN_ERR ""can't alloc timer\n"");
+		rc = -ENOMEM;
+		goto _error;
+	}
+	debug_printk((""timer initialized\n""));
+
+	/* set private data pointer */
+	file->private_data = dp;
+
+	/* set up for mode2 */
+	if (level == SNDRV_SEQ_OSS_MODE_MUSIC)
+		snd_seq_oss_synth_setup_midi(dp);
+	else if (is_read_mode(dp->file_mode))
+		snd_seq_oss_midi_open_all(dp, SNDRV_SEQ_OSS_FILE_READ);
+
+	client_table[dp->index] = dp;
+	num_clients++;
+
+	debug_printk((""open done\n""));
+	return 0;
+
+ _error:
+	snd_seq_oss_synth_cleanup(dp);
+	snd_seq_oss_midi_cleanup(dp);
+	delete_seq_queue(dp->queue);
+	delete_port(dp);
+
+	return rc;
+}",
+2563,"[""CWE-415""]",libcdio,dec2f876c2d7162da213429bce1a7140cdbdd734,dec2f876c2d7162da213429bce1a7140cdbdd734,0,498695,1.087629622691315e+38,29.0,Removed wrong line,other,"get_cdtext_generic (void *p_user_data)
+{
+  generic_img_private_t *p_env = p_user_data;
+  uint8_t *p_cdtext_data = NULL;
+  size_t  len;
+
+  if (!p_env) return NULL;
+
+  if (p_env->b_cdtext_error) return NULL;
+
+  if (NULL == p_env->cdtext) {
+    p_cdtext_data = read_cdtext_generic (p_env);
+
+    if (NULL != p_cdtext_data) {
+      len = CDIO_MMC_GET_LEN16(p_cdtext_data)-2;
+      p_env->cdtext = cdtext_init();
+
+      if(len <= 0 || 0 != cdtext_data_init (p_env->cdtext, &p_cdtext_data[4], len)) {
+        p_env->b_cdtext_error = true;
+        free(p_env->cdtext);
+        p_env->cdtext = NULL;
+      }
+
+      free(p_cdtext_data);
+    }
+  }
+
+  return p_env->cdtext;
+}","get_cdtext_generic (void *p_user_data)
+{
+  generic_img_private_t *p_env = p_user_data;
+  uint8_t *p_cdtext_data = NULL;
+  size_t  len;
+
+  if (!p_env) return NULL;
+
+  if (p_env->b_cdtext_error) return NULL;
+
+  if (NULL == p_env->cdtext) {
+    p_cdtext_data = read_cdtext_generic (p_env);
+
+    if (NULL != p_cdtext_data) {
+      len = CDIO_MMC_GET_LEN16(p_cdtext_data)-2;
+      p_env->cdtext = cdtext_init();
+
+      if(len <= 0 || 0 != cdtext_data_init (p_env->cdtext, &p_cdtext_data[4], len)) {
+        p_env->b_cdtext_error = true;
+        cdtext_destroy (p_env->cdtext);
+        p_env->cdtext = NULL;
+      }
+
+      free(p_cdtext_data);
+    }
+  }
+
+  return p_env->cdtext;
+}",
+3246,"[""CWE-415""]",gnuplot,052cbd17c3cbbc602ee080b2617d32a8417d7563,052cbd17c3cbbc602ee080b2617d32a8417d7563,0,506550,3.359942896311024e+38,61.0,"successive failures of ""set print <foo>"" could cause double-free
+Bug #2312",other,"print_set_output(char *name, TBOOLEAN datablock, TBOOLEAN append_p)
+{
+    if (print_out && print_out != stderr && print_out != stdout) {
+#ifdef PIPES
+	if (print_out_name[0] == '|') {
+	    if (0 > pclose(print_out))
+		perror(print_out_name);
+	} else
+#endif
+	    if (0 > fclose(print_out))
+		perror(print_out_name);
+    }
+
+    free(print_out_name);
+    print_out_name = NULL;
+    print_out_var = NULL;
+
+    if (! name) {
+	print_out = stderr;
+	return;
+    }
+
+    if (strcmp(name, ""-"") == 0) {
+	print_out = stdout;
+	return;
+    }
+
+#ifdef PIPES
+    if (name[0] == '|') {
+	restrict_popen();
+	print_out = popen(name + 1, ""w"");
+	if (!print_out)
+	    perror(name);
+	else
+	    print_out_name = name;
+	return;
+    }
+#endif
+
+    if (!datablock) {
+	print_out = fopen(name, append_p ? ""a"" : ""w"");
+	if (!print_out) {
+	    perror(name);
+	    return;
+	}
+    } else {
+	print_out_var = add_udv_by_name(name);
+	if (!append_p)
+	    gpfree_datablock(&print_out_var->udv_value);
+	/* If this is not an existing datablock to be appended */
+	/* then make it a new empty datablock */
+	if (print_out_var->udv_value.type != DATABLOCK) {
+	    free_value(&print_out_var->udv_value);
+	    print_out_var->udv_value.type = DATABLOCK;
+	    print_out_var->udv_value.v.data_array = NULL;
+	}
+    }
+
+    print_out_name = name;
+}","print_set_output(char *name, TBOOLEAN datablock, TBOOLEAN append_p)
+{
+    if (print_out && print_out != stderr && print_out != stdout) {
+#ifdef PIPES
+	if (print_out_name[0] == '|') {
+	    if (0 > pclose(print_out))
+		perror(print_out_name);
+	} else
+#endif
+	    if (0 > fclose(print_out))
+		perror(print_out_name);
+	print_out = stderr;
+    }
+
+    free(print_out_name);
+    print_out_name = NULL;
+    print_out_var = NULL;
+
+    if (! name) {
+	print_out = stderr;
+	return;
+    }
+
+    if (strcmp(name, ""-"") == 0) {
+	print_out = stdout;
+	return;
+    }
+
+#ifdef PIPES
+    if (name[0] == '|') {
+	restrict_popen();
+	print_out = popen(name + 1, ""w"");
+	if (!print_out)
+	    perror(name);
+	else
+	    print_out_name = name;
+	return;
+    }
+#endif
+
+    if (!datablock) {
+	print_out = fopen(name, append_p ? ""a"" : ""w"");
+	if (!print_out) {
+	    perror(name);
+	    return;
+	}
+    } else {
+	print_out_var = add_udv_by_name(name);
+	if (!append_p)
+	    gpfree_datablock(&print_out_var->udv_value);
+	/* If this is not an existing datablock to be appended */
+	/* then make it a new empty datablock */
+	if (print_out_var->udv_value.type != DATABLOCK) {
+	    free_value(&print_out_var->udv_value);
+	    print_out_var->udv_value.type = DATABLOCK;
+	    print_out_var->udv_value.v.data_array = NULL;
+	}
+    }
+
+    print_out_name = name;
+}",

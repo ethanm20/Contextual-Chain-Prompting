@@ -1,0 +1,984 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+4768,182504,,Remote,Not required,,CVE-2018-6794,https://www.cvedetails.com/cve/CVE-2018-6794/,CWE-693,Low,,Partial,,2018-02-07,5.0,"Suricata before 4.0.4 is prone to an HTTP detection bypass vulnerability in detect.c and stream-tcp.c. If a malicious server breaks a normal TCP flow and sends data before the 3-way handshake is complete, then the data sent by the malicious server will be accepted by web clients such as a web browser or Linux CLI utilities, but ignored by Suricata IDS signatures. This mostly affects IDS signatures for the HTTP protocol and TCP stream content; signatures for TCP packets will inspect such network traffic as usual.",2018-12-05,Bypass ,3,https://github.com/OISF/suricata/pull/3202/commits/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1,e1ef57c848bbe4e567d5d4b66d346a742e3f77a1,"stream: still inspect packets dropped by stream
+
+The detect engine would bypass packets that are set as dropped. This
+seems sane, as these packets are going to be dropped anyway.
+
+However, it lead to the following corner case: stream events that
+triggered the drop could not be matched on the rules. The packet
+with the event wouldn't make it to the detect engine due to the bypass.
+
+This patch changes the logic to not bypass DROP packets anymore.
+Packets that are dropped by the stream engine will set the no payload
+inspection flag, so avoid needless cost.",4,src/detect.c,"{""sha"": ""b034d86551352571aab678422252a21e87813753"", ""filename"": ""src/detect.c"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 4, ""changes"": 7, ""blob_url"": ""https://github.com/OISF/suricata/blob/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/detect.c"", ""raw_url"": ""https://github.com/OISF/suricata/raw/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/detect.c"", ""contents_url"": ""https://api.github.com/repos/OISF/suricata/contents/src/detect.c?ref=e1ef57c848bbe4e567d5d4b66d346a742e3f77a1"", ""patch"": ""@@ -1610,10 +1610,7 @@ static void DetectFlow(ThreadVars *tv,\n                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,\n                        Packet *p)\n {\n-    /* No need to perform any detection on this packet, if the the given flag is set.*/\n-    if ((p->flags & PKT_NOPACKET_INSPECTION) ||\n-        (PACKET_TEST_ACTION(p, ACTION_DROP)))\n-    {\n+    if (p->flags & PKT_NOPACKET_INSPECTION) {\n         /* hack: if we are in pass the entire flow mode, we need to still\n          * update the inspect_id forward. So test for the condition here,\n          * and call the update code if necessary. */\n@@ -1629,6 +1626,8 @@ static void DetectFlow(ThreadVars *tv,\n             flags = FlowGetDisruptionFlags(p->flow, flags);\n             DeStateUpdateInspectTransactionId(p->flow, flags, true);\n         }\n+        SCLogDebug(\""p->pcap %\""PRIu64\"": no detection on packet, \""\n+                \""PKT_NOPACKET_INSPECTION is set\"", p->pcap_cnt);\n         return;\n     }\n ""}<_**next**_>{""sha"": ""aea3ff152b2a2ef606c668761fd8a7174f76e111"", ""filename"": ""src/stream-tcp.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/OISF/suricata/blob/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/stream-tcp.c"", ""raw_url"": ""https://github.com/OISF/suricata/raw/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/stream-tcp.c"", ""contents_url"": ""https://api.github.com/repos/OISF/suricata/contents/src/stream-tcp.c?ref=e1ef57c848bbe4e567d5d4b66d346a742e3f77a1"", ""patch"": ""@@ -4739,6 +4739,10 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,\n     }\n \n     if (StreamTcpInlineDropInvalid()) {\n+        /* disable payload inspection as we're dropping this packet\n+         * anyway. Doesn't disable all detection, so we can still\n+         * match on the stream event that was set. */\n+        DecodeSetNoPayloadInspectionFlag(p);\n         PACKET_DROP(p);\n     }\n     SCReturnInt(-1);""}","static void DetectFlow(ThreadVars *tv,
+                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                        Packet *p)
+ {
+    if (p->flags & PKT_NOPACKET_INSPECTION) {
+         /* hack: if we are in pass the entire flow mode, we need to still
+          * update the inspect_id forward. So test for the condition here,
+          * and call the update code if necessary. */
+        const int pass = ((p->flow->flags & FLOW_NOPACKET_INSPECTION));
+        const AppProto alproto = FlowGetAppProtocol(p->flow);
+        if (pass && AppLayerParserProtocolSupportsTxs(p->proto, alproto)) {
+            uint8_t flags;
+            if (p->flowflags & FLOW_PKT_TOSERVER) {
+                flags = STREAM_TOSERVER;
+            } else {
+                flags = STREAM_TOCLIENT;
+            }
+             flags = FlowGetDisruptionFlags(p->flow, flags);
+             DeStateUpdateInspectTransactionId(p->flow, flags, true);
+         }
+        SCLogDebug(""p->pcap %""PRIu64"": no detection on packet, ""
+                ""PKT_NOPACKET_INSPECTION is set"", p->pcap_cnt);
+         return;
+     }
+ 
+    /* see if the packet matches one or more of the sigs */
+    (void)DetectRun(tv, de_ctx, det_ctx, p);
+}
+","static void DetectFlow(ThreadVars *tv,
+                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                        Packet *p)
+ {
+    /* No need to perform any detection on this packet, if the the given flag is set.*/
+    if ((p->flags & PKT_NOPACKET_INSPECTION) ||
+        (PACKET_TEST_ACTION(p, ACTION_DROP)))
+    {
+         /* hack: if we are in pass the entire flow mode, we need to still
+          * update the inspect_id forward. So test for the condition here,
+          * and call the update code if necessary. */
+        const int pass = ((p->flow->flags & FLOW_NOPACKET_INSPECTION));
+        const AppProto alproto = FlowGetAppProtocol(p->flow);
+        if (pass && AppLayerParserProtocolSupportsTxs(p->proto, alproto)) {
+            uint8_t flags;
+            if (p->flowflags & FLOW_PKT_TOSERVER) {
+                flags = STREAM_TOSERVER;
+            } else {
+                flags = STREAM_TOCLIENT;
+            }
+             flags = FlowGetDisruptionFlags(p->flow, flags);
+             DeStateUpdateInspectTransactionId(p->flow, flags, true);
+         }
+         return;
+     }
+ 
+    /* see if the packet matches one or more of the sigs */
+    (void)DetectRun(tv, de_ctx, det_ctx, p);
+}
+",C,"    if (p->flags & PKT_NOPACKET_INSPECTION) {
+        SCLogDebug(""p->pcap %""PRIu64"": no detection on packet, ""
+                ""PKT_NOPACKET_INSPECTION is set"", p->pcap_cnt);
+","    /* No need to perform any detection on this packet, if the the given flag is set.*/
+    if ((p->flags & PKT_NOPACKET_INSPECTION) ||
+        (PACKET_TEST_ACTION(p, ACTION_DROP)))
+    {
+",,"@@ -1610,10 +1610,7 @@ static void DetectFlow(ThreadVars *tv,
+                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                        Packet *p)
+ {
+-    /* No need to perform any detection on this packet, if the the given flag is set.*/
+-    if ((p->flags & PKT_NOPACKET_INSPECTION) ||
+-        (PACKET_TEST_ACTION(p, ACTION_DROP)))
+-    {
++    if (p->flags & PKT_NOPACKET_INSPECTION) {
+         /* hack: if we are in pass the entire flow mode, we need to still
+          * update the inspect_id forward. So test for the condition here,
+          * and call the update code if necessary. */
+@@ -1629,6 +1626,8 @@ static void DetectFlow(ThreadVars *tv,
+             flags = FlowGetDisruptionFlags(p->flow, flags);
+             DeStateUpdateInspectTransactionId(p->flow, flags, true);
+         }
++        SCLogDebug(""p->pcap %""PRIu64"": no detection on packet, ""
++                ""PKT_NOPACKET_INSPECTION is set"", p->pcap_cnt);
+         return;
+     }
+ ",suricata,e1ef57c848bbe4e567d5d4b66d346a742e3f77a1,700781c53b847eb73e35742a3b44b934d4fda9e6,1,"static void DetectFlow(ThreadVars *tv,
+                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                        Packet *p)
+ {
+//flaw_line_below:
+    /* No need to perform any detection on this packet, if the the given flag is set.*/
+//flaw_line_below:
+    if ((p->flags & PKT_NOPACKET_INSPECTION) ||
+//flaw_line_below:
+        (PACKET_TEST_ACTION(p, ACTION_DROP)))
+//flaw_line_below:
+    {
+//fix_flaw_line_below:
+//    if (p->flags & PKT_NOPACKET_INSPECTION) {
+         /* hack: if we are in pass the entire flow mode, we need to still
+          * update the inspect_id forward. So test for the condition here,
+          * and call the update code if necessary. */
+        const int pass = ((p->flow->flags & FLOW_NOPACKET_INSPECTION));
+        const AppProto alproto = FlowGetAppProtocol(p->flow);
+        if (pass && AppLayerParserProtocolSupportsTxs(p->proto, alproto)) {
+            uint8_t flags;
+            if (p->flowflags & FLOW_PKT_TOSERVER) {
+                flags = STREAM_TOSERVER;
+            } else {
+                flags = STREAM_TOCLIENT;
+            }
+             flags = FlowGetDisruptionFlags(p->flow, flags);
+             DeStateUpdateInspectTransactionId(p->flow, flags, true);
+         }
+//fix_flaw_line_below:
+//        SCLogDebug(""p->pcap %""PRIu64"": no detection on packet, ""
+//fix_flaw_line_below:
+//                ""PKT_NOPACKET_INSPECTION is set"", p->pcap_cnt);
+         return;
+     }
+ 
+    /* see if the packet matches one or more of the sigs */
+    (void)DetectRun(tv, de_ctx, det_ctx, p);
+}
+"
+4769,182505,,Remote,Not required,,CVE-2018-6794,https://www.cvedetails.com/cve/CVE-2018-6794/,CWE-693,Low,,Partial,,2018-02-07,5.0,"Suricata before 4.0.4 is prone to an HTTP detection bypass vulnerability in detect.c and stream-tcp.c. If a malicious server breaks a normal TCP flow and sends data before the 3-way handshake is complete, then the data sent by the malicious server will be accepted by web clients such as a web browser or Linux CLI utilities, but ignored by Suricata IDS signatures. This mostly affects IDS signatures for the HTTP protocol and TCP stream content; signatures for TCP packets will inspect such network traffic as usual.",2018-12-05,Bypass ,4,https://github.com/OISF/suricata/pull/3202/commits/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1,e1ef57c848bbe4e567d5d4b66d346a742e3f77a1,"stream: still inspect packets dropped by stream
+
+The detect engine would bypass packets that are set as dropped. This
+seems sane, as these packets are going to be dropped anyway.
+
+However, it lead to the following corner case: stream events that
+triggered the drop could not be matched on the rules. The packet
+with the event wouldn't make it to the detect engine due to the bypass.
+
+This patch changes the logic to not bypass DROP packets anymore.
+Packets that are dropped by the stream engine will set the no payload
+inspection flag, so avoid needless cost.",0,src/stream-tcp.c,"{""sha"": ""b034d86551352571aab678422252a21e87813753"", ""filename"": ""src/detect.c"", ""status"": ""modified"", ""additions"": 3, ""deletions"": 4, ""changes"": 7, ""blob_url"": ""https://github.com/OISF/suricata/blob/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/detect.c"", ""raw_url"": ""https://github.com/OISF/suricata/raw/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/detect.c"", ""contents_url"": ""https://api.github.com/repos/OISF/suricata/contents/src/detect.c?ref=e1ef57c848bbe4e567d5d4b66d346a742e3f77a1"", ""patch"": ""@@ -1610,10 +1610,7 @@ static void DetectFlow(ThreadVars *tv,\n                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,\n                        Packet *p)\n {\n-    /* No need to perform any detection on this packet, if the the given flag is set.*/\n-    if ((p->flags & PKT_NOPACKET_INSPECTION) ||\n-        (PACKET_TEST_ACTION(p, ACTION_DROP)))\n-    {\n+    if (p->flags & PKT_NOPACKET_INSPECTION) {\n         /* hack: if we are in pass the entire flow mode, we need to still\n          * update the inspect_id forward. So test for the condition here,\n          * and call the update code if necessary. */\n@@ -1629,6 +1626,8 @@ static void DetectFlow(ThreadVars *tv,\n             flags = FlowGetDisruptionFlags(p->flow, flags);\n             DeStateUpdateInspectTransactionId(p->flow, flags, true);\n         }\n+        SCLogDebug(\""p->pcap %\""PRIu64\"": no detection on packet, \""\n+                \""PKT_NOPACKET_INSPECTION is set\"", p->pcap_cnt);\n         return;\n     }\n ""}<_**next**_>{""sha"": ""aea3ff152b2a2ef606c668761fd8a7174f76e111"", ""filename"": ""src/stream-tcp.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/OISF/suricata/blob/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/stream-tcp.c"", ""raw_url"": ""https://github.com/OISF/suricata/raw/e1ef57c848bbe4e567d5d4b66d346a742e3f77a1/src/stream-tcp.c"", ""contents_url"": ""https://api.github.com/repos/OISF/suricata/contents/src/stream-tcp.c?ref=e1ef57c848bbe4e567d5d4b66d346a742e3f77a1"", ""patch"": ""@@ -4739,6 +4739,10 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,\n     }\n \n     if (StreamTcpInlineDropInvalid()) {\n+        /* disable payload inspection as we're dropping this packet\n+         * anyway. Doesn't disable all detection, so we can still\n+         * match on the stream event that was set. */\n+        DecodeSetNoPayloadInspectionFlag(p);\n         PACKET_DROP(p);\n     }\n     SCReturnInt(-1);""}","int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
+                     PacketQueue *pq)
+{
+    SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(p->flow);
+
+    SCLogDebug(""p->pcap_cnt %""PRIu64, p->pcap_cnt);
+
+    /* assign the thread id to the flow */
+    if (unlikely(p->flow->thread_id == 0)) {
+        p->flow->thread_id = (FlowThreadId)tv->id;
+#ifdef DEBUG
+    } else if (unlikely((FlowThreadId)tv->id != p->flow->thread_id)) {
+        SCLogDebug(""wrong thread: flow has %u, we are %d"", p->flow->thread_id, tv->id);
+#endif
+    }
+
+    TcpSession *ssn = (TcpSession *)p->flow->protoctx;
+
+    /* track TCP flags */
+    if (ssn != NULL) {
+        ssn->tcp_packet_flags |= p->tcph->th_flags;
+        if (PKT_IS_TOSERVER(p))
+            ssn->client.tcp_flags |= p->tcph->th_flags;
+        else if (PKT_IS_TOCLIENT(p))
+            ssn->server.tcp_flags |= p->tcph->th_flags;
+
+        /* check if we need to unset the ASYNC flag */
+        if (ssn->flags & STREAMTCP_FLAG_ASYNC &&
+            ssn->client.tcp_flags != 0 &&
+            ssn->server.tcp_flags != 0)
+        {
+            SCLogDebug(""ssn %p: removing ASYNC flag as we have packets on both sides"", ssn);
+            ssn->flags &= ~STREAMTCP_FLAG_ASYNC;
+        }
+    }
+
+    /* update counters */
+    if ((p->tcph->th_flags & (TH_SYN|TH_ACK)) == (TH_SYN|TH_ACK)) {
+        StatsIncr(tv, stt->counter_tcp_synack);
+    } else if (p->tcph->th_flags & (TH_SYN)) {
+        StatsIncr(tv, stt->counter_tcp_syn);
+    }
+    if (p->tcph->th_flags & (TH_RST)) {
+        StatsIncr(tv, stt->counter_tcp_rst);
+    }
+
+    /* broken TCP http://ask.wireshark.org/questions/3183/acknowledgment-number-broken-tcp-the-acknowledge-field-is-nonzero-while-the-ack-flag-is-not-set */
+    if (!(p->tcph->th_flags & TH_ACK) && TCP_GET_ACK(p) != 0) {
+        StreamTcpSetEvent(p, STREAM_PKT_BROKEN_ACK);
+    }
+
+    /* If we are on IPS mode, and got a drop action triggered from
+     * the IP only module, or from a reassembled msg and/or from an
+     * applayer detection, then drop the rest of the packets of the
+     * same stream and avoid inspecting it any further */
+    if (StreamTcpCheckFlowDrops(p) == 1) {
+        SCLogDebug(""This flow/stream triggered a drop rule"");
+        FlowSetNoPacketInspectionFlag(p->flow);
+        DecodeSetNoPacketInspectionFlag(p);
+        StreamTcpDisableAppLayer(p->flow);
+        PACKET_DROP(p);
+        /* return the segments to the pool */
+        StreamTcpSessionPktFree(p);
+        SCReturnInt(0);
+    }
+
+    if (ssn == NULL || ssn->state == TCP_NONE) {
+        if (StreamTcpPacketStateNone(tv, p, stt, ssn, &stt->pseudo_queue) == -1) {
+            goto error;
+        }
+
+        if (ssn != NULL)
+            SCLogDebug(""ssn->alproto %""PRIu16"""", p->flow->alproto);
+    } else {
+        /* special case for PKT_PSEUDO_STREAM_END packets:
+         * bypass the state handling and various packet checks,
+         * we care about reassembly here. */
+        if (p->flags & PKT_PSEUDO_STREAM_END) {
+            if (PKT_IS_TOCLIENT(p)) {
+                ssn->client.last_ack = TCP_GET_ACK(p);
+                StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                        &ssn->server, p, pq);
+            } else {
+                ssn->server.last_ack = TCP_GET_ACK(p);
+                StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                        &ssn->client, p, pq);
+            }
+            /* straight to 'skip' as we already handled reassembly */
+            goto skip;
+        }
+
+        /* check if the packet is in right direction, when we missed the
+           SYN packet and picked up midstream session. */
+        if (ssn->flags & STREAMTCP_FLAG_MIDSTREAM_SYNACK)
+            StreamTcpPacketSwitchDir(ssn, p);
+
+        if (StreamTcpPacketIsKeepAlive(ssn, p) == 1) {
+            goto skip;
+        }
+        if (StreamTcpPacketIsKeepAliveACK(ssn, p) == 1) {
+            StreamTcpClearKeepAliveFlag(ssn, p);
+            goto skip;
+        }
+        StreamTcpClearKeepAliveFlag(ssn, p);
+
+        /* if packet is not a valid window update, check if it is perhaps
+         * a bad window update that we should ignore (and alert on) */
+        if (StreamTcpPacketIsFinShutdownAck(ssn, p) == 0)
+            if (StreamTcpPacketIsWindowUpdate(ssn, p) == 0)
+                if (StreamTcpPacketIsBadWindowUpdate(ssn,p))
+                    goto skip;
+
+        switch (ssn->state) {
+            case TCP_SYN_SENT:
+                if(StreamTcpPacketStateSynSent(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_SYN_RECV:
+                if(StreamTcpPacketStateSynRecv(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_ESTABLISHED:
+                if(StreamTcpPacketStateEstablished(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_FIN_WAIT1:
+                if(StreamTcpPacketStateFinWait1(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_FIN_WAIT2:
+                if(StreamTcpPacketStateFinWait2(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSING:
+                if(StreamTcpPacketStateClosing(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSE_WAIT:
+                if(StreamTcpPacketStateCloseWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_LAST_ACK:
+                if(StreamTcpPacketStateLastAck(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_TIME_WAIT:
+                if(StreamTcpPacketStateTimeWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSED:
+                /* TCP session memory is not returned to pool until timeout. */
+                SCLogDebug(""packet received on closed state"");
+                break;
+            default:
+                SCLogDebug(""packet received on default state"");
+                break;
+        }
+    skip:
+
+        if (ssn->state >= TCP_ESTABLISHED) {
+            p->flags |= PKT_STREAM_EST;
+        }
+    }
+
+    /* deal with a pseudo packet that is created upon receiving a RST
+     * segment. To be sure we process both sides of the connection, we
+     * inject a fake packet into the system, forcing reassembly of the
+     * opposing direction.
+     * There should be only one, but to be sure we do a while loop. */
+    if (ssn != NULL) {
+        while (stt->pseudo_queue.len > 0) {
+            SCLogDebug(""processing pseudo packet / stream end"");
+            Packet *np = PacketDequeue(&stt->pseudo_queue);
+            if (np != NULL) {
+                /* process the opposing direction of the original packet */
+                if (PKT_IS_TOSERVER(np)) {
+                    SCLogDebug(""pseudo packet is to server"");
+                    StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                            &ssn->client, np, NULL);
+                } else {
+                    SCLogDebug(""pseudo packet is to client"");
+                    StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                            &ssn->server, np, NULL);
+                }
+
+                /* enqueue this packet so we inspect it in detect etc */
+                PacketEnqueue(pq, np);
+            }
+            SCLogDebug(""processing pseudo packet / stream end done"");
+        }
+
+        /* recalc the csum on the packet if it was modified */
+        if (p->flags & PKT_STREAM_MODIFIED) {
+            ReCalculateChecksum(p);
+        }
+
+        /* check for conditions that may make us not want to log this packet */
+
+        /* streams that hit depth */
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) &&
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        {
+            /* we can call bypass callback, if enabled */
+            if (StreamTcpBypassEnabled()) {
+                PacketBypassCallback(p);
+            }
+        }
+
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) ||
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        {
+            p->flags |= PKT_STREAM_NOPCAPLOG;
+        }
+
+        /* encrypted packets */
+        if ((PKT_IS_TOSERVER(p) && (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)) ||
+            (PKT_IS_TOCLIENT(p) && (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)))
+        {
+            p->flags |= PKT_STREAM_NOPCAPLOG;
+        }
+
+        if (ssn->flags & STREAMTCP_FLAG_BYPASS) {
+            /* we can call bypass callback, if enabled */
+            if (StreamTcpBypassEnabled()) {
+                PacketBypassCallback(p);
+            }
+
+        /* if stream is dead and we have no detect engine at all, bypass. */
+        } else if (g_detect_disabled &&
+                (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                StreamTcpBypassEnabled())
+        {
+            SCLogDebug(""bypass as stream is dead and we have no rules"");
+            PacketBypassCallback(p);
+        }
+    }
+
+    SCReturnInt(0);
+
+error:
+    /* make sure we don't leave packets in our pseudo queue */
+    while (stt->pseudo_queue.len > 0) {
+        Packet *np = PacketDequeue(&stt->pseudo_queue);
+        if (np != NULL) {
+            PacketEnqueue(pq, np);
+        }
+    }
+
+    /* recalc the csum on the packet if it was modified */
+    if (p->flags & PKT_STREAM_MODIFIED) {
+        ReCalculateChecksum(p);
+     }
+ 
+     if (StreamTcpInlineDropInvalid()) {
+        /* disable payload inspection as we're dropping this packet
+         * anyway. Doesn't disable all detection, so we can still
+         * match on the stream event that was set. */
+        DecodeSetNoPayloadInspectionFlag(p);
+         PACKET_DROP(p);
+     }
+     SCReturnInt(-1);
+}
+","int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
+                     PacketQueue *pq)
+{
+    SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(p->flow);
+
+    SCLogDebug(""p->pcap_cnt %""PRIu64, p->pcap_cnt);
+
+    /* assign the thread id to the flow */
+    if (unlikely(p->flow->thread_id == 0)) {
+        p->flow->thread_id = (FlowThreadId)tv->id;
+#ifdef DEBUG
+    } else if (unlikely((FlowThreadId)tv->id != p->flow->thread_id)) {
+        SCLogDebug(""wrong thread: flow has %u, we are %d"", p->flow->thread_id, tv->id);
+#endif
+    }
+
+    TcpSession *ssn = (TcpSession *)p->flow->protoctx;
+
+    /* track TCP flags */
+    if (ssn != NULL) {
+        ssn->tcp_packet_flags |= p->tcph->th_flags;
+        if (PKT_IS_TOSERVER(p))
+            ssn->client.tcp_flags |= p->tcph->th_flags;
+        else if (PKT_IS_TOCLIENT(p))
+            ssn->server.tcp_flags |= p->tcph->th_flags;
+
+        /* check if we need to unset the ASYNC flag */
+        if (ssn->flags & STREAMTCP_FLAG_ASYNC &&
+            ssn->client.tcp_flags != 0 &&
+            ssn->server.tcp_flags != 0)
+        {
+            SCLogDebug(""ssn %p: removing ASYNC flag as we have packets on both sides"", ssn);
+            ssn->flags &= ~STREAMTCP_FLAG_ASYNC;
+        }
+    }
+
+    /* update counters */
+    if ((p->tcph->th_flags & (TH_SYN|TH_ACK)) == (TH_SYN|TH_ACK)) {
+        StatsIncr(tv, stt->counter_tcp_synack);
+    } else if (p->tcph->th_flags & (TH_SYN)) {
+        StatsIncr(tv, stt->counter_tcp_syn);
+    }
+    if (p->tcph->th_flags & (TH_RST)) {
+        StatsIncr(tv, stt->counter_tcp_rst);
+    }
+
+    /* broken TCP http://ask.wireshark.org/questions/3183/acknowledgment-number-broken-tcp-the-acknowledge-field-is-nonzero-while-the-ack-flag-is-not-set */
+    if (!(p->tcph->th_flags & TH_ACK) && TCP_GET_ACK(p) != 0) {
+        StreamTcpSetEvent(p, STREAM_PKT_BROKEN_ACK);
+    }
+
+    /* If we are on IPS mode, and got a drop action triggered from
+     * the IP only module, or from a reassembled msg and/or from an
+     * applayer detection, then drop the rest of the packets of the
+     * same stream and avoid inspecting it any further */
+    if (StreamTcpCheckFlowDrops(p) == 1) {
+        SCLogDebug(""This flow/stream triggered a drop rule"");
+        FlowSetNoPacketInspectionFlag(p->flow);
+        DecodeSetNoPacketInspectionFlag(p);
+        StreamTcpDisableAppLayer(p->flow);
+        PACKET_DROP(p);
+        /* return the segments to the pool */
+        StreamTcpSessionPktFree(p);
+        SCReturnInt(0);
+    }
+
+    if (ssn == NULL || ssn->state == TCP_NONE) {
+        if (StreamTcpPacketStateNone(tv, p, stt, ssn, &stt->pseudo_queue) == -1) {
+            goto error;
+        }
+
+        if (ssn != NULL)
+            SCLogDebug(""ssn->alproto %""PRIu16"""", p->flow->alproto);
+    } else {
+        /* special case for PKT_PSEUDO_STREAM_END packets:
+         * bypass the state handling and various packet checks,
+         * we care about reassembly here. */
+        if (p->flags & PKT_PSEUDO_STREAM_END) {
+            if (PKT_IS_TOCLIENT(p)) {
+                ssn->client.last_ack = TCP_GET_ACK(p);
+                StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                        &ssn->server, p, pq);
+            } else {
+                ssn->server.last_ack = TCP_GET_ACK(p);
+                StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                        &ssn->client, p, pq);
+            }
+            /* straight to 'skip' as we already handled reassembly */
+            goto skip;
+        }
+
+        /* check if the packet is in right direction, when we missed the
+           SYN packet and picked up midstream session. */
+        if (ssn->flags & STREAMTCP_FLAG_MIDSTREAM_SYNACK)
+            StreamTcpPacketSwitchDir(ssn, p);
+
+        if (StreamTcpPacketIsKeepAlive(ssn, p) == 1) {
+            goto skip;
+        }
+        if (StreamTcpPacketIsKeepAliveACK(ssn, p) == 1) {
+            StreamTcpClearKeepAliveFlag(ssn, p);
+            goto skip;
+        }
+        StreamTcpClearKeepAliveFlag(ssn, p);
+
+        /* if packet is not a valid window update, check if it is perhaps
+         * a bad window update that we should ignore (and alert on) */
+        if (StreamTcpPacketIsFinShutdownAck(ssn, p) == 0)
+            if (StreamTcpPacketIsWindowUpdate(ssn, p) == 0)
+                if (StreamTcpPacketIsBadWindowUpdate(ssn,p))
+                    goto skip;
+
+        switch (ssn->state) {
+            case TCP_SYN_SENT:
+                if(StreamTcpPacketStateSynSent(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_SYN_RECV:
+                if(StreamTcpPacketStateSynRecv(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_ESTABLISHED:
+                if(StreamTcpPacketStateEstablished(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_FIN_WAIT1:
+                if(StreamTcpPacketStateFinWait1(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_FIN_WAIT2:
+                if(StreamTcpPacketStateFinWait2(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSING:
+                if(StreamTcpPacketStateClosing(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSE_WAIT:
+                if(StreamTcpPacketStateCloseWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_LAST_ACK:
+                if(StreamTcpPacketStateLastAck(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_TIME_WAIT:
+                if(StreamTcpPacketStateTimeWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSED:
+                /* TCP session memory is not returned to pool until timeout. */
+                SCLogDebug(""packet received on closed state"");
+                break;
+            default:
+                SCLogDebug(""packet received on default state"");
+                break;
+        }
+    skip:
+
+        if (ssn->state >= TCP_ESTABLISHED) {
+            p->flags |= PKT_STREAM_EST;
+        }
+    }
+
+    /* deal with a pseudo packet that is created upon receiving a RST
+     * segment. To be sure we process both sides of the connection, we
+     * inject a fake packet into the system, forcing reassembly of the
+     * opposing direction.
+     * There should be only one, but to be sure we do a while loop. */
+    if (ssn != NULL) {
+        while (stt->pseudo_queue.len > 0) {
+            SCLogDebug(""processing pseudo packet / stream end"");
+            Packet *np = PacketDequeue(&stt->pseudo_queue);
+            if (np != NULL) {
+                /* process the opposing direction of the original packet */
+                if (PKT_IS_TOSERVER(np)) {
+                    SCLogDebug(""pseudo packet is to server"");
+                    StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                            &ssn->client, np, NULL);
+                } else {
+                    SCLogDebug(""pseudo packet is to client"");
+                    StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                            &ssn->server, np, NULL);
+                }
+
+                /* enqueue this packet so we inspect it in detect etc */
+                PacketEnqueue(pq, np);
+            }
+            SCLogDebug(""processing pseudo packet / stream end done"");
+        }
+
+        /* recalc the csum on the packet if it was modified */
+        if (p->flags & PKT_STREAM_MODIFIED) {
+            ReCalculateChecksum(p);
+        }
+
+        /* check for conditions that may make us not want to log this packet */
+
+        /* streams that hit depth */
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) &&
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        {
+            /* we can call bypass callback, if enabled */
+            if (StreamTcpBypassEnabled()) {
+                PacketBypassCallback(p);
+            }
+        }
+
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) ||
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        {
+            p->flags |= PKT_STREAM_NOPCAPLOG;
+        }
+
+        /* encrypted packets */
+        if ((PKT_IS_TOSERVER(p) && (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)) ||
+            (PKT_IS_TOCLIENT(p) && (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)))
+        {
+            p->flags |= PKT_STREAM_NOPCAPLOG;
+        }
+
+        if (ssn->flags & STREAMTCP_FLAG_BYPASS) {
+            /* we can call bypass callback, if enabled */
+            if (StreamTcpBypassEnabled()) {
+                PacketBypassCallback(p);
+            }
+
+        /* if stream is dead and we have no detect engine at all, bypass. */
+        } else if (g_detect_disabled &&
+                (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                StreamTcpBypassEnabled())
+        {
+            SCLogDebug(""bypass as stream is dead and we have no rules"");
+            PacketBypassCallback(p);
+        }
+    }
+
+    SCReturnInt(0);
+
+error:
+    /* make sure we don't leave packets in our pseudo queue */
+    while (stt->pseudo_queue.len > 0) {
+        Packet *np = PacketDequeue(&stt->pseudo_queue);
+        if (np != NULL) {
+            PacketEnqueue(pq, np);
+        }
+    }
+
+    /* recalc the csum on the packet if it was modified */
+    if (p->flags & PKT_STREAM_MODIFIED) {
+        ReCalculateChecksum(p);
+     }
+ 
+     if (StreamTcpInlineDropInvalid()) {
+         PACKET_DROP(p);
+     }
+     SCReturnInt(-1);
+}
+",C,"        /* disable payload inspection as we're dropping this packet
+         * anyway. Doesn't disable all detection, so we can still
+         * match on the stream event that was set. */
+        DecodeSetNoPayloadInspectionFlag(p);
+",,,"@@ -4739,6 +4739,10 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
+     }
+ 
+     if (StreamTcpInlineDropInvalid()) {
++        /* disable payload inspection as we're dropping this packet
++         * anyway. Doesn't disable all detection, so we can still
++         * match on the stream event that was set. */
++        DecodeSetNoPayloadInspectionFlag(p);
+         PACKET_DROP(p);
+     }
+     SCReturnInt(-1);",suricata,e1ef57c848bbe4e567d5d4b66d346a742e3f77a1,700781c53b847eb73e35742a3b44b934d4fda9e6,1,"int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
+                     PacketQueue *pq)
+{
+    SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(p->flow);
+
+    SCLogDebug(""p->pcap_cnt %""PRIu64, p->pcap_cnt);
+
+    /* assign the thread id to the flow */
+    if (unlikely(p->flow->thread_id == 0)) {
+        p->flow->thread_id = (FlowThreadId)tv->id;
+#ifdef DEBUG
+    } else if (unlikely((FlowThreadId)tv->id != p->flow->thread_id)) {
+        SCLogDebug(""wrong thread: flow has %u, we are %d"", p->flow->thread_id, tv->id);
+#endif
+    }
+
+    TcpSession *ssn = (TcpSession *)p->flow->protoctx;
+
+    /* track TCP flags */
+    if (ssn != NULL) {
+        ssn->tcp_packet_flags |= p->tcph->th_flags;
+        if (PKT_IS_TOSERVER(p))
+            ssn->client.tcp_flags |= p->tcph->th_flags;
+        else if (PKT_IS_TOCLIENT(p))
+            ssn->server.tcp_flags |= p->tcph->th_flags;
+
+        /* check if we need to unset the ASYNC flag */
+        if (ssn->flags & STREAMTCP_FLAG_ASYNC &&
+            ssn->client.tcp_flags != 0 &&
+            ssn->server.tcp_flags != 0)
+        {
+            SCLogDebug(""ssn %p: removing ASYNC flag as we have packets on both sides"", ssn);
+            ssn->flags &= ~STREAMTCP_FLAG_ASYNC;
+        }
+    }
+
+    /* update counters */
+    if ((p->tcph->th_flags & (TH_SYN|TH_ACK)) == (TH_SYN|TH_ACK)) {
+        StatsIncr(tv, stt->counter_tcp_synack);
+    } else if (p->tcph->th_flags & (TH_SYN)) {
+        StatsIncr(tv, stt->counter_tcp_syn);
+    }
+    if (p->tcph->th_flags & (TH_RST)) {
+        StatsIncr(tv, stt->counter_tcp_rst);
+    }
+
+    /* broken TCP http://ask.wireshark.org/questions/3183/acknowledgment-number-broken-tcp-the-acknowledge-field-is-nonzero-while-the-ack-flag-is-not-set */
+    if (!(p->tcph->th_flags & TH_ACK) && TCP_GET_ACK(p) != 0) {
+        StreamTcpSetEvent(p, STREAM_PKT_BROKEN_ACK);
+    }
+
+    /* If we are on IPS mode, and got a drop action triggered from
+     * the IP only module, or from a reassembled msg and/or from an
+     * applayer detection, then drop the rest of the packets of the
+     * same stream and avoid inspecting it any further */
+    if (StreamTcpCheckFlowDrops(p) == 1) {
+        SCLogDebug(""This flow/stream triggered a drop rule"");
+        FlowSetNoPacketInspectionFlag(p->flow);
+        DecodeSetNoPacketInspectionFlag(p);
+        StreamTcpDisableAppLayer(p->flow);
+        PACKET_DROP(p);
+        /* return the segments to the pool */
+        StreamTcpSessionPktFree(p);
+        SCReturnInt(0);
+    }
+
+    if (ssn == NULL || ssn->state == TCP_NONE) {
+        if (StreamTcpPacketStateNone(tv, p, stt, ssn, &stt->pseudo_queue) == -1) {
+            goto error;
+        }
+
+        if (ssn != NULL)
+            SCLogDebug(""ssn->alproto %""PRIu16"""", p->flow->alproto);
+    } else {
+        /* special case for PKT_PSEUDO_STREAM_END packets:
+         * bypass the state handling and various packet checks,
+         * we care about reassembly here. */
+        if (p->flags & PKT_PSEUDO_STREAM_END) {
+            if (PKT_IS_TOCLIENT(p)) {
+                ssn->client.last_ack = TCP_GET_ACK(p);
+                StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                        &ssn->server, p, pq);
+            } else {
+                ssn->server.last_ack = TCP_GET_ACK(p);
+                StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                        &ssn->client, p, pq);
+            }
+            /* straight to 'skip' as we already handled reassembly */
+            goto skip;
+        }
+
+        /* check if the packet is in right direction, when we missed the
+           SYN packet and picked up midstream session. */
+        if (ssn->flags & STREAMTCP_FLAG_MIDSTREAM_SYNACK)
+            StreamTcpPacketSwitchDir(ssn, p);
+
+        if (StreamTcpPacketIsKeepAlive(ssn, p) == 1) {
+            goto skip;
+        }
+        if (StreamTcpPacketIsKeepAliveACK(ssn, p) == 1) {
+            StreamTcpClearKeepAliveFlag(ssn, p);
+            goto skip;
+        }
+        StreamTcpClearKeepAliveFlag(ssn, p);
+
+        /* if packet is not a valid window update, check if it is perhaps
+         * a bad window update that we should ignore (and alert on) */
+        if (StreamTcpPacketIsFinShutdownAck(ssn, p) == 0)
+            if (StreamTcpPacketIsWindowUpdate(ssn, p) == 0)
+                if (StreamTcpPacketIsBadWindowUpdate(ssn,p))
+                    goto skip;
+
+        switch (ssn->state) {
+            case TCP_SYN_SENT:
+                if(StreamTcpPacketStateSynSent(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_SYN_RECV:
+                if(StreamTcpPacketStateSynRecv(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_ESTABLISHED:
+                if(StreamTcpPacketStateEstablished(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_FIN_WAIT1:
+                if(StreamTcpPacketStateFinWait1(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_FIN_WAIT2:
+                if(StreamTcpPacketStateFinWait2(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSING:
+                if(StreamTcpPacketStateClosing(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSE_WAIT:
+                if(StreamTcpPacketStateCloseWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_LAST_ACK:
+                if(StreamTcpPacketStateLastAck(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_TIME_WAIT:
+                if(StreamTcpPacketStateTimeWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
+                    goto error;
+                }
+                break;
+            case TCP_CLOSED:
+                /* TCP session memory is not returned to pool until timeout. */
+                SCLogDebug(""packet received on closed state"");
+                break;
+            default:
+                SCLogDebug(""packet received on default state"");
+                break;
+        }
+    skip:
+
+        if (ssn->state >= TCP_ESTABLISHED) {
+            p->flags |= PKT_STREAM_EST;
+        }
+    }
+
+    /* deal with a pseudo packet that is created upon receiving a RST
+     * segment. To be sure we process both sides of the connection, we
+     * inject a fake packet into the system, forcing reassembly of the
+     * opposing direction.
+     * There should be only one, but to be sure we do a while loop. */
+    if (ssn != NULL) {
+        while (stt->pseudo_queue.len > 0) {
+            SCLogDebug(""processing pseudo packet / stream end"");
+            Packet *np = PacketDequeue(&stt->pseudo_queue);
+            if (np != NULL) {
+                /* process the opposing direction of the original packet */
+                if (PKT_IS_TOSERVER(np)) {
+                    SCLogDebug(""pseudo packet is to server"");
+                    StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                            &ssn->client, np, NULL);
+                } else {
+                    SCLogDebug(""pseudo packet is to client"");
+                    StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                            &ssn->server, np, NULL);
+                }
+
+                /* enqueue this packet so we inspect it in detect etc */
+                PacketEnqueue(pq, np);
+            }
+            SCLogDebug(""processing pseudo packet / stream end done"");
+        }
+
+        /* recalc the csum on the packet if it was modified */
+        if (p->flags & PKT_STREAM_MODIFIED) {
+            ReCalculateChecksum(p);
+        }
+
+        /* check for conditions that may make us not want to log this packet */
+
+        /* streams that hit depth */
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) &&
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        {
+            /* we can call bypass callback, if enabled */
+            if (StreamTcpBypassEnabled()) {
+                PacketBypassCallback(p);
+            }
+        }
+
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) ||
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        {
+            p->flags |= PKT_STREAM_NOPCAPLOG;
+        }
+
+        /* encrypted packets */
+        if ((PKT_IS_TOSERVER(p) && (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)) ||
+            (PKT_IS_TOCLIENT(p) && (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)))
+        {
+            p->flags |= PKT_STREAM_NOPCAPLOG;
+        }
+
+        if (ssn->flags & STREAMTCP_FLAG_BYPASS) {
+            /* we can call bypass callback, if enabled */
+            if (StreamTcpBypassEnabled()) {
+                PacketBypassCallback(p);
+            }
+
+        /* if stream is dead and we have no detect engine at all, bypass. */
+        } else if (g_detect_disabled &&
+                (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                StreamTcpBypassEnabled())
+        {
+            SCLogDebug(""bypass as stream is dead and we have no rules"");
+            PacketBypassCallback(p);
+        }
+    }
+
+    SCReturnInt(0);
+
+error:
+    /* make sure we don't leave packets in our pseudo queue */
+    while (stt->pseudo_queue.len > 0) {
+        Packet *np = PacketDequeue(&stt->pseudo_queue);
+        if (np != NULL) {
+            PacketEnqueue(pq, np);
+        }
+    }
+
+    /* recalc the csum on the packet if it was modified */
+    if (p->flags & PKT_STREAM_MODIFIED) {
+        ReCalculateChecksum(p);
+     }
+ 
+     if (StreamTcpInlineDropInvalid()) {
+//fix_flaw_line_below:
+//        /* disable payload inspection as we're dropping this packet
+//fix_flaw_line_below:
+//         * anyway. Doesn't disable all detection, so we can still
+//fix_flaw_line_below:
+//         * match on the stream event that was set. */
+//fix_flaw_line_below:
+//        DecodeSetNoPayloadInspectionFlag(p);
+         PACKET_DROP(p);
+     }
+     SCReturnInt(-1);
+}
+"

@@ -1,0 +1,1671 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2691,"""CWE-119""",squidclamav,80f74451f628264d1d9a1f1c0bbcebc932ba5e00,80f74451f628264d1d9a1f1c0bbcebc932ba5e00,0,516090,2.385496872248602e+38,,,other,"int squidclamav_check_preview_handler(char *preview_data, int preview_data_len, ci_request_t * req)
+{
+     ci_headers_list_t *req_header;
+     struct http_info httpinf;
+     av_req_data_t *data = ci_service_data(req); 
+     char *clientip;
+     struct hostent *clientname;
+     unsigned long ip;
+     char *username;
+     char *content_type;
+     ci_off_t content_length;
+     char *chain_ret = NULL;
+     char *ret = NULL;
+     int chkipdone = 0;
+
+     ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: processing preview header.\n"");
+
+     if (preview_data_len)
+	ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: preview data size is %d\n"", preview_data_len);
+
+     /* Extract the HTTP header from the request */
+     if ((req_header = ci_http_request_headers(req)) == NULL) {
+	ci_debug_printf(0, ""ERROR squidclamav_check_preview_handler: bad http header, aborting.\n"");
+	return CI_ERROR;
+     }
+
+     /* Get the Authenticated user */
+     if ((username = ci_headers_value(req->request_header, ""X-Authenticated-User"")) != NULL) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: X-Authenticated-User: %s\n"", username);
+        /* if a TRUSTUSER match => no squidguard and no virus scan */
+        if (simple_pattern_compare(username, TRUSTUSER) == 1) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (TRUSTUSER match) for user: %s\n"", username);
+	   return CI_MOD_ALLOW204;
+        }
+     } else {
+	/* set null client to - */
+	username = (char *)malloc(sizeof(char)*2);
+	strcpy(username, ""-"");
+     }
+
+     /* Check client Ip against SquidClamav trustclient */
+     if ((clientip = ci_headers_value(req->request_header, ""X-Client-IP"")) != NULL) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: X-Client-IP: %s\n"", clientip);
+	ip = inet_addr(clientip);
+	chkipdone = 0;
+	if (dnslookup == 1) {
+		if ( (clientname = gethostbyaddr((char *)&ip, sizeof(ip), AF_INET)) != NULL) {
+			if (clientname->h_name != NULL) {
+				/* if a TRUSTCLIENT match => no squidguard and no virus scan */
+				if (client_pattern_compare(clientip, clientname->h_name) > 0) {
+				   ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (TRUSTCLIENT match) for client: %s(%s)\n"", clientname->h_name, clientip);
+				   return CI_MOD_ALLOW204;
+				}
+				chkipdone = 1;
+			}
+		  }
+	}
+	if (chkipdone == 0) {
+		/* if a TRUSTCLIENT match => no squidguard and no virus scan */
+		if (client_pattern_compare(clientip, NULL) > 0) {
+		   ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (TRUSTCLIENT match) for client: %s\n"", clientip);
+		   return CI_MOD_ALLOW204;
+		}
+	}
+     } else {
+	/* set null client to - */
+	clientip = (char *)malloc(sizeof(char)*2);
+	strcpy(clientip, ""-"");
+     }
+     
+     /* Get the requested URL */
+     if (!extract_http_info(req, req_header, &httpinf)) {
+	/* Something wrong in the header or unknow method */
+	ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: bad http header, aborting.\n"");
+	return CI_MOD_ALLOW204;
+     }
+     ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: URL requested: %s\n"", httpinf.url);
+
+     /* Check the URL against SquidClamav Whitelist */
+     if (simple_pattern_compare(httpinf.url, WHITELIST) == 1) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (WHITELIST match) for url: %s\n"", httpinf.url);
+	   return CI_MOD_ALLOW204;
+     }
+
+     
+     /* Check URL header against squidGuard */
+     if (usepipe == 1) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Sending request to chained program: %s\n"", squidguard);
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Request: %s %s %s %s\n"", httpinf.url,clientip,username,httpinf.method);
+	fprintf(sgfpw,""%s %s %s %s\n"",httpinf.url,clientip,username,httpinf.method);
+	fflush(sgfpw);
+	/* the chained redirector must return empty line if ok or the redirection url */
+	chain_ret = (char *)malloc(sizeof(char)*MAX_URL_SIZE);
+	if (chain_ret != NULL) {
+	   ret = fgets(chain_ret,MAX_URL_SIZE,sgfpr);
+	   if ((ret != NULL) && (strlen(chain_ret) > 1)) {
+		ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: Chained program redirection received: %s\n"", chain_ret);
+		if (logredir)
+		   ci_debug_printf(0, ""INFO Chained program redirection received: %s\n"", chain_ret);
+		/* Create the redirection url to squid */
+		data->blocked = 1;
+		generate_redirect_page(strtok(chain_ret, "" ""), req, data);
+	        xfree(chain_ret);
+	        chain_ret = NULL;
+	        return CI_MOD_CONTINUE;
+	   }
+	   xfree(chain_ret);
+	   chain_ret = NULL;
+	}
+     }
+
+     /* CONNECT method (https) can not be scanned so abort */
+     if (strcmp(httpinf.method, ""CONNECT"") == 0) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: method %s can't be scanned.\n"", httpinf.method);
+	return CI_MOD_ALLOW204;
+     }
+
+     /* Check the URL against SquidClamav abort */
+     if (simple_pattern_compare(httpinf.url, ABORT) == 1) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No antivir check (ABORT match) for url: %s\n"", httpinf.url);
+	   return CI_MOD_ALLOW204;
+     }
+
+     /* Get the content length header */
+     content_length = ci_http_content_length(req);
+     ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Content-Length: %d\n"", (int)content_length);
+
+     if ((content_length > 0) && (maxsize > 0) && (content_length >= maxsize)) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: No antivir check, content-length upper than maxsize (%d > %d)\n"", content_length, (int)maxsize);
+	return CI_MOD_ALLOW204;
+     }
+
+     /* Get the content type header */
+     if ((content_type = http_content_type(req)) != NULL) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Content-Type: %s\n"", content_type);
+        /* Check the Content-Type against SquidClamav abortcontent */
+        if (simple_pattern_compare(content_type, ABORTCONTENT)) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No antivir check (ABORTCONTENT match) for content-type: %s\n"", content_type);
+	   return CI_MOD_ALLOW204;
+        }
+     }
+
+     /* No data, so nothing to scan */
+     if (!data || !ci_req_hasbody(req)) {
+	 ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No body data, allow 204\n"");
+          return CI_MOD_ALLOW204;
+     }
+
+     if (preview_data_len == 0) {
+	ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: can not begin to scan url: No preview data.\n"");
+	return CI_MOD_ALLOW204;
+     }
+
+     data->url = ci_buffer_alloc(strlen(httpinf.url)+1);
+     strcpy(data->url, httpinf.url);
+     if (username != NULL) {
+	     data->user = ci_buffer_alloc(strlen(username)+1);
+	     strcpy(data->user, username);
+     } else {
+	data->user = NULL;
+     }
+     if (clientip != NULL) {
+	data->clientip = ci_buffer_alloc(strlen(clientip)+1);
+	strcpy(data->clientip, clientip);
+     } else {
+	ci_debug_printf(0, ""ERROR squidclamav_check_preview_handler: clientip is null, you must set 'icap_send_client_ip on' into squid.conf\n"");
+	data->clientip = NULL;
+     }
+
+     data->body = ci_simple_file_new(0);
+     if ((SEND_PERCENT_BYTES >= 0) && (START_SEND_AFTER == 0)) {
+	ci_req_unlock_data(req);
+	ci_simple_file_lock_all(data->body);
+     }
+     if (!data->body)
+	return CI_ERROR;
+
+     if (preview_data_len) {
+	if (ci_simple_file_write(data->body, preview_data, preview_data_len, ci_req_hasalldata(req)) == CI_ERROR)
+		return CI_ERROR;
+     }
+
+     return CI_MOD_CONTINUE;
+}","int squidclamav_check_preview_handler(char *preview_data, int preview_data_len, ci_request_t * req)
+{
+     ci_headers_list_t *req_header;
+     struct http_info httpinf;
+     av_req_data_t *data = ci_service_data(req); 
+     char *clientip;
+     struct hostent *clientname;
+     unsigned long ip;
+     char *username;
+     char *content_type;
+     ci_off_t content_length;
+     char *chain_ret = NULL;
+     char *ret = NULL;
+     int chkipdone = 0;
+
+     ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: processing preview header.\n"");
+
+     if (preview_data_len)
+	ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: preview data size is %d\n"", preview_data_len);
+
+     /* Extract the HTTP header from the request */
+     if ((req_header = ci_http_request_headers(req)) == NULL) {
+	ci_debug_printf(0, ""ERROR squidclamav_check_preview_handler: bad http header, aborting.\n"");
+	return CI_ERROR;
+     }
+
+     /* Get the Authenticated user */
+     if ((username = ci_headers_value(req->request_header, ""X-Authenticated-User"")) != NULL) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: X-Authenticated-User: %s\n"", username);
+        /* if a TRUSTUSER match => no squidguard and no virus scan */
+        if (simple_pattern_compare(username, TRUSTUSER) == 1) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (TRUSTUSER match) for user: %s\n"", username);
+	   return CI_MOD_ALLOW204;
+        }
+     } else {
+	/* set null client to - */
+	username = (char *)malloc(sizeof(char)*2);
+	strcpy(username, ""-"");
+     }
+
+     /* Check client Ip against SquidClamav trustclient */
+     if ((clientip = ci_headers_value(req->request_header, ""X-Client-IP"")) != NULL) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: X-Client-IP: %s\n"", clientip);
+	ip = inet_addr(clientip);
+	chkipdone = 0;
+	if (dnslookup == 1) {
+		if ( (clientname = gethostbyaddr((char *)&ip, sizeof(ip), AF_INET)) != NULL) {
+			if (clientname->h_name != NULL) {
+				/* if a TRUSTCLIENT match => no squidguard and no virus scan */
+				if (client_pattern_compare(clientip, clientname->h_name) > 0) {
+				   ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (TRUSTCLIENT match) for client: %s(%s)\n"", clientname->h_name, clientip);
+				   return CI_MOD_ALLOW204;
+				}
+				chkipdone = 1;
+			}
+		  }
+	}
+	if (chkipdone == 0) {
+		/* if a TRUSTCLIENT match => no squidguard and no virus scan */
+		if (client_pattern_compare(clientip, NULL) > 0) {
+		   ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (TRUSTCLIENT match) for client: %s\n"", clientip);
+		   return CI_MOD_ALLOW204;
+		}
+	}
+     } else {
+	/* set null client to - */
+	clientip = (char *)malloc(sizeof(char)*2);
+	strcpy(clientip, ""-"");
+     }
+     
+     /* Get the requested URL */
+     if (!extract_http_info(req, req_header, &httpinf)) {
+	/* Something wrong in the header or unknow method */
+	ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: bad http header, aborting.\n"");
+	return CI_MOD_ALLOW204;
+     }
+     ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: URL requested: %s\n"", httpinf.url);
+
+     /* Check the URL against SquidClamav Whitelist */
+     if (simple_pattern_compare(httpinf.url, WHITELIST) == 1) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No squidguard and antivir check (WHITELIST match) for url: %s\n"", httpinf.url);
+	   return CI_MOD_ALLOW204;
+     }
+
+     
+     /* Check URL header against squidGuard */
+     if (usepipe == 1) {
+	char *rbuff = NULL;
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Sending request to chained program: %s\n"", squidguard);
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Request: %s %s %s %s\n"", httpinf.url,clientip,username,httpinf.method);
+	/* escaping escaped character to prevent unescaping by squidguard */
+	rbuff = replace(httpinf.url, ""%"", ""%25"");
+	fprintf(sgfpw,""%s %s %s %s\n"",rbuff,clientip,username,httpinf.method);
+	fflush(sgfpw);
+	xfree(rbuff);
+	/* the chained redirector must return empty line if ok or the redirection url */
+	chain_ret = (char *)malloc(sizeof(char)*MAX_URL_SIZE);
+	if (chain_ret != NULL) {
+	   ret = fgets(chain_ret,MAX_URL_SIZE,sgfpr);
+	   if ((ret != NULL) && (strlen(chain_ret) > 1)) {
+		ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: Chained program redirection received: %s\n"", chain_ret);
+		if (logredir)
+		   ci_debug_printf(0, ""INFO Chained program redirection received: %s\n"", chain_ret);
+		/* Create the redirection url to squid */
+		data->blocked = 1;
+		generate_redirect_page(strtok(chain_ret, "" ""), req, data);
+	        xfree(chain_ret);
+	        chain_ret = NULL;
+	        return CI_MOD_CONTINUE;
+	   }
+	   xfree(chain_ret);
+	   chain_ret = NULL;
+	}
+     }
+
+     /* CONNECT method (https) can not be scanned so abort */
+     if (strcmp(httpinf.method, ""CONNECT"") == 0) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: method %s can't be scanned.\n"", httpinf.method);
+	return CI_MOD_ALLOW204;
+     }
+
+     /* Check the URL against SquidClamav abort */
+     if (simple_pattern_compare(httpinf.url, ABORT) == 1) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No antivir check (ABORT match) for url: %s\n"", httpinf.url);
+	   return CI_MOD_ALLOW204;
+     }
+
+     /* Get the content length header */
+     content_length = ci_http_content_length(req);
+     ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Content-Length: %d\n"", (int)content_length);
+
+     if ((content_length > 0) && (maxsize > 0) && (content_length >= maxsize)) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: No antivir check, content-length upper than maxsize (%d > %d)\n"", content_length, (int)maxsize);
+	return CI_MOD_ALLOW204;
+     }
+
+     /* Get the content type header */
+     if ((content_type = http_content_type(req)) != NULL) {
+	ci_debug_printf(2, ""DEBUG squidclamav_check_preview_handler: Content-Type: %s\n"", content_type);
+        /* Check the Content-Type against SquidClamav abortcontent */
+        if (simple_pattern_compare(content_type, ABORTCONTENT)) {
+           ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No antivir check (ABORTCONTENT match) for content-type: %s\n"", content_type);
+	   return CI_MOD_ALLOW204;
+        }
+     }
+
+     /* No data, so nothing to scan */
+     if (!data || !ci_req_hasbody(req)) {
+	 ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: No body data, allow 204\n"");
+          return CI_MOD_ALLOW204;
+     }
+
+     if (preview_data_len == 0) {
+	ci_debug_printf(1, ""DEBUG squidclamav_check_preview_handler: can not begin to scan url: No preview data.\n"");
+	return CI_MOD_ALLOW204;
+     }
+
+     data->url = ci_buffer_alloc(strlen(httpinf.url)+1);
+     strcpy(data->url, httpinf.url);
+     if (username != NULL) {
+	     data->user = ci_buffer_alloc(strlen(username)+1);
+	     strcpy(data->user, username);
+     } else {
+	data->user = NULL;
+     }
+     if (clientip != NULL) {
+	data->clientip = ci_buffer_alloc(strlen(clientip)+1);
+	strcpy(data->clientip, clientip);
+     } else {
+	ci_debug_printf(0, ""ERROR squidclamav_check_preview_handler: clientip is null, you must set 'icap_send_client_ip on' into squid.conf\n"");
+	data->clientip = NULL;
+     }
+
+     data->body = ci_simple_file_new(0);
+     if ((SEND_PERCENT_BYTES >= 0) && (START_SEND_AFTER == 0)) {
+	ci_req_unlock_data(req);
+	ci_simple_file_lock_all(data->body);
+     }
+     if (!data->body)
+	return CI_ERROR;
+
+     if (preview_data_len) {
+	if (ci_simple_file_write(data->body, preview_data, preview_data_len, ci_req_hasalldata(req)) == CI_ERROR)
+		return CI_ERROR;
+     }
+
+     return CI_MOD_CONTINUE;
+}",
+2694,"""CWE-119""",xdelta-devel,ef93ff74203e030073b898c05e8b4860b5d09ef2,ef93ff74203e030073b898c05e8b4860b5d09ef2,0,517037,1.914653240986886e+38,,,other,"main_get_appheader (xd3_stream *stream, main_file *ifile,
+		    main_file *output, main_file *sfile)
+{
+  uint8_t *apphead;
+  usize_t appheadsz;
+  int ret;
+
+  /* The user may disable the application header.  Once the appheader
+   * is set, this disables setting it again. */
+  if (! option_use_appheader) { return; }
+
+  ret = xd3_get_appheader (stream, & apphead, & appheadsz);
+
+  /* Ignore failure, it only means we haven't received a header yet. */
+  if (ret != 0) { return; }
+
+  if (appheadsz > 0)
+    {
+      char *start = (char*)apphead;
+      char *slash;
+      int   place = 0;
+      char *parsed[4];
+
+      memset (parsed, 0, sizeof (parsed));
+
+      while ((slash = strchr (start, '/')) != NULL)
+	{
+	  *slash = 0;
+	  parsed[place++] = start;
+	  start = slash + 1;
+	}
+
+      parsed[place++] = start;
+
+      /* First take the output parameters. */
+      if (place == 2 || place == 4)
+	{
+	  main_get_appheader_params (output, parsed, 1, ""output"", ifile);
+	}
+
+      /* Then take the source parameters. */
+      if (place == 4)
+	{
+	  main_get_appheader_params (sfile, parsed+2, 0, ""source"", ifile);
+	}
+    }
+
+  option_use_appheader = 0;
+  return;
+}","main_get_appheader (xd3_stream *stream, main_file *ifile,
+		    main_file *output, main_file *sfile)
+{
+  uint8_t *apphead;
+  usize_t appheadsz;
+  int ret;
+
+  /* The user may disable the application header.  Once the appheader
+   * is set, this disables setting it again. */
+  if (! option_use_appheader) { return; }
+
+  ret = xd3_get_appheader (stream, & apphead, & appheadsz);
+
+  /* Ignore failure, it only means we haven't received a header yet. */
+  if (ret != 0) { return; }
+
+  if (appheadsz > 0)
+    {
+      const int kMaxArgs = 4;
+      char *start = (char*)apphead;
+      char *slash;
+      int   place = 0;
+      char *parsed[kMaxArgs];
+
+      memset (parsed, 0, sizeof (parsed));
+
+      while ((slash = strchr (start, '/')) != NULL && place < (kMaxArgs-1))
+	{
+	  *slash = 0;
+	  parsed[place++] = start;
+	  start = slash + 1;
+	}
+
+      parsed[place++] = start;
+
+      /* First take the output parameters. */
+      if (place == 2 || place == 4)
+	{
+	  main_get_appheader_params (output, parsed, 1, ""output"", ifile);
+	}
+
+      /* Then take the source parameters. */
+      if (place == 4)
+	{
+	  main_get_appheader_params (sfile, parsed+2, 0, ""source"", ifile);
+	}
+    }
+
+  option_use_appheader = 0;
+  return;
+}",
+2698,"""CWE-119""",ChakraCore,402f3d967c0a905ec5b9ca9c240783d3f2c15724,402f3d967c0a905ec5b9ca9c240783d3f2c15724,0,517605,2.1199449416144068e+38,,,other,"ParseNodePtr Parser::ParseTerm(BOOL fAllowCall,
+    LPCOLESTR pNameHint,
+    uint32 *pHintLength,
+    uint32 *pShortNameOffset,
+    _Inout_opt_ IdentToken* pToken /*= nullptr*/,
+    bool fUnaryOrParen /*= false*/,
+    _Out_opt_ BOOL* pfCanAssign /*= nullptr*/,
+    _Inout_opt_ BOOL* pfLikelyPattern /*= nullptr*/,
+    _Out_opt_ bool* pfIsDotOrIndex /*= nullptr*/,
+    _Inout_opt_ charcount_t *plastRParen /*= nullptr*/)
+{
+    ParseNodePtr pnode = nullptr;
+    charcount_t ichMin = 0;
+    size_t iecpMin = 0;
+    size_t iuMin;
+    IdentToken term;
+    BOOL fInNew = FALSE;
+    BOOL fCanAssign = TRUE;
+    bool isAsyncExpr = false;
+    bool isLambdaExpr = false;
+    Assert(pToken == nullptr || pToken->tk == tkNone); // Must be empty initially
+
+    if (this->IsBackgroundParser())
+    {
+        PROBE_STACK_NO_DISPOSE(m_scriptContext, Js::Constants::MinStackParseOneTerm);
+    }
+    else
+    {
+        PROBE_STACK(m_scriptContext, Js::Constants::MinStackParseOneTerm);
+    }
+
+    switch (m_token.tk)
+    {
+    case tkID:
+    {
+        PidRefStack *ref = nullptr;
+        IdentPtr pid = m_token.GetIdentifier(m_phtbl);
+        charcount_t ichLim = m_pscan->IchLimTok();
+        size_t iecpLim = m_pscan->IecpLimTok();
+        ichMin = m_pscan->IchMinTok();
+        iecpMin  = m_pscan->IecpMinTok();
+
+        if (pid == wellKnownPropertyPids.async &&
+            m_scriptContext->GetConfig()->IsES7AsyncAndAwaitEnabled())
+        {
+            isAsyncExpr = true;
+        }
+
+        bool previousAwaitIsKeyword = m_pscan->SetAwaitIsKeyword(isAsyncExpr);
+        m_pscan->Scan();
+        m_pscan->SetAwaitIsKeyword(previousAwaitIsKeyword);
+
+        // We search for an Async expression (a function declaration or an async lambda expression)
+        if (isAsyncExpr && !m_pscan->FHadNewLine())
+        {
+            if (m_token.tk == tkFUNCTION)
+            {
+                goto LFunction;
+            }
+            else if (m_token.tk == tkID || m_token.tk == tkAWAIT)
+            {
+                isLambdaExpr = true;
+                goto LFunction;
+            }
+        }
+
+        // Don't push a reference if this is a single lambda parameter, because we'll reparse with
+        // a correct function ID.
+        if (m_token.tk != tkDArrow)
+        {
+            ref = this->PushPidRef(pid);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateNameNode(pid);
+            pnode->ichMin = ichMin;
+            pnode->ichLim = ichLim;
+            pnode->sxPid.SetSymRef(ref);
+        }
+        else
+        {
+            // Remember the identifier start and end in case it turns out to be a statement label.
+            term.tk = tkID;
+            term.pid = pid; // Record the identifier for detection of eval
+            term.ichMin = static_cast<charcount_t>(iecpMin);
+            term.ichLim = static_cast<charcount_t>(iecpLim);
+        }
+        CheckArgumentsUse(pid, GetCurrentFunctionNode());
+        break;
+    }
+
+    case tkTHIS:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopThis>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkLParen:
+    {
+        ichMin = m_pscan->IchMinTok();
+        iuMin = m_pscan->IecpMinTok();
+        m_pscan->Scan();
+        if (m_token.tk == tkRParen)
+        {
+            // Empty parens can only be legal as an empty parameter list to a lambda declaration.
+            // We're in a lambda if the next token is =>.
+            fAllowCall = FALSE;
+            m_pscan->Scan();
+
+            // If the token after the right paren is not => or if there was a newline between () and => this is a syntax error
+            if (!m_doingFastScan && (m_token.tk != tkDArrow || m_pscan->FHadNewLine()))
+            {
+                Error(ERRsyntax);
+            }
+
+            if (buildAST)
+            {
+                pnode = CreateNodeWithScanner<knopEmpty>();
+            }
+            break;
+        }
+
+        // Advance the block ID here in case this parenthetical expression turns out to be a lambda parameter list.
+        // That way the pid ref stacks will be created in their correct final form, and we can simply fix
+        // up function ID's.
+        uint saveNextBlockId = m_nextBlockId;
+        uint saveCurrBlockId = GetCurrentBlock()->sxBlock.blockId;
+        GetCurrentBlock()->sxBlock.blockId = m_nextBlockId++;
+
+        this->m_parenDepth++;
+        pnode = ParseExpr<buildAST>(koplNo, &fCanAssign, TRUE, FALSE, nullptr, nullptr /*nameLength*/, nullptr  /*pShortNameOffset*/, &term, true, nullptr, plastRParen);
+        this->m_parenDepth--;
+
+        if (buildAST && plastRParen)
+        {
+            *plastRParen = m_pscan->IchLimTok();
+        }
+
+        ChkCurTok(tkRParen, ERRnoRparen);
+
+        GetCurrentBlock()->sxBlock.blockId = saveCurrBlockId;
+        if (m_token.tk == tkDArrow)
+        {
+            // We're going to rewind and reinterpret the expression as a parameter list.
+            // Put back the original next-block-ID so the existing pid ref stacks will be correct.
+            m_nextBlockId = saveNextBlockId;
+        }
+
+        // Emit a deferred ... error if one was parsed.
+        if (m_deferEllipsisError && m_token.tk != tkDArrow)
+        {
+            m_pscan->SeekTo(m_EllipsisErrLoc);
+            Error(ERRInvalidSpreadUse);
+        }
+        else
+        {
+            m_deferEllipsisError = false;
+        }
+        break;
+    }
+
+    case tkIntCon:
+        if (IsStrictMode() && m_pscan->IsOctOrLeadingZeroOnLastTKNumber())
+        {
+            Error(ERRES5NoOctal);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateIntNodeWithScanner(m_token.GetLong());
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkFltCon:
+        if (IsStrictMode() && m_pscan->IsOctOrLeadingZeroOnLastTKNumber())
+        {
+            Error(ERRES5NoOctal);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopFlt>();
+            pnode->sxFlt.dbl = m_token.GetDouble();
+            pnode->sxFlt.maybeInt = m_token.GetDoubleMayBeInt();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkStrCon:
+        if (IsStrictMode() && m_pscan->IsOctOrLeadingZeroOnLastTKNumber())
+        {
+            Error(ERRES5NoOctal);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateStrNodeWithScanner(m_token.GetStr());
+        }
+        else
+        {
+            // Subtract the string literal length from the total char count for the purpose
+            // of deciding whether to defer parsing and byte code generation.
+            this->ReduceDeferredScriptLength(m_pscan->IchLimTok() - m_pscan->IchMinTok());
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkTRUE:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopTrue>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkFALSE:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopFalse>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkNULL:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopNull>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkDiv:
+    case tkAsgDiv:
+        pnode = ParseRegExp<buildAST>();
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkNEW:
+    {
+        ichMin = m_pscan->IchMinTok();
+        m_pscan->Scan();
+
+        if (m_token.tk == tkDot && m_scriptContext->GetConfig()->IsES6ClassAndExtendsEnabled())
+        {
+            pnode = ParseMetaProperty<buildAST>(tkNEW, ichMin, &fCanAssign);
+
+            m_pscan->Scan();
+        }
+        else
+        {
+            ParseNodePtr pnodeExpr = ParseTerm<buildAST>(FALSE, pNameHint, pHintLength, pShortNameOffset);
+            if (buildAST)
+            {
+                pnode = CreateCallNode(knopNew, pnodeExpr, nullptr);
+                pnode->ichMin = ichMin;
+            }
+            fInNew = TRUE;
+            fCanAssign = FALSE;
+        }
+        break;
+    }
+
+    case tkLBrack:
+    {
+        ichMin = m_pscan->IchMinTok();
+        m_pscan->Scan();
+        pnode = ParseArrayLiteral<buildAST>();
+        if (buildAST)
+        {
+            pnode->ichMin = ichMin;
+            pnode->ichLim = m_pscan->IchLimTok();
+        }
+
+        if (this->m_arrayDepth == 0)
+        {
+            Assert(m_pscan->IchLimTok() - ichMin > m_funcInArray);
+            this->ReduceDeferredScriptLength(m_pscan->IchLimTok() - ichMin - this->m_funcInArray);
+            this->m_funcInArray = 0;
+            this->m_funcInArrayDepth = 0;
+        }
+        ChkCurTok(tkRBrack, ERRnoRbrack);
+        if (!IsES6DestructuringEnabled())
+        {
+            fCanAssign = FALSE;
+        }
+        else if (pfLikelyPattern != nullptr && !IsPostFixOperators())
+        {
+            *pfLikelyPattern = TRUE;
+        }
+        break;
+    }
+
+    case tkLCurly:
+    {
+        ichMin = m_pscan->IchMinTok();
+        m_pscan->ScanForcingPid();
+        ParseNodePtr pnodeMemberList = ParseMemberList<buildAST>(pNameHint, pHintLength);
+        if (buildAST)
+        {
+            pnode = CreateUniNode(knopObject, pnodeMemberList);
+            pnode->ichMin = ichMin;
+            pnode->ichLim = m_pscan->IchLimTok();
+        }
+        ChkCurTok(tkRCurly, ERRnoRcurly);
+        if (!IsES6DestructuringEnabled())
+        {
+            fCanAssign = FALSE;
+        }
+        else if (pfLikelyPattern != nullptr && !IsPostFixOperators())
+        {
+            *pfLikelyPattern = TRUE;
+        }
+        break;
+    }
+
+    case tkFUNCTION:
+    {
+LFunction :
+        if (m_grfscr & fscrDeferredFncExpression)
+        {
+            // The top-level deferred function body was defined by a function expression whose parsing was deferred. We are now
+            // parsing it, so unset the flag so that any nested functions are parsed normally. This flag is only applicable the
+            // first time we see it.
+            //
+            // Normally, deferred functions will be parsed in ParseStatement upon encountering the 'function' token. The first
+            // token of the source code of the function may not a 'function' token though, so we still need to reset this flag
+            // for the first function we parse. This can happen in compat modes, for instance, for a function expression enclosed
+            // in parentheses, where the legacy behavior was to include the parentheses in the function's source code.
+            m_grfscr &= ~fscrDeferredFncExpression;
+        }
+        ushort flags = fFncNoFlgs;
+        if (isLambdaExpr)
+        {
+            flags |= fFncLambda;
+        }
+        if (isAsyncExpr)
+        {
+            flags |= fFncAsync;
+        }
+        pnode = ParseFncDecl<buildAST>(flags, pNameHint, false, true, fUnaryOrParen);
+        if (isAsyncExpr)
+        {
+            pnode->sxFnc.cbMin = iecpMin;
+            pnode->ichMin = ichMin;
+        }
+        fCanAssign = FALSE;
+        break;
+    }
+
+    case tkCLASS:
+        if (m_scriptContext->GetConfig()->IsES6ClassAndExtendsEnabled())
+        {
+            pnode = ParseClassDecl<buildAST>(FALSE, pNameHint, pHintLength, pShortNameOffset);
+        }
+        else
+        {
+            goto LUnknown;
+        }
+        fCanAssign = FALSE;
+        break;
+
+    case tkStrTmplBasic:
+    case tkStrTmplBegin:
+        pnode = ParseStringTemplateDecl<buildAST>(nullptr);
+        fCanAssign = FALSE;
+        break;
+
+    case tkSUPER:
+        if (m_scriptContext->GetConfig()->IsES6ClassAndExtendsEnabled())
+        {
+            pnode = ParseSuper<buildAST>(pnode, !!fAllowCall);
+        }
+        else
+        {
+            goto LUnknown;
+        }
+        break;
+
+    case tkCASE:
+    {
+        if (!m_doingFastScan)
+        {
+            goto LUnknown;
+        }
+        ParseNodePtr pnodeUnused;
+        pnode = ParseCase<buildAST>(&pnodeUnused);
+        break;
+    }
+
+    case tkELSE:
+        if (!m_doingFastScan)
+        {
+            goto LUnknown;
+        }
+        m_pscan->Scan();
+        ParseStatement<buildAST>();
+        break;
+
+    default:
+    LUnknown :
+        Error(ERRsyntax);
+        break;
+    }
+
+    pnode = ParsePostfixOperators<buildAST>(pnode, fAllowCall, fInNew, isAsyncExpr, &fCanAssign, &term, pfIsDotOrIndex);
+
+    // Pass back identifier if requested
+    if (pToken && term.tk == tkID)
+    {
+        *pToken = term;
+    }
+
+    if (pfCanAssign)
+    {
+        *pfCanAssign = fCanAssign;
+    }
+
+    return pnode;
+}","ParseNodePtr Parser::ParseTerm(BOOL fAllowCall,
+    LPCOLESTR pNameHint,
+    uint32 *pHintLength,
+    uint32 *pShortNameOffset,
+    _Inout_opt_ IdentToken* pToken /*= nullptr*/,
+    bool fUnaryOrParen /*= false*/,
+    _Out_opt_ BOOL* pfCanAssign /*= nullptr*/,
+    _Inout_opt_ BOOL* pfLikelyPattern /*= nullptr*/,
+    _Out_opt_ bool* pfIsDotOrIndex /*= nullptr*/,
+    _Inout_opt_ charcount_t *plastRParen /*= nullptr*/)
+{
+    ParseNodePtr pnode = nullptr;
+    PidRefStack *savedTopAsyncRef = nullptr;
+    charcount_t ichMin = 0;
+    size_t iecpMin = 0;
+    size_t iuMin;
+    IdentToken term;
+    BOOL fInNew = FALSE;
+    BOOL fCanAssign = TRUE;
+    bool isAsyncExpr = false;
+    bool isLambdaExpr = false;
+    Assert(pToken == nullptr || pToken->tk == tkNone); // Must be empty initially
+
+    if (this->IsBackgroundParser())
+    {
+        PROBE_STACK_NO_DISPOSE(m_scriptContext, Js::Constants::MinStackParseOneTerm);
+    }
+    else
+    {
+        PROBE_STACK(m_scriptContext, Js::Constants::MinStackParseOneTerm);
+    }
+
+    switch (m_token.tk)
+    {
+    case tkID:
+    {
+        PidRefStack *ref = nullptr;
+        IdentPtr pid = m_token.GetIdentifier(m_phtbl);
+        charcount_t ichLim = m_pscan->IchLimTok();
+        size_t iecpLim = m_pscan->IecpLimTok();
+        ichMin = m_pscan->IchMinTok();
+        iecpMin  = m_pscan->IecpMinTok();
+
+        if (pid == wellKnownPropertyPids.async &&
+            m_scriptContext->GetConfig()->IsES7AsyncAndAwaitEnabled())
+        {
+            isAsyncExpr = true;
+        }
+
+        bool previousAwaitIsKeyword = m_pscan->SetAwaitIsKeyword(isAsyncExpr);
+        m_pscan->Scan();
+        m_pscan->SetAwaitIsKeyword(previousAwaitIsKeyword);
+
+        // We search for an Async expression (a function declaration or an async lambda expression)
+        if (isAsyncExpr && !m_pscan->FHadNewLine())
+        {
+            if (m_token.tk == tkFUNCTION)
+            {
+                goto LFunction;
+            }
+            else if (m_token.tk == tkID || m_token.tk == tkAWAIT)
+            {
+                isLambdaExpr = true;
+                goto LFunction;
+            }
+            else if (m_token.tk == tkLParen)
+            {
+                // This is potentially an async arrow function. Save the state of the async references
+                // in case it needs to be restored. (Note that the case of a single parameter with no ()'s
+                // is detected upstream and need not be handled here.)
+                savedTopAsyncRef = pid->GetTopRef();
+            }
+        }
+
+        // Don't push a reference if this is a single lambda parameter, because we'll reparse with
+        // a correct function ID.
+        if (m_token.tk != tkDArrow)
+        {
+            ref = this->PushPidRef(pid);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateNameNode(pid);
+            pnode->ichMin = ichMin;
+            pnode->ichLim = ichLim;
+            pnode->sxPid.SetSymRef(ref);
+        }
+        else
+        {
+            // Remember the identifier start and end in case it turns out to be a statement label.
+            term.tk = tkID;
+            term.pid = pid; // Record the identifier for detection of eval
+            term.ichMin = static_cast<charcount_t>(iecpMin);
+            term.ichLim = static_cast<charcount_t>(iecpLim);
+        }
+        CheckArgumentsUse(pid, GetCurrentFunctionNode());
+        break;
+    }
+
+    case tkTHIS:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopThis>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkLParen:
+    {
+        ichMin = m_pscan->IchMinTok();
+        iuMin = m_pscan->IecpMinTok();
+        m_pscan->Scan();
+        if (m_token.tk == tkRParen)
+        {
+            // Empty parens can only be legal as an empty parameter list to a lambda declaration.
+            // We're in a lambda if the next token is =>.
+            fAllowCall = FALSE;
+            m_pscan->Scan();
+
+            // If the token after the right paren is not => or if there was a newline between () and => this is a syntax error
+            if (!m_doingFastScan && (m_token.tk != tkDArrow || m_pscan->FHadNewLine()))
+            {
+                Error(ERRsyntax);
+            }
+
+            if (buildAST)
+            {
+                pnode = CreateNodeWithScanner<knopEmpty>();
+            }
+            break;
+        }
+
+        // Advance the block ID here in case this parenthetical expression turns out to be a lambda parameter list.
+        // That way the pid ref stacks will be created in their correct final form, and we can simply fix
+        // up function ID's.
+        uint saveNextBlockId = m_nextBlockId;
+        uint saveCurrBlockId = GetCurrentBlock()->sxBlock.blockId;
+        GetCurrentBlock()->sxBlock.blockId = m_nextBlockId++;
+
+        this->m_parenDepth++;
+        pnode = ParseExpr<buildAST>(koplNo, &fCanAssign, TRUE, FALSE, nullptr, nullptr /*nameLength*/, nullptr  /*pShortNameOffset*/, &term, true, nullptr, plastRParen);
+        this->m_parenDepth--;
+
+        if (buildAST && plastRParen)
+        {
+            *plastRParen = m_pscan->IchLimTok();
+        }
+
+        ChkCurTok(tkRParen, ERRnoRparen);
+
+        GetCurrentBlock()->sxBlock.blockId = saveCurrBlockId;
+        if (m_token.tk == tkDArrow)
+        {
+            // We're going to rewind and reinterpret the expression as a parameter list.
+            // Put back the original next-block-ID so the existing pid ref stacks will be correct.
+            m_nextBlockId = saveNextBlockId;
+        }
+
+        // Emit a deferred ... error if one was parsed.
+        if (m_deferEllipsisError && m_token.tk != tkDArrow)
+        {
+            m_pscan->SeekTo(m_EllipsisErrLoc);
+            Error(ERRInvalidSpreadUse);
+        }
+        else
+        {
+            m_deferEllipsisError = false;
+        }
+        break;
+    }
+
+    case tkIntCon:
+        if (IsStrictMode() && m_pscan->IsOctOrLeadingZeroOnLastTKNumber())
+        {
+            Error(ERRES5NoOctal);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateIntNodeWithScanner(m_token.GetLong());
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkFltCon:
+        if (IsStrictMode() && m_pscan->IsOctOrLeadingZeroOnLastTKNumber())
+        {
+            Error(ERRES5NoOctal);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopFlt>();
+            pnode->sxFlt.dbl = m_token.GetDouble();
+            pnode->sxFlt.maybeInt = m_token.GetDoubleMayBeInt();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkStrCon:
+        if (IsStrictMode() && m_pscan->IsOctOrLeadingZeroOnLastTKNumber())
+        {
+            Error(ERRES5NoOctal);
+        }
+
+        if (buildAST)
+        {
+            pnode = CreateStrNodeWithScanner(m_token.GetStr());
+        }
+        else
+        {
+            // Subtract the string literal length from the total char count for the purpose
+            // of deciding whether to defer parsing and byte code generation.
+            this->ReduceDeferredScriptLength(m_pscan->IchLimTok() - m_pscan->IchMinTok());
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkTRUE:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopTrue>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkFALSE:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopFalse>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkNULL:
+        if (buildAST)
+        {
+            pnode = CreateNodeWithScanner<knopNull>();
+        }
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkDiv:
+    case tkAsgDiv:
+        pnode = ParseRegExp<buildAST>();
+        fCanAssign = FALSE;
+        m_pscan->Scan();
+        break;
+
+    case tkNEW:
+    {
+        ichMin = m_pscan->IchMinTok();
+        m_pscan->Scan();
+
+        if (m_token.tk == tkDot && m_scriptContext->GetConfig()->IsES6ClassAndExtendsEnabled())
+        {
+            pnode = ParseMetaProperty<buildAST>(tkNEW, ichMin, &fCanAssign);
+
+            m_pscan->Scan();
+        }
+        else
+        {
+            ParseNodePtr pnodeExpr = ParseTerm<buildAST>(FALSE, pNameHint, pHintLength, pShortNameOffset);
+            if (buildAST)
+            {
+                pnode = CreateCallNode(knopNew, pnodeExpr, nullptr);
+                pnode->ichMin = ichMin;
+            }
+            fInNew = TRUE;
+            fCanAssign = FALSE;
+        }
+        break;
+    }
+
+    case tkLBrack:
+    {
+        ichMin = m_pscan->IchMinTok();
+        m_pscan->Scan();
+        pnode = ParseArrayLiteral<buildAST>();
+        if (buildAST)
+        {
+            pnode->ichMin = ichMin;
+            pnode->ichLim = m_pscan->IchLimTok();
+        }
+
+        if (this->m_arrayDepth == 0)
+        {
+            Assert(m_pscan->IchLimTok() - ichMin > m_funcInArray);
+            this->ReduceDeferredScriptLength(m_pscan->IchLimTok() - ichMin - this->m_funcInArray);
+            this->m_funcInArray = 0;
+            this->m_funcInArrayDepth = 0;
+        }
+        ChkCurTok(tkRBrack, ERRnoRbrack);
+        if (!IsES6DestructuringEnabled())
+        {
+            fCanAssign = FALSE;
+        }
+        else if (pfLikelyPattern != nullptr && !IsPostFixOperators())
+        {
+            *pfLikelyPattern = TRUE;
+        }
+        break;
+    }
+
+    case tkLCurly:
+    {
+        ichMin = m_pscan->IchMinTok();
+        m_pscan->ScanForcingPid();
+        ParseNodePtr pnodeMemberList = ParseMemberList<buildAST>(pNameHint, pHintLength);
+        if (buildAST)
+        {
+            pnode = CreateUniNode(knopObject, pnodeMemberList);
+            pnode->ichMin = ichMin;
+            pnode->ichLim = m_pscan->IchLimTok();
+        }
+        ChkCurTok(tkRCurly, ERRnoRcurly);
+        if (!IsES6DestructuringEnabled())
+        {
+            fCanAssign = FALSE;
+        }
+        else if (pfLikelyPattern != nullptr && !IsPostFixOperators())
+        {
+            *pfLikelyPattern = TRUE;
+        }
+        break;
+    }
+
+    case tkFUNCTION:
+    {
+LFunction :
+        if (m_grfscr & fscrDeferredFncExpression)
+        {
+            // The top-level deferred function body was defined by a function expression whose parsing was deferred. We are now
+            // parsing it, so unset the flag so that any nested functions are parsed normally. This flag is only applicable the
+            // first time we see it.
+            //
+            // Normally, deferred functions will be parsed in ParseStatement upon encountering the 'function' token. The first
+            // token of the source code of the function may not a 'function' token though, so we still need to reset this flag
+            // for the first function we parse. This can happen in compat modes, for instance, for a function expression enclosed
+            // in parentheses, where the legacy behavior was to include the parentheses in the function's source code.
+            m_grfscr &= ~fscrDeferredFncExpression;
+        }
+        ushort flags = fFncNoFlgs;
+        if (isLambdaExpr)
+        {
+            flags |= fFncLambda;
+        }
+        if (isAsyncExpr)
+        {
+            flags |= fFncAsync;
+        }
+        pnode = ParseFncDecl<buildAST>(flags, pNameHint, false, true, fUnaryOrParen);
+        if (isAsyncExpr)
+        {
+            pnode->sxFnc.cbMin = iecpMin;
+            pnode->ichMin = ichMin;
+        }
+        fCanAssign = FALSE;
+        break;
+    }
+
+    case tkCLASS:
+        if (m_scriptContext->GetConfig()->IsES6ClassAndExtendsEnabled())
+        {
+            pnode = ParseClassDecl<buildAST>(FALSE, pNameHint, pHintLength, pShortNameOffset);
+        }
+        else
+        {
+            goto LUnknown;
+        }
+        fCanAssign = FALSE;
+        break;
+
+    case tkStrTmplBasic:
+    case tkStrTmplBegin:
+        pnode = ParseStringTemplateDecl<buildAST>(nullptr);
+        fCanAssign = FALSE;
+        break;
+
+    case tkSUPER:
+        if (m_scriptContext->GetConfig()->IsES6ClassAndExtendsEnabled())
+        {
+            pnode = ParseSuper<buildAST>(pnode, !!fAllowCall);
+        }
+        else
+        {
+            goto LUnknown;
+        }
+        break;
+
+    case tkCASE:
+    {
+        if (!m_doingFastScan)
+        {
+            goto LUnknown;
+        }
+        ParseNodePtr pnodeUnused;
+        pnode = ParseCase<buildAST>(&pnodeUnused);
+        break;
+    }
+
+    case tkELSE:
+        if (!m_doingFastScan)
+        {
+            goto LUnknown;
+        }
+        m_pscan->Scan();
+        ParseStatement<buildAST>();
+        break;
+
+    default:
+    LUnknown :
+        Error(ERRsyntax);
+        break;
+    }
+
+    pnode = ParsePostfixOperators<buildAST>(pnode, fAllowCall, fInNew, isAsyncExpr, &fCanAssign, &term, pfIsDotOrIndex);
+
+    if (savedTopAsyncRef != nullptr &&
+        this->m_token.tk == tkDArrow)
+    {
+        // This is an async arrow function; we're going to back up and reparse it.
+        // Make sure we don't leave behind a bogus reference to the 'async' identifier.
+        for (IdentPtr pid = wellKnownPropertyPids.async; pid->GetTopRef() != savedTopAsyncRef;)
+        {
+            Assert(pid->GetTopRef() != nullptr);
+            pid->RemovePrevPidRef(nullptr);
+        }
+    }
+
+    // Pass back identifier if requested
+    if (pToken && term.tk == tkID)
+    {
+        *pToken = term;
+    }
+
+    if (pfCanAssign)
+    {
+        *pfCanAssign = fCanAssign;
+    }
+
+    return pnode;
+}",
+2700,"""CWE-119""",libofx,a70934eea95c76a7737b83773bffe8738935082d,a70934eea95c76a7737b83773bffe8738935082d,0,518533,9.098451714533868e+36,,,other,"string sanitize_proprietary_tags(string input_string)
+{
+  unsigned int i;
+  size_t input_string_size;
+  bool strip = false;
+  bool tag_open = false;
+  int tag_open_idx = 0; //Are we within < > ?
+  bool closing_tag_open = false; //Are we within </ > ?
+  int orig_tag_open_idx = 0;
+  bool proprietary_tag = false; //Are we within a proprietary element?
+  bool proprietary_closing_tag = false;
+  int crop_end_idx = 0;
+  char buffer[READ_BUFFER_SIZE] = """";
+  char tagname[READ_BUFFER_SIZE] = """";
+  int tagname_idx = 0;
+  char close_tagname[READ_BUFFER_SIZE] = """";
+
+  for (i = 0; i < READ_BUFFER_SIZE; i++)
+  {
+    buffer[i] = 0;
+    tagname[i] = 0;
+    close_tagname[i] = 0;
+  }
+
+  input_string_size = input_string.size();
+
+  for (i = 0; i < input_string_size; i++)
+  {
+    if (input_string.c_str()[i] == '<')
+    {
+      tag_open = true;
+      tag_open_idx = i;
+      if (proprietary_tag == true && input_string.c_str()[i+1] == '/')
+      {
+        //We are now in a closing tag
+        closing_tag_open = true;
+        //cout<<""Comparaison: ""<<tagname<<""|""<<&(input_string.c_str()[i+2])<<""|""<<strlen(tagname)<<endl;
+        if (strncmp(tagname, &(input_string.c_str()[i+2]), strlen(tagname)) != 0)
+        {
+          //If it is the begining of an other tag
+          //cout<<""DIFFERENT!""<<endl;
+          crop_end_idx = i - 1;
+          strip = true;
+        }
+        else
+        {
+          //Otherwise, it is the start of the closing tag of the proprietary tag
+          proprietary_closing_tag = true;
+        }
+      }
+      else if (proprietary_tag == true)
+      {
+        //It is the start of a new tag, following a proprietary tag
+        crop_end_idx = i - 1;
+        strip = true;
+      }
+    }
+    else if (input_string.c_str()[i] == '>')
+    {
+      tag_open = false;
+      closing_tag_open = false;
+      tagname[tagname_idx] = 0;
+      tagname_idx = 0;
+      if (proprietary_closing_tag == true)
+      {
+        crop_end_idx = i;
+        strip = true;
+      }
+    }
+    else if (tag_open == true && closing_tag_open == false)
+    {
+      if (input_string.c_str()[i] == '.')
+      {
+        if (proprietary_tag != true)
+        {
+          orig_tag_open_idx = tag_open_idx;
+          proprietary_tag = true;
+        }
+      }
+      tagname[tagname_idx] = input_string.c_str()[i];
+      tagname_idx++;
+    }
+    //cerr <<i<<endl;
+    if (strip == true && orig_tag_open_idx < input_string.size())
+    {
+      input_string.copy(buffer, (crop_end_idx - orig_tag_open_idx) + 1, orig_tag_open_idx);
+      message_out(INFO, ""sanitize_proprietary_tags() (end tag or new tag) removed: "" + string(buffer));
+      input_string.erase(orig_tag_open_idx, (crop_end_idx - orig_tag_open_idx) + 1);
+      i = orig_tag_open_idx - 1;
+      proprietary_tag = false;
+      proprietary_closing_tag = false;
+      closing_tag_open = false;
+      tag_open = false;
+      strip = false;
+
+      input_string_size = input_string.size();
+    }
+
+  }//end for
+  if (proprietary_tag == true && orig_tag_open_idx < input_string.size())
+  {
+    if (crop_end_idx == 0)   //no closing tag
+    {
+      crop_end_idx = input_string.size() - 1;
+    }
+    input_string.copy(buffer, (crop_end_idx - orig_tag_open_idx) + 1, orig_tag_open_idx);
+    message_out(INFO, ""sanitize_proprietary_tags() (end of line) removed: "" + string(buffer));
+    input_string.erase(orig_tag_open_idx, (crop_end_idx - orig_tag_open_idx) + 1);
+    input_string_size = input_string.size();
+  }
+  return input_string;
+}","string sanitize_proprietary_tags(string input_string)
+{
+  unsigned int i;
+  bool strip = false;
+  bool tag_open = false;
+  int tag_open_idx = 0; //Are we within < > ?
+  bool closing_tag_open = false; //Are we within </ > ?
+  int orig_tag_open_idx = 0;
+  bool proprietary_tag = false; //Are we within a proprietary element?
+  bool proprietary_closing_tag = false;
+  int crop_end_idx = 0;
+  char buffer[READ_BUFFER_SIZE] = """";
+  char tagname[READ_BUFFER_SIZE] = """";
+  int tagname_idx = 0;
+  char close_tagname[READ_BUFFER_SIZE] = """";
+
+  for (i = 0; i < READ_BUFFER_SIZE; i++)
+  {
+    buffer[i] = 0;
+    tagname[i] = 0;
+    close_tagname[i] = 0;
+  }
+
+  size_t input_string_size = input_string.size();
+
+  // Minimum workaround to prevent buffer overflow: Stop iterating
+  // once the (fixed!) size of the output buffers is reached. In
+  // response to
+  // https://www.talosintelligence.com/vulnerability_reports/TALOS-2017-0317
+  //
+  // However, this code is a huge mess anyway and is in no way
+  // anything like up-to-date C++ code. Please, anyone, replace it
+  // with something more modern. Thanks. - cstim, 2017-09-17.
+  for (i = 0; i < std::min(input_string_size, size_t(READ_BUFFER_SIZE)); i++)
+  {
+    if (input_string.c_str()[i] == '<')
+    {
+      tag_open = true;
+      tag_open_idx = i;
+      if (proprietary_tag == true && input_string.c_str()[i+1] == '/')
+      {
+        //We are now in a closing tag
+        closing_tag_open = true;
+        //cout<<""Comparaison: ""<<tagname<<""|""<<&(input_string.c_str()[i+2])<<""|""<<strlen(tagname)<<endl;
+        if (strncmp(tagname, &(input_string.c_str()[i+2]), strlen(tagname)) != 0)
+        {
+          //If it is the begining of an other tag
+          //cout<<""DIFFERENT!""<<endl;
+          crop_end_idx = i - 1;
+          strip = true;
+        }
+        else
+        {
+          //Otherwise, it is the start of the closing tag of the proprietary tag
+          proprietary_closing_tag = true;
+        }
+      }
+      else if (proprietary_tag == true)
+      {
+        //It is the start of a new tag, following a proprietary tag
+        crop_end_idx = i - 1;
+        strip = true;
+      }
+    }
+    else if (input_string.c_str()[i] == '>')
+    {
+      tag_open = false;
+      closing_tag_open = false;
+      tagname[tagname_idx] = 0;
+      tagname_idx = 0;
+      if (proprietary_closing_tag == true)
+      {
+        crop_end_idx = i;
+        strip = true;
+      }
+    }
+    else if (tag_open == true && closing_tag_open == false)
+    {
+      if (input_string.c_str()[i] == '.')
+      {
+        if (proprietary_tag != true)
+        {
+          orig_tag_open_idx = tag_open_idx;
+          proprietary_tag = true;
+        }
+      }
+      tagname[tagname_idx] = input_string.c_str()[i];
+      tagname_idx++;
+    }
+    //cerr <<i<<endl;
+    if (strip == true && orig_tag_open_idx < input_string.size())
+    {
+      input_string.copy(buffer, (crop_end_idx - orig_tag_open_idx) + 1, orig_tag_open_idx);
+      message_out(INFO, ""sanitize_proprietary_tags() (end tag or new tag) removed: "" + string(buffer));
+      input_string.erase(orig_tag_open_idx, (crop_end_idx - orig_tag_open_idx) + 1);
+      i = orig_tag_open_idx - 1;
+      proprietary_tag = false;
+      proprietary_closing_tag = false;
+      closing_tag_open = false;
+      tag_open = false;
+      strip = false;
+
+      input_string_size = input_string.size();
+    }
+
+  }//end for
+  if (proprietary_tag == true && orig_tag_open_idx < input_string.size())
+  {
+    if (crop_end_idx == 0)   //no closing tag
+    {
+      crop_end_idx = input_string.size() - 1;
+    }
+    input_string.copy(buffer, (crop_end_idx - orig_tag_open_idx) + 1, orig_tag_open_idx);
+    message_out(INFO, ""sanitize_proprietary_tags() (end of line) removed: "" + string(buffer));
+    input_string.erase(orig_tag_open_idx, (crop_end_idx - orig_tag_open_idx) + 1);
+    input_string_size = input_string.size();
+  }
+  return input_string;
+}",
+3253,"""CWE-119""",gd-libgd,47eb44b2e90ca88a08dca9f9a1aa9041e9587f43,47eb44b2e90ca88a08dca9f9a1aa9041e9587f43,0,516911,2.067337710844389e+38,,,other,"GetCode_(gdIOCtx *fd, CODE_STATIC_DATA *scd, int code_size, int flag, int *ZeroDataBlockP)
+{
+	int i, j, ret;
+	unsigned char count;
+
+	if(flag) {
+		scd->curbit = 0;
+		scd->lastbit = 0;
+		scd->last_byte = 0;
+		scd->done = FALSE;
+		return 0;
+	}
+
+	if((scd->curbit + code_size) >= scd->lastbit) {
+		if(scd->done) {
+			if(scd->curbit >= scd->lastbit) {
+				/* Oh well */
+			}
+			return -1;
+		}
+
+		scd->buf[0] = scd->buf[scd->last_byte - 2];
+		scd->buf[1] = scd->buf[scd->last_byte - 1];
+
+		if((count = GetDataBlock(fd, &scd->buf[2], ZeroDataBlockP)) <= 0) {
+			scd->done = TRUE;
+		}
+
+		scd->last_byte = 2 + count;
+		scd->curbit = (scd->curbit - scd->lastbit) + 16;
+		scd->lastbit = (2 + count) * 8;
+	}
+
+	ret = 0;
+	for (i = scd->curbit, j = 0; j < code_size; ++i, ++j) {
+		ret |= ((scd->buf[i / 8] & (1 << (i % 8))) != 0) << j;
+	}
+
+	scd->curbit += code_size;
+
+	return ret;
+}","GetCode_(gdIOCtx *fd, CODE_STATIC_DATA *scd, int code_size, int flag, int *ZeroDataBlockP)
+{
+	int i, j, ret;
+	unsigned char count;
+
+	if(flag) {
+		scd->curbit = 0;
+		scd->lastbit = 0;
+		scd->last_byte = 0;
+		scd->done = FALSE;
+		return 0;
+	}
+
+	if((scd->curbit + code_size) >= scd->lastbit) {
+		if(scd->done) {
+			if(scd->curbit >= scd->lastbit) {
+				/* Oh well */
+			}
+			return -1;
+		}
+
+		scd->buf[0] = scd->buf[scd->last_byte - 2];
+		scd->buf[1] = scd->buf[scd->last_byte - 1];
+
+		if((count = GetDataBlock(fd, &scd->buf[2], ZeroDataBlockP)) <= 0) {
+			scd->done = TRUE;
+		}
+
+		scd->last_byte = 2 + count;
+		scd->curbit = (scd->curbit - scd->lastbit) + 16;
+		scd->lastbit = (2 + count) * 8;
+	}
+
+	ret = 0;
+	for (i = scd->curbit, j = 0; j < code_size; ++i, ++j) {
+		if (i < CSD_BUF_SIZE * 8) {
+			ret |= ((scd->buf[i / 8] & (1 << (i % 8))) != 0) << j;
+		} else {
+			ret = -1;
+			break;
+		}
+	}
+
+	scd->curbit += code_size;
+
+	return ret;
+}",

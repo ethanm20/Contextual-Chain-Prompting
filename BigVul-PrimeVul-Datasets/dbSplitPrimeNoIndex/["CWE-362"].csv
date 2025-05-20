@@ -1,0 +1,784 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+534,"[""CWE-362""]",openssl,939b4960276b040fc0ed52232238fcc9e2e9ec21,939b4960276b040fc0ed52232238fcc9e2e9ec21,0,502735,2.8009761353881924e+38,100.0,"Fix race condition in NewSessionTicket
+
+If a NewSessionTicket is received by a multi-threaded client when
+attempting to reuse a previous ticket then a race condition can occur
+potentially leading to a double free of the ticket data.
+
+CVE-2015-1791
+
+This also fixes RT#3808 where a session ID is changed for a session already
+in the client session cache. Since the session ID is the key to the cache
+this breaks the cache access.
+
+Parts of this patch were inspired by this Akamai change:
+https://github.com/akamai/openssl/commit/c0bf69a791239ceec64509f9f19fcafb2461b0d3
+
+Reviewed-by: Rich Salz <rsalz@openssl.org>
+(cherry picked from commit 27c76b9b8010b536687318739c6f631ce4194688)
+
+Conflicts:
+	ssl/ssl.h
+	ssl/ssl_err.c",other,"int ssl3_get_new_session_ticket(SSL *s)
+{
+    int ok, al, ret = 0, ticklen;
+    long n;
+    const unsigned char *p;
+    unsigned char *d;
+
+    n = s->method->ssl_get_message(s,
+                                   SSL3_ST_CR_SESSION_TICKET_A,
+                                   SSL3_ST_CR_SESSION_TICKET_B,
+                                   SSL3_MT_NEWSESSION_TICKET, 16384, &ok);
+
+    if (!ok)
+        return ((int)n);
+
+    if (n < 6) {
+        /* need at least ticket_lifetime_hint + ticket length */
+        al = SSL_AD_DECODE_ERROR;
+        SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, SSL_R_LENGTH_MISMATCH);
+        goto f_err;
+    }
+
+    p = d = (unsigned char *)s->init_msg;
+    n2l(p, s->session->tlsext_tick_lifetime_hint);
+    n2s(p, ticklen);
+    /* ticket_lifetime_hint + ticket_length + ticket */
+    if (ticklen + 6 != n) {
+        al = SSL_AD_DECODE_ERROR;
+        SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, SSL_R_LENGTH_MISMATCH);
+        goto f_err;
+    }
+    if (s->session->tlsext_tick) {
+        OPENSSL_free(s->session->tlsext_tick);
+        s->session->tlsext_ticklen = 0;
+    }
+    s->session->tlsext_tick = OPENSSL_malloc(ticklen);
+    if (!s->session->tlsext_tick) {
+        SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    memcpy(s->session->tlsext_tick, p, ticklen);
+    s->session->tlsext_ticklen = ticklen;
+    /*
+     * There are two ways to detect a resumed ticket session. One is to set
+     * an appropriate session ID and then the server must return a match in
+     * ServerHello. This allows the normal client session ID matching to work
+     * and we know much earlier that the ticket has been accepted. The
+     * other way is to set zero length session ID when the ticket is
+     * presented and rely on the handshake to determine session resumption.
+     * We choose the former approach because this fits in with assumptions
+     * elsewhere in OpenSSL. The session ID is set to the SHA256 (or SHA1 is
+     * SHA256 is disabled) hash of the ticket.
+     */
+    EVP_Digest(p, ticklen,
+               s->session->session_id, &s->session->session_id_length,
+# ifndef OPENSSL_NO_SHA256
+               EVP_sha256(), NULL);
+# else
+               EVP_sha1(), NULL);
+# endif
+    ret = 1;
+    return (ret);
+ f_err:
+    ssl3_send_alert(s, SSL3_AL_FATAL, al);
+ err:
+    s->state = SSL_ST_ERR;
+    return (-1);
+}","int ssl3_get_new_session_ticket(SSL *s)
+{
+    int ok, al, ret = 0, ticklen;
+    long n;
+    const unsigned char *p;
+    unsigned char *d;
+
+    n = s->method->ssl_get_message(s,
+                                   SSL3_ST_CR_SESSION_TICKET_A,
+                                   SSL3_ST_CR_SESSION_TICKET_B,
+                                   SSL3_MT_NEWSESSION_TICKET, 16384, &ok);
+
+    if (!ok)
+        return ((int)n);
+
+    if (n < 6) {
+        /* need at least ticket_lifetime_hint + ticket length */
+        al = SSL_AD_DECODE_ERROR;
+        SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, SSL_R_LENGTH_MISMATCH);
+        goto f_err;
+    }
+
+    p = d = (unsigned char *)s->init_msg;
+
+    if (s->session->session_id_length > 0) {
+        int i = s->session_ctx->session_cache_mode;
+        SSL_SESSION *new_sess;
+        /*
+         * We reused an existing session, so we need to replace it with a new
+         * one
+         */
+        if (i & SSL_SESS_CACHE_CLIENT) {
+            /*
+             * Remove the old session from the cache
+             */
+            if (i & SSL_SESS_CACHE_NO_INTERNAL_STORE) {
+                if (s->session_ctx->remove_session_cb != NULL)
+                    s->session_ctx->remove_session_cb(s->session_ctx,
+                                                      s->session);
+            } else {
+                /* We carry on if this fails */
+                SSL_CTX_remove_session(s->session_ctx, s->session);
+            }
+        }
+
+        if ((new_sess = ssl_session_dup(s->session, 0)) == 0) {
+            al = SSL_AD_INTERNAL_ERROR;
+            SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, ERR_R_MALLOC_FAILURE);
+            goto f_err;
+        }
+
+        SSL_SESSION_free(s->session);
+        s->session = new_sess;
+    }
+
+    n2l(p, s->session->tlsext_tick_lifetime_hint);
+    n2s(p, ticklen);
+    /* ticket_lifetime_hint + ticket_length + ticket */
+    if (ticklen + 6 != n) {
+        al = SSL_AD_DECODE_ERROR;
+        SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, SSL_R_LENGTH_MISMATCH);
+        goto f_err;
+    }
+    if (s->session->tlsext_tick) {
+        OPENSSL_free(s->session->tlsext_tick);
+        s->session->tlsext_ticklen = 0;
+    }
+    s->session->tlsext_tick = OPENSSL_malloc(ticklen);
+    if (!s->session->tlsext_tick) {
+        SSLerr(SSL_F_SSL3_GET_NEW_SESSION_TICKET, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    memcpy(s->session->tlsext_tick, p, ticklen);
+    s->session->tlsext_ticklen = ticklen;
+    /*
+     * There are two ways to detect a resumed ticket session. One is to set
+     * an appropriate session ID and then the server must return a match in
+     * ServerHello. This allows the normal client session ID matching to work
+     * and we know much earlier that the ticket has been accepted. The
+     * other way is to set zero length session ID when the ticket is
+     * presented and rely on the handshake to determine session resumption.
+     * We choose the former approach because this fits in with assumptions
+     * elsewhere in OpenSSL. The session ID is set to the SHA256 (or SHA1 is
+     * SHA256 is disabled) hash of the ticket.
+     */
+    EVP_Digest(p, ticklen,
+               s->session->session_id, &s->session->session_id_length,
+# ifndef OPENSSL_NO_SHA256
+               EVP_sha256(), NULL);
+# else
+               EVP_sha1(), NULL);
+# endif
+    ret = 1;
+    return (ret);
+ f_err:
+    ssl3_send_alert(s, SSL3_AL_FATAL, al);
+ err:
+    s->state = SSL_ST_ERR;
+    return (-1);
+}",
+2441,"[""CWE-362""]",linux-2.6,214b7049a7929f03bbd2786aaef04b8b79db34e2,214b7049a7929f03bbd2786aaef04b8b79db34e2,0,487733,7.434269835428224e+37,65.0,"Fix dnotify/close race
+
+We have a race between fcntl() and close() that can lead to
+dnotify_struct inserted into inode's list *after* the last descriptor
+had been gone from current->files.
+
+Since that's the only point where dnotify_struct gets evicted, we are
+screwed - it will stick around indefinitely.  Even after struct file in
+question is gone and freed.  Worse, we can trigger send_sigio() on it at
+any later point, which allows to send an arbitrary signal to arbitrary
+process if we manage to apply enough memory pressure to get the page
+that used to host that struct file and fill it with the right pattern...
+
+Signed-off-by: Al Viro <viro@zeniv.linux.org.uk>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"int fcntl_dirnotify(int fd, struct file *filp, unsigned long arg)
+{
+	struct dnotify_struct *dn;
+	struct dnotify_struct *odn;
+	struct dnotify_struct **prev;
+	struct inode *inode;
+	fl_owner_t id = current->files;
+	int error = 0;
+
+	if ((arg & ~DN_MULTISHOT) == 0) {
+		dnotify_flush(filp, id);
+		return 0;
+	}
+	if (!dir_notify_enable)
+		return -EINVAL;
+	inode = filp->f_path.dentry->d_inode;
+	if (!S_ISDIR(inode->i_mode))
+		return -ENOTDIR;
+	dn = kmem_cache_alloc(dn_cache, GFP_KERNEL);
+	if (dn == NULL)
+		return -ENOMEM;
+	spin_lock(&inode->i_lock);
+	prev = &inode->i_dnotify;
+	while ((odn = *prev) != NULL) {
+		if ((odn->dn_owner == id) && (odn->dn_filp == filp)) {
+			odn->dn_fd = fd;
+			odn->dn_mask |= arg;
+			inode->i_dnotify_mask |= arg & ~DN_MULTISHOT;
+			goto out_free;
+		}
+		prev = &odn->dn_next;
+	}
+
+	error = __f_setown(filp, task_pid(current), PIDTYPE_PID, 0);
+	if (error)
+		goto out_free;
+
+	dn->dn_mask = arg;
+	dn->dn_fd = fd;
+	dn->dn_filp = filp;
+	dn->dn_owner = id;
+	inode->i_dnotify_mask |= arg & ~DN_MULTISHOT;
+	dn->dn_next = inode->i_dnotify;
+	inode->i_dnotify = dn;
+	spin_unlock(&inode->i_lock);
+
+	if (filp->f_op && filp->f_op->dir_notify)
+		return filp->f_op->dir_notify(filp, arg);
+	return 0;
+
+out_free:
+	spin_unlock(&inode->i_lock);
+	kmem_cache_free(dn_cache, dn);
+	return error;
+}","int fcntl_dirnotify(int fd, struct file *filp, unsigned long arg)
+{
+	struct dnotify_struct *dn;
+	struct dnotify_struct *odn;
+	struct dnotify_struct **prev;
+	struct inode *inode;
+	fl_owner_t id = current->files;
+	struct file *f;
+	int error = 0;
+
+	if ((arg & ~DN_MULTISHOT) == 0) {
+		dnotify_flush(filp, id);
+		return 0;
+	}
+	if (!dir_notify_enable)
+		return -EINVAL;
+	inode = filp->f_path.dentry->d_inode;
+	if (!S_ISDIR(inode->i_mode))
+		return -ENOTDIR;
+	dn = kmem_cache_alloc(dn_cache, GFP_KERNEL);
+	if (dn == NULL)
+		return -ENOMEM;
+	spin_lock(&inode->i_lock);
+	prev = &inode->i_dnotify;
+	while ((odn = *prev) != NULL) {
+		if ((odn->dn_owner == id) && (odn->dn_filp == filp)) {
+			odn->dn_fd = fd;
+			odn->dn_mask |= arg;
+			inode->i_dnotify_mask |= arg & ~DN_MULTISHOT;
+			goto out_free;
+		}
+		prev = &odn->dn_next;
+	}
+
+	rcu_read_lock();
+	f = fcheck(fd);
+	rcu_read_unlock();
+	/* we'd lost the race with close(), sod off silently */
+	/* note that inode->i_lock prevents reordering problems
+	 * between accesses to descriptor table and ->i_dnotify */
+	if (f != filp)
+		goto out_free;
+
+	error = __f_setown(filp, task_pid(current), PIDTYPE_PID, 0);
+	if (error)
+		goto out_free;
+
+	dn->dn_mask = arg;
+	dn->dn_fd = fd;
+	dn->dn_filp = filp;
+	dn->dn_owner = id;
+	inode->i_dnotify_mask |= arg & ~DN_MULTISHOT;
+	dn->dn_next = inode->i_dnotify;
+	inode->i_dnotify = dn;
+	spin_unlock(&inode->i_lock);
+
+	if (filp->f_op && filp->f_op->dir_notify)
+		return filp->f_op->dir_notify(filp, arg);
+	return 0;
+
+out_free:
+	spin_unlock(&inode->i_lock);
+	kmem_cache_free(dn_cache, dn);
+	return error;
+}",
+2515,"[""CWE-362""]",linux-2.6,cea7daa3589d6b550546a8c8963599f7c1a3ae5c,cea7daa3589d6b550546a8c8963599f7c1a3ae5c,0,492332,1.794690804885711e+38,48.0,"KEYS: find_keyring_by_name() can gain access to a freed keyring
+
+find_keyring_by_name() can gain access to a keyring that has had its reference
+count reduced to zero, and is thus ready to be freed.  This then allows the
+dead keyring to be brought back into use whilst it is being destroyed.
+
+The following timeline illustrates the process:
+
+|(cleaner)                           (user)
+|
+| free_user(user)                    sys_keyctl()
+|  |                                  |
+|  key_put(user->session_keyring)     keyctl_get_keyring_ID()
+|  ||	//=> keyring->usage = 0        |
+|  |schedule_work(&key_cleanup_task)   lookup_user_key()
+|  ||                                   |
+|  kmem_cache_free(,user)               |
+|  .                                    |[KEY_SPEC_USER_KEYRING]
+|  .                                    install_user_keyrings()
+|  .                                    ||
+| key_cleanup() [<= worker_thread()]    ||
+|  |                                    ||
+|  [spin_lock(&key_serial_lock)]        |[mutex_lock(&key_user_keyr..mutex)]
+|  |                                    ||
+|  atomic_read() == 0                   ||
+|  |{ rb_ease(&key->serial_node,) }     ||
+|  |                                    ||
+|  [spin_unlock(&key_serial_lock)]      |find_keyring_by_name()
+|  |                                    |||
+|  keyring_destroy(keyring)             ||[read_lock(&keyring_name_lock)]
+|  ||                                   |||
+|  |[write_lock(&keyring_name_lock)]    ||atomic_inc(&keyring->usage)
+|  |.                                   ||| *** GET freeing keyring ***
+|  |.                                   ||[read_unlock(&keyring_name_lock)]
+|  ||                                   ||
+|  |list_del()                          |[mutex_unlock(&key_user_k..mutex)]
+|  ||                                   |
+|  |[write_unlock(&keyring_name_lock)]  ** INVALID keyring is returned **
+|  |                                    .
+|  kmem_cache_free(,keyring)            .
+|                                       .
+|                                       atomic_dec(&keyring->usage)
+v                                         *** DESTROYED ***
+TIME
+
+If CONFIG_SLUB_DEBUG=y then we may see the following message generated:
+
+	=============================================================================
+	BUG key_jar: Poison overwritten
+	-----------------------------------------------------------------------------
+
+	INFO: 0xffff880197a7e200-0xffff880197a7e200. First byte 0x6a instead of 0x6b
+	INFO: Allocated in key_alloc+0x10b/0x35f age=25 cpu=1 pid=5086
+	INFO: Freed in key_cleanup+0xd0/0xd5 age=12 cpu=1 pid=10
+	INFO: Slab 0xffffea000592cb90 objects=16 used=2 fp=0xffff880197a7e200 flags=0x200000000000c3
+	INFO: Object 0xffff880197a7e200 @offset=512 fp=0xffff880197a7e300
+
+	Bytes b4 0xffff880197a7e1f0:  5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a ZZZZZZZZZZZZZZZZ
+	  Object 0xffff880197a7e200:  6a 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b 6b jkkkkkkkkkkkkkkk
+
+Alternatively, we may see a system panic happen, such as:
+
+	BUG: unable to handle kernel NULL pointer dereference at 0000000000000001
+	IP: [<ffffffff810e61a3>] kmem_cache_alloc+0x5b/0xe9
+	PGD 6b2b4067 PUD 6a80d067 PMD 0
+	Oops: 0000 [#1] SMP
+	last sysfs file: /sys/kernel/kexec_crash_loaded
+	CPU 1
+	...
+	Pid: 31245, comm: su Not tainted 2.6.34-rc5-nofixed-nodebug #2 D2089/PRIMERGY
+	RIP: 0010:[<ffffffff810e61a3>]  [<ffffffff810e61a3>] kmem_cache_alloc+0x5b/0xe9
+	RSP: 0018:ffff88006af3bd98  EFLAGS: 00010002
+	RAX: 0000000000000000 RBX: 0000000000000001 RCX: ffff88007d19900b
+	RDX: 0000000100000000 RSI: 00000000000080d0 RDI: ffffffff81828430
+	RBP: ffffffff81828430 R08: ffff88000a293750 R09: 0000000000000000
+	R10: 0000000000000001 R11: 0000000000100000 R12: 00000000000080d0
+	R13: 00000000000080d0 R14: 0000000000000296 R15: ffffffff810f20ce
+	FS:  00007f97116bc700(0000) GS:ffff88000a280000(0000) knlGS:0000000000000000
+	CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+	CR2: 0000000000000001 CR3: 000000006a91c000 CR4: 00000000000006e0
+	DR0: 0000000000000000 DR1: 0000000000000000 DR2: 0000000000000000
+	DR3: 0000000000000000 DR6: 00000000ffff0ff0 DR7: 0000000000000400
+	Process su (pid: 31245, threadinfo ffff88006af3a000, task ffff8800374414c0)
+	Stack:
+	 0000000512e0958e 0000000000008000 ffff880037f8d180 0000000000000001
+	 0000000000000000 0000000000008001 ffff88007d199000 ffffffff810f20ce
+	 0000000000008000 ffff88006af3be48 0000000000000024 ffffffff810face3
+	Call Trace:
+	 [<ffffffff810f20ce>] ? get_empty_filp+0x70/0x12f
+	 [<ffffffff810face3>] ? do_filp_open+0x145/0x590
+	 [<ffffffff810ce208>] ? tlb_finish_mmu+0x2a/0x33
+	 [<ffffffff810ce43c>] ? unmap_region+0xd3/0xe2
+	 [<ffffffff810e4393>] ? virt_to_head_page+0x9/0x2d
+	 [<ffffffff81103916>] ? alloc_fd+0x69/0x10e
+	 [<ffffffff810ef4ed>] ? do_sys_open+0x56/0xfc
+	 [<ffffffff81008a02>] ? system_call_fastpath+0x16/0x1b
+	Code: 0f 1f 44 00 00 49 89 c6 fa 66 0f 1f 44 00 00 65 4c 8b 04 25 60 e8 00 00 48 8b 45 00 49 01 c0 49 8b 18 48 85 db 74 0d 48 63 45 18 <48> 8b 04 03 49 89 00 eb 14 4c 89 f9 83 ca ff 44 89 e6 48 89 ef
+	RIP  [<ffffffff810e61a3>] kmem_cache_alloc+0x5b/0xe9
+
+This problem is that find_keyring_by_name does not confirm that the keyring is
+valid before accepting it.
+
+Skipping keyrings that have been reduced to a zero count seems the way to go.
+To this end, use atomic_inc_not_zero() to increment the usage count and skip
+the candidate keyring if that returns false.
+
+The following script _may_ cause the bug to happen, but there's no guarantee
+as the window of opportunity is small:
+
+	#!/bin/sh
+	LOOP=100000
+	USER=dummy_user
+	/bin/su -c ""exit;"" $USER || { /usr/sbin/adduser -m $USER; add=1; }
+	for ((i=0; i<LOOP; i++))
+	do
+		/bin/su -c ""echo '$i' > /dev/null"" $USER
+	done
+	(( add == 1 )) && /usr/sbin/userdel -r $USER
+	exit
+
+Note that the nominated user must not be in use.
+
+An alternative way of testing this may be:
+
+	for ((i=0; i<100000; i++))
+	do
+		keyctl session foo /bin/true || break
+	done >&/dev/null
+
+as that uses a keyring named ""foo"" rather than relying on the user and
+user-session named keyrings.
+
+Reported-by: Toshiyuki Okajima <toshi.okajima@jp.fujitsu.com>
+Signed-off-by: David Howells <dhowells@redhat.com>
+Tested-by: Toshiyuki Okajima <toshi.okajima@jp.fujitsu.com>
+Acked-by: Serge Hallyn <serue@us.ibm.com>
+Signed-off-by: James Morris <jmorris@namei.org>",other,"struct key *find_keyring_by_name(const char *name, bool skip_perm_check)
+{
+	struct key *keyring;
+	int bucket;
+
+	keyring = ERR_PTR(-EINVAL);
+	if (!name)
+		goto error;
+
+	bucket = keyring_hash(name);
+
+	read_lock(&keyring_name_lock);
+
+	if (keyring_name_hash[bucket].next) {
+		/* search this hash bucket for a keyring with a matching name
+		 * that's readable and that hasn't been revoked */
+		list_for_each_entry(keyring,
+				    &keyring_name_hash[bucket],
+				    type_data.link
+				    ) {
+			if (keyring->user->user_ns != current_user_ns())
+				continue;
+
+			if (test_bit(KEY_FLAG_REVOKED, &keyring->flags))
+				continue;
+
+			if (strcmp(keyring->description, name) != 0)
+				continue;
+
+			if (!skip_perm_check &&
+			    key_permission(make_key_ref(keyring, 0),
+					   KEY_SEARCH) < 0)
+				continue;
+
+			/* we've got a match */
+			atomic_inc(&keyring->usage);
+			read_unlock(&keyring_name_lock);
+			goto error;
+		}
+	}
+
+	read_unlock(&keyring_name_lock);
+	keyring = ERR_PTR(-ENOKEY);
+
+ error:
+	return keyring;
+
+} /* end find_keyring_by_name() */","struct key *find_keyring_by_name(const char *name, bool skip_perm_check)
+{
+	struct key *keyring;
+	int bucket;
+
+	if (!name)
+		return ERR_PTR(-EINVAL);
+
+	bucket = keyring_hash(name);
+
+	read_lock(&keyring_name_lock);
+
+	if (keyring_name_hash[bucket].next) {
+		/* search this hash bucket for a keyring with a matching name
+		 * that's readable and that hasn't been revoked */
+		list_for_each_entry(keyring,
+				    &keyring_name_hash[bucket],
+				    type_data.link
+				    ) {
+			if (keyring->user->user_ns != current_user_ns())
+				continue;
+
+			if (test_bit(KEY_FLAG_REVOKED, &keyring->flags))
+				continue;
+
+			if (strcmp(keyring->description, name) != 0)
+				continue;
+
+			if (!skip_perm_check &&
+			    key_permission(make_key_ref(keyring, 0),
+					   KEY_SEARCH) < 0)
+				continue;
+
+			/* we've got a match but we might end up racing with
+			 * key_cleanup() if the keyring is currently 'dead'
+			 * (ie. it has a zero usage count) */
+			if (!atomic_inc_not_zero(&keyring->usage))
+				continue;
+			goto out;
+		}
+	}
+
+	keyring = ERR_PTR(-ENOKEY);
+out:
+	read_unlock(&keyring_name_lock);
+	return keyring;
+
+} /* end find_keyring_by_name() */",
+2599,"[""CWE-362""]",openssl,708cf593587e2fda67dae9782991ff9fccc781eb,708cf593587e2fda67dae9782991ff9fccc781eb,0,502739,3.378203027675334e+38,115.0,"More ssl_session_dup fixes
+
+Fix error handling in ssl_session_dup, as well as incorrect setting up of
+the session ticket. Follow on from CVE-2015-1791.
+
+Thanks to LibreSSL project for reporting these issues.
+
+Reviewed-by: Tim Hudson <tjh@openssl.org>",other,"SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
+{
+    SSL_SESSION *dest;
+
+    dest = OPENSSL_malloc(sizeof(*src));
+    if (dest == NULL) {
+        goto err;
+    }
+    memcpy(dest, src, sizeof(*dest));
+
+#ifndef OPENSSL_NO_PSK
+    if (src->psk_identity_hint) {
+        dest->psk_identity_hint = BUF_strdup(src->psk_identity_hint);
+        if (dest->psk_identity_hint == NULL) {
+            goto err;
+        }
+    } else {
+        dest->psk_identity_hint = NULL;
+    }
+    if (src->psk_identity) {
+        dest->psk_identity = BUF_strdup(src->psk_identity);
+        if (dest->psk_identity == NULL) {
+            goto err;
+        }
+    } else {
+        dest->psk_identity = NULL;
+    }
+#endif
+
+    if (src->sess_cert != NULL)
+        CRYPTO_add(&src->sess_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
+
+    if (src->peer != NULL)
+        CRYPTO_add(&src->peer->references, 1, CRYPTO_LOCK_X509);
+
+    dest->references = 1;
+
+    if(src->ciphers != NULL) {
+        dest->ciphers = sk_SSL_CIPHER_dup(src->ciphers);
+        if (dest->ciphers == NULL)
+            goto err;
+    } else {
+        dest->ciphers = NULL;
+    }
+
+    if (!CRYPTO_dup_ex_data(CRYPTO_EX_INDEX_SSL_SESSION,
+                                            &dest->ex_data, &src->ex_data)) {
+        goto err;
+    }
+
+    /* We deliberately don't copy the prev and next pointers */
+    dest->prev = NULL;
+    dest->next = NULL;
+
+#ifndef OPENSSL_NO_TLSEXT
+    if (src->tlsext_hostname) {
+        dest->tlsext_hostname = BUF_strdup(src->tlsext_hostname);
+        if (dest->tlsext_hostname == NULL) {
+            goto err;
+        }
+    } else {
+        dest->tlsext_hostname = NULL;
+    }
+# ifndef OPENSSL_NO_EC
+    if (src->tlsext_ecpointformatlist) {
+        dest->tlsext_ecpointformatlist =
+            BUF_memdup(src->tlsext_ecpointformatlist,
+                       src->tlsext_ecpointformatlist_length);
+        if (dest->tlsext_ecpointformatlist == NULL)
+            goto err;
+        dest->tlsext_ecpointformatlist_length =
+            src->tlsext_ecpointformatlist_length;
+    }
+    if (src->tlsext_ellipticcurvelist) {
+        dest->tlsext_ellipticcurvelist =
+            BUF_memdup(src->tlsext_ellipticcurvelist,
+                       src->tlsext_ellipticcurvelist_length);
+        if (dest->tlsext_ellipticcurvelist == NULL)
+            goto err;
+        dest->tlsext_ellipticcurvelist_length =
+            src->tlsext_ellipticcurvelist_length;
+    }
+# endif
+#endif
+
+    if (ticket != 0) {
+        dest->tlsext_tick_lifetime_hint = src->tlsext_tick_lifetime_hint;
+        dest->tlsext_ticklen = src->tlsext_ticklen;
+        if((dest->tlsext_tick = OPENSSL_malloc(src->tlsext_ticklen)) == NULL) {
+            goto err;
+        }
+    }
+
+#ifndef OPENSSL_NO_SRP
+    dest->srp_username = NULL;
+    if (src->srp_username) {
+        dest->srp_username = BUF_strdup(src->srp_username);
+        if (dest->srp_username == NULL) {
+            goto err;
+        }
+    } else {
+        dest->srp_username = NULL;
+    }
+#endif
+
+    return dest;
+err:
+    SSLerr(SSL_F_SSL_SESSION_DUP, ERR_R_MALLOC_FAILURE);
+    SSL_SESSION_free(dest);
+    return NULL;
+}","SSL_SESSION *ssl_session_dup(SSL_SESSION *src, int ticket)
+{
+    SSL_SESSION *dest;
+
+    dest = OPENSSL_malloc(sizeof(*src));
+    if (dest == NULL) {
+        goto err;
+    }
+    memcpy(dest, src, sizeof(*dest));
+
+    /*
+     * Set the various pointers to NULL so that we can call SSL_SESSION_free in
+     * the case of an error whilst halfway through constructing dest
+     */
+#ifndef OPENSSL_NO_PSK
+    dest->psk_identity_hint = NULL;
+    dest->psk_identity = NULL;
+#endif
+    dest->ciphers = NULL;
+    dest->tlsext_hostname = NULL;
+#ifndef OPENSSL_NO_EC
+    dest->tlsext_ecpointformatlist = NULL;
+    dest->tlsext_ellipticcurvelist = NULL;
+#endif
+    dest->tlsext_tick = NULL;
+#ifndef OPENSSL_NO_SRP
+    dest->srp_username = NULL;
+#endif
+    memset(&dest->ex_data, 0, sizeof(dest->ex_data));
+
+    /* We deliberately don't copy the prev and next pointers */
+    dest->prev = NULL;
+    dest->next = NULL;
+
+    dest->references = 1;
+
+    if (src->sess_cert != NULL)
+        CRYPTO_add(&src->sess_cert->references, 1, CRYPTO_LOCK_SSL_SESS_CERT);
+
+    if (src->peer != NULL)
+        CRYPTO_add(&src->peer->references, 1, CRYPTO_LOCK_X509);
+
+#ifndef OPENSSL_NO_PSK
+    if (src->psk_identity_hint) {
+        dest->psk_identity_hint = BUF_strdup(src->psk_identity_hint);
+        if (dest->psk_identity_hint == NULL) {
+            goto err;
+        }
+    }
+    if (src->psk_identity) {
+        dest->psk_identity = BUF_strdup(src->psk_identity);
+        if (dest->psk_identity == NULL) {
+            goto err;
+        }
+    }
+#endif
+
+    if(src->ciphers != NULL) {
+        dest->ciphers = sk_SSL_CIPHER_dup(src->ciphers);
+        if (dest->ciphers == NULL)
+            goto err;
+    }
+
+    if (!CRYPTO_dup_ex_data(CRYPTO_EX_INDEX_SSL_SESSION,
+                                            &dest->ex_data, &src->ex_data)) {
+        goto err;
+    }
+
+    if (src->tlsext_hostname) {
+        dest->tlsext_hostname = BUF_strdup(src->tlsext_hostname);
+        if (dest->tlsext_hostname == NULL) {
+            goto err;
+        }
+    }
+#ifndef OPENSSL_NO_EC
+    if (src->tlsext_ecpointformatlist) {
+        dest->tlsext_ecpointformatlist =
+            BUF_memdup(src->tlsext_ecpointformatlist,
+                       src->tlsext_ecpointformatlist_length);
+        if (dest->tlsext_ecpointformatlist == NULL)
+            goto err;
+    }
+    if (src->tlsext_ellipticcurvelist) {
+        dest->tlsext_ellipticcurvelist =
+            BUF_memdup(src->tlsext_ellipticcurvelist,
+                       src->tlsext_ellipticcurvelist_length);
+        if (dest->tlsext_ellipticcurvelist == NULL)
+            goto err;
+    }
+#endif
+
+    if (ticket != 0) {
+        dest->tlsext_tick = BUF_memdup(src->tlsext_tick, src->tlsext_ticklen);
+        if(dest->tlsext_tick == NULL)
+            goto err;
+    } else {
+        dest->tlsext_tick_lifetime_hint = 0;
+        dest->tlsext_ticklen = 0;
+    }
+
+#ifndef OPENSSL_NO_SRP
+    if (src->srp_username) {
+        dest->srp_username = BUF_strdup(src->srp_username);
+        if (dest->srp_username == NULL) {
+            goto err;
+        }
+    }
+#endif
+
+    return dest;
+err:
+    SSLerr(SSL_F_SSL_SESSION_DUP, ERR_R_MALLOC_FAILURE);
+    SSL_SESSION_free(dest);
+    return NULL;
+}",

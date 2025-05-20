@@ -1,0 +1,4557 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2559,"[""CWE-787""]",gcab,bd2abee5f0a9b5cbe3a1ab1f338c4fb8f6ca797b,bd2abee5f0a9b5cbe3a1ab1f338c4fb8f6ca797b,0,498616,6.061893180330657e+37,149.0,"Do not crash when ncbytes is larger than the buffer size
+
+This fixes CVE-2018-5345",other,"cdata_read (cdata_t *cd, guint8 res_data, gint comptype,
+            GDataInputStream *in, GCancellable *cancellable, GError **error)
+
+{
+    gboolean success = FALSE;
+    int ret, zret = Z_OK;
+    gint compression = comptype & GCAB_COMPRESSION_MASK;
+    guint8 *buf = compression == GCAB_COMPRESSION_NONE ? cd->out : cd->in;
+    guint32 datacsum;
+    guint32 checksum_tmp;
+    guint8 sizecsum[4];
+    guint16 nbytes_le;
+
+    if (compression > GCAB_COMPRESSION_MSZIP &&
+        compression != GCAB_COMPRESSION_LZX) {
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_NOT_SUPPORTED,
+                     ""unsupported compression method %d"", compression);
+        return FALSE;
+    }
+
+    R4 (cd->checksum);
+    R2 (cd->ncbytes);
+    R2 (cd->nubytes);
+    RN (cd->reserved, res_data);
+    RN (buf, cd->ncbytes);
+
+    datacsum = compute_checksum(buf, cd->ncbytes, 0);
+    nbytes_le = GUINT16_TO_LE (cd->ncbytes);
+    memcpy (&sizecsum[0], &nbytes_le, 2);
+    nbytes_le = GUINT16_TO_LE (cd->nubytes);
+    memcpy (&sizecsum[2], &nbytes_le, 2);
+    checksum_tmp = compute_checksum (sizecsum, sizeof(sizecsum), datacsum);
+    if (cd->checksum != checksum_tmp) {
+        if (_enforce_checksum ()) {
+            g_set_error_literal (error, GCAB_ERROR, GCAB_ERROR_INVALID_DATA,
+                                 ""incorrect checksum detected"");
+            return FALSE;
+        }
+        if (g_getenv (""GCAB_DEBUG""))
+            g_debug (""CDATA checksum 0x%08x"", (guint) checksum_tmp);
+    }
+
+    if (g_getenv (""GCAB_DEBUG"")) {
+        g_debug (""CDATA"");
+        P4 (cd, checksum);
+        P2 (cd, ncbytes);
+        P2 (cd, nubytes);
+        if (res_data)
+            PN (cd, reserved, res_data);
+        PND (cd, buf, 64);
+    }
+
+    if (compression == GCAB_COMPRESSION_LZX) {
+        if (cd->fdi.alloc == NULL) {
+            cd->fdi.alloc = g_malloc;
+            cd->fdi.free = g_free;
+            cd->decomp.fdi = &cd->fdi;
+            cd->decomp.inbuf = cd->in;
+            cd->decomp.outbuf = cd->out;
+            cd->decomp.comptype = compression;
+
+            ret = LZXfdi_init((comptype >> 8) & 0x1f, &cd->decomp);
+            if (ret < 0)
+                goto end;
+        }
+
+        ret = LZXfdi_decomp (cd->ncbytes, cd->nubytes, &cd->decomp);
+        if (ret < 0)
+            goto end;
+    }
+
+    if (compression == GCAB_COMPRESSION_MSZIP) {
+        if (cd->in[0] != 'C' || cd->in[1] != 'K')
+            goto end;
+
+        cd->decomp.comptype = compression;
+        z_stream *z = &cd->z;
+
+        z->avail_in = cd->ncbytes - 2;
+        z->next_in = cd->in + 2;
+        z->avail_out = cd->nubytes;
+        z->next_out = cd->out;
+        z->total_out = 0;
+
+        if (!z->opaque) {
+            z->zalloc = zalloc;
+            z->zfree = zfree;
+            z->opaque = cd;
+
+            zret = inflateInit2 (z, -MAX_WBITS);
+            if (zret != Z_OK)
+                goto end;
+        }
+
+        while (1) {
+            zret = inflate (z, Z_BLOCK);
+            if (zret == Z_STREAM_END)
+                break;
+            if (zret != Z_OK)
+                goto end;
+        }
+
+        g_warn_if_fail (z->avail_in == 0);
+        g_warn_if_fail (z->avail_out == 0);
+        if (z->avail_in != 0 || z->avail_out != 0)
+            goto end;
+
+        zret = inflateReset (z);
+        if (zret != Z_OK)
+            goto end;
+
+        zret = inflateSetDictionary (z, cd->out, cd->nubytes);
+        if (zret != Z_OK)
+            goto end;
+    }
+
+    success = TRUE;
+
+end:
+    if (zret != Z_OK)
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_FAILED,
+                     ""zlib failed: %s"", zError (zret));
+
+    if (error != NULL && *error == NULL && !success)
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_FAILED,
+                     ""Invalid cabinet chunk"");
+
+    return success;
+}","cdata_read (cdata_t *cd, guint8 res_data, gint comptype,
+            GDataInputStream *in, GCancellable *cancellable, GError **error)
+
+{
+    gboolean success = FALSE;
+    int ret, zret = Z_OK;
+    gint compression = comptype & GCAB_COMPRESSION_MASK;
+    gsize buf_sz;
+    guint8 *buf = NULL;
+    guint32 datacsum;
+    guint32 checksum_tmp;
+    guint8 sizecsum[4];
+    guint16 nbytes_le;
+
+    /* decompress directly into ->out for no decompression */
+    switch (compression) {
+    case GCAB_COMPRESSION_NONE:
+        buf = cd->out;
+        buf_sz = sizeof(cd->out);
+        break;
+    case GCAB_COMPRESSION_MSZIP:
+    case GCAB_COMPRESSION_LZX:
+        buf = cd->in;
+        buf_sz = sizeof(cd->in);
+        break;
+    default:
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_NOT_SUPPORTED,
+                     ""unsupported compression method %d"", compression);
+        break;
+    }
+    if (buf == NULL)
+        return FALSE;
+
+    R4 (cd->checksum);
+    R2 (cd->ncbytes);
+    if (cd->ncbytes > buf_sz) {
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_INVALID_DATA,
+                     ""tried to decompress %"" G_GUINT16_FORMAT "" bytes ""
+                     ""into buffer of size %"" G_GSIZE_FORMAT,
+                     cd->ncbytes, buf_sz);
+        return FALSE;
+    }
+    R2 (cd->nubytes);
+    RN (cd->reserved, res_data);
+    RN (buf, cd->ncbytes);
+
+    datacsum = compute_checksum(buf, cd->ncbytes, 0);
+    nbytes_le = GUINT16_TO_LE (cd->ncbytes);
+    memcpy (&sizecsum[0], &nbytes_le, 2);
+    nbytes_le = GUINT16_TO_LE (cd->nubytes);
+    memcpy (&sizecsum[2], &nbytes_le, 2);
+    checksum_tmp = compute_checksum (sizecsum, sizeof(sizecsum), datacsum);
+    if (cd->checksum != checksum_tmp) {
+        if (_enforce_checksum ()) {
+            g_set_error_literal (error, GCAB_ERROR, GCAB_ERROR_INVALID_DATA,
+                                 ""incorrect checksum detected"");
+            return FALSE;
+        }
+        if (g_getenv (""GCAB_DEBUG""))
+            g_debug (""CDATA checksum 0x%08x"", (guint) checksum_tmp);
+    }
+
+    if (g_getenv (""GCAB_DEBUG"")) {
+        g_debug (""CDATA"");
+        P4 (cd, checksum);
+        P2 (cd, ncbytes);
+        P2 (cd, nubytes);
+        if (res_data)
+            PN (cd, reserved, res_data);
+        PND (cd, buf, 64);
+    }
+
+    if (compression == GCAB_COMPRESSION_LZX) {
+        if (cd->fdi.alloc == NULL) {
+            cd->fdi.alloc = g_malloc;
+            cd->fdi.free = g_free;
+            cd->decomp.fdi = &cd->fdi;
+            cd->decomp.inbuf = cd->in;
+            cd->decomp.outbuf = cd->out;
+            cd->decomp.comptype = compression;
+
+            ret = LZXfdi_init((comptype >> 8) & 0x1f, &cd->decomp);
+            if (ret < 0)
+                goto end;
+        }
+
+        ret = LZXfdi_decomp (cd->ncbytes, cd->nubytes, &cd->decomp);
+        if (ret < 0)
+            goto end;
+    }
+
+    if (compression == GCAB_COMPRESSION_MSZIP) {
+        if (cd->in[0] != 'C' || cd->in[1] != 'K')
+            goto end;
+
+        cd->decomp.comptype = compression;
+        z_stream *z = &cd->z;
+
+        z->avail_in = cd->ncbytes - 2;
+        z->next_in = cd->in + 2;
+        z->avail_out = cd->nubytes;
+        z->next_out = cd->out;
+        z->total_out = 0;
+
+        if (!z->opaque) {
+            z->zalloc = zalloc;
+            z->zfree = zfree;
+            z->opaque = cd;
+
+            zret = inflateInit2 (z, -MAX_WBITS);
+            if (zret != Z_OK)
+                goto end;
+        }
+
+        while (1) {
+            zret = inflate (z, Z_BLOCK);
+            if (zret == Z_STREAM_END)
+                break;
+            if (zret != Z_OK)
+                goto end;
+        }
+
+        g_warn_if_fail (z->avail_in == 0);
+        g_warn_if_fail (z->avail_out == 0);
+        if (z->avail_in != 0 || z->avail_out != 0)
+            goto end;
+
+        zret = inflateReset (z);
+        if (zret != Z_OK)
+            goto end;
+
+        zret = inflateSetDictionary (z, cd->out, cd->nubytes);
+        if (zret != Z_OK)
+            goto end;
+    }
+
+    success = TRUE;
+
+end:
+    if (zret != Z_OK)
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_FAILED,
+                     ""zlib failed: %s"", zError (zret));
+
+    if (error != NULL && *error == NULL && !success)
+        g_set_error (error, GCAB_ERROR, GCAB_ERROR_FAILED,
+                     ""Invalid cabinet chunk"");
+
+    return success;
+}",
+2561,"[""CWE-787""]",GIMP,edb251a7ef1602d20a5afcbf23f24afb163de63b,edb251a7ef1602d20a5afcbf23f24afb163de63b,0,498654,8.436706397967629e+37,30.0,"Bug 739133 - (CVE-2017-17785) Heap overflow while parsing FLI files.
+
+It is possible to trigger a heap overflow while parsing FLI files. The
+RLE decoder is vulnerable to out of boundary writes due to lack of
+boundary checks.
+
+The variable ""framebuf"" points to a memory area which was allocated
+with fli_header->width * fli_header->height bytes. The RLE decoder
+therefore must never write beyond that limit.
+
+If an illegal frame is detected, the parser won't stop, which means
+that the next valid sequence is properly parsed again. This should
+allow GIMP to parse FLI files as good as possible even if they are
+broken by an attacker or by accident.
+
+While at it, I changed the variable xc to be of type size_t, because
+the multiplication of width and height could overflow a 16 bit type.
+
+Signed-off-by: Tobias Stoeckmann <tobias@stoeckmann.org>",other,"void fli_read_brun(FILE *f, s_fli_header *fli_header, unsigned char *framebuf)
+{
+	unsigned short yc;
+	unsigned char *pos;
+	for (yc=0; yc < fli_header->height; yc++) {
+		unsigned short xc, pc, pcnt;
+		pc=fli_read_char(f);
+		xc=0;
+		pos=framebuf+(fli_header->width * yc);
+		for (pcnt=pc; pcnt>0; pcnt--) {
+			unsigned short ps;
+			ps=fli_read_char(f);
+			if (ps & 0x80) {
+				unsigned short len;
+				for (len=-(signed char)ps; len>0; len--) {
+					pos[xc++]=fli_read_char(f);
+				}
+			} else {
+				unsigned char val;
+				val=fli_read_char(f);
+				memset(&(pos[xc]), val, ps);
+				xc+=ps;
+			}
+		}
+	}
+}","void fli_read_brun(FILE *f, s_fli_header *fli_header, unsigned char *framebuf)
+{
+	unsigned short yc;
+	unsigned char *pos;
+	for (yc=0; yc < fli_header->height; yc++) {
+		unsigned short pc, pcnt;
+		size_t n, xc;
+		pc=fli_read_char(f);
+		xc=0;
+		pos=framebuf+(fli_header->width * yc);
+		n=(size_t)fli_header->width * (fli_header->height-yc);
+		for (pcnt=pc; pcnt>0; pcnt--) {
+			unsigned short ps;
+			ps=fli_read_char(f);
+			if (ps & 0x80) {
+				unsigned short len;
+				for (len=-(signed char)ps; len>0 && xc<n; len--) {
+					pos[xc++]=fli_read_char(f);
+				}
+			} else {
+				unsigned char val;
+				size_t len;
+				len=MIN(n-xc,ps);
+				val=fli_read_char(f);
+				memset(&(pos[xc]), val, len);
+				xc+=len;
+			}
+		}
+	}
+}",
+2569,"[""CWE-787""]",wget,562eacb76a2b64d5dc80a443f0f739bc9ef76c17,562eacb76a2b64d5dc80a443f0f739bc9ef76c17,0,498932,3.2120268362377546e+38,88.0,* src/iri.c (do_conversion): Remove unneeded debug lines,other,"do_conversion (const char *tocode, const char *fromcode, char const *in_org, size_t inlen, char **out)
+{
+  iconv_t cd;
+  /* sXXXav : hummm hard to guess... */
+  size_t len, done, outlen;
+  int invalid = 0, tooshort = 0;
+  char *s, *in, *in_save;
+
+  cd = iconv_open (tocode, fromcode);
+  if (cd == (iconv_t)(-1))
+    {
+      logprintf (LOG_VERBOSE, _(""Conversion from %s to %s isn't supported\n""),
+                 quote (fromcode), quote (tocode));
+      *out = NULL;
+      return false;
+    }
+
+  /* iconv() has to work on an unescaped string */
+  in_save = in = xstrndup (in_org, inlen);
+  url_unescape_except_reserved (in);
+  inlen = strlen(in);
+
+  len = outlen = inlen * 2;
+  *out = s = xmalloc (outlen + 1);
+  done = 0;
+
+  DEBUGP ((""iconv %s -> %s\n"", tocode, fromcode));
+
+  for (;;)
+    {
+      DEBUGP ((""iconv outlen=%d inlen=%d\n"", outlen, inlen));
+      if (iconv (cd, (ICONV_CONST char **) &in, &inlen, out, &outlen) != (size_t)(-1) &&
+          iconv (cd, NULL, NULL, out, &outlen) != (size_t)(-1))
+        {
+          *out = s;
+          *(s + len - outlen - done) = '\0';
+          xfree(in_save);
+          iconv_close(cd);
+          IF_DEBUG
+          {
+            /* not not print out embedded passwords, in_org might be an URL */
+            if (!strchr(in_org, '@') && !strchr(*out, '@'))
+              debug_logprintf (""converted '%s' (%s) -> '%s' (%s)\n"", in_org, fromcode, *out, tocode);
+            else
+              debug_logprintf (""logging suppressed, strings may contain password\n"");
+          }
+          return true;
+        }
+
+      /* Incomplete or invalid multibyte sequence */
+      if (errno == EINVAL || errno == EILSEQ)
+        {
+          if (!invalid)
+            logprintf (LOG_VERBOSE,
+                      _(""Incomplete or invalid multibyte sequence encountered\n""));
+
+          invalid++;
+          **out = *in;
+          in++;
+          inlen--;
+          (*out)++;
+          outlen--;
+        }
+      else if (errno == E2BIG) /* Output buffer full */
+        {
+          logprintf (LOG_VERBOSE,
+                    _(""Reallocate output buffer len=%d outlen=%d inlen=%d\n""), len, outlen, inlen);
+          tooshort++;
+          done = len;
+          len = done + inlen * 2;
+          s = xrealloc (s, len + 1);
+          *out = s + done - outlen;
+          outlen += inlen * 2;
+        }
+      else /* Weird, we got an unspecified error */
+        {
+          logprintf (LOG_VERBOSE, _(""Unhandled errno %d\n""), errno);
+          break;
+        }
+    }
+
+    xfree(in_save);
+    iconv_close(cd);
+    IF_DEBUG
+    {
+      /* not not print out embedded passwords, in_org might be an URL */
+      if (!strchr(in_org, '@') && !strchr(*out, '@'))
+        debug_logprintf (""converted '%s' (%s) -> '%s' (%s)\n"", in_org, fromcode, *out, tocode);
+      else
+        debug_logprintf (""logging suppressed, strings may contain password\n"");
+    }
+    return false;
+}","do_conversion (const char *tocode, const char *fromcode, char const *in_org, size_t inlen, char **out)
+{
+  iconv_t cd;
+  /* sXXXav : hummm hard to guess... */
+  size_t len, done, outlen;
+  int invalid = 0, tooshort = 0;
+  char *s, *in, *in_save;
+
+  cd = iconv_open (tocode, fromcode);
+  if (cd == (iconv_t)(-1))
+    {
+      logprintf (LOG_VERBOSE, _(""Conversion from %s to %s isn't supported\n""),
+                 quote (fromcode), quote (tocode));
+      *out = NULL;
+      return false;
+    }
+
+  /* iconv() has to work on an unescaped string */
+  in_save = in = xstrndup (in_org, inlen);
+  url_unescape_except_reserved (in);
+  inlen = strlen(in);
+
+  len = outlen = inlen * 2;
+  *out = s = xmalloc (outlen + 1);
+  done = 0;
+
+  for (;;)
+    {
+      if (iconv (cd, (ICONV_CONST char **) &in, &inlen, out, &outlen) != (size_t)(-1) &&
+          iconv (cd, NULL, NULL, out, &outlen) != (size_t)(-1))
+        {
+          *out = s;
+          *(s + len - outlen - done) = '\0';
+          xfree(in_save);
+          iconv_close(cd);
+          IF_DEBUG
+          {
+            /* not not print out embedded passwords, in_org might be an URL */
+            if (!strchr(in_org, '@') && !strchr(*out, '@'))
+              debug_logprintf (""converted '%s' (%s) -> '%s' (%s)\n"", in_org, fromcode, *out, tocode);
+            else
+              debug_logprintf (""logging suppressed, strings may contain password\n"");
+          }
+          return true;
+        }
+
+      /* Incomplete or invalid multibyte sequence */
+      if (errno == EINVAL || errno == EILSEQ)
+        {
+          if (!invalid)
+            logprintf (LOG_VERBOSE,
+                      _(""Incomplete or invalid multibyte sequence encountered\n""));
+
+          invalid++;
+          **out = *in;
+          in++;
+          inlen--;
+          (*out)++;
+          outlen--;
+        }
+      else if (errno == E2BIG) /* Output buffer full */
+        {
+          tooshort++;
+          done = len;
+          len = done + inlen * 2;
+          s = xrealloc (s, len + 1);
+          *out = s + done - outlen;
+          outlen += inlen * 2;
+        }
+      else /* Weird, we got an unspecified error */
+        {
+          logprintf (LOG_VERBOSE, _(""Unhandled errno %d\n""), errno);
+          break;
+        }
+    }
+
+    xfree(in_save);
+    iconv_close(cd);
+    IF_DEBUG
+    {
+      /* not not print out embedded passwords, in_org might be an URL */
+      if (!strchr(in_org, '@') && !strchr(*out, '@'))
+        debug_logprintf (""converted '%s' (%s) -> '%s' (%s)\n"", in_org, fromcode, *out, tocode);
+      else
+        debug_logprintf (""logging suppressed, strings may contain password\n"");
+    }
+    return false;
+}",
+2576,"[""CWE-787""]",nettle,971bed6ab4b27014eb23085e8176917e1a096fd5,971bed6ab4b27014eb23085e8176917e1a096fd5,0,499609,1.663246791237955e+38,16.0,"Use ecc_mod_mul_canonical for point comparison.
+
+* eddsa-verify.c (equal_h): Use ecc_mod_mul_canonical.
+
+(cherry picked from commit 5b7608fde3a6d2ab82bffb35db1e4e330927c906)",other,"equal_h (const struct ecc_modulo *p,
+	 const mp_limb_t *x1, const mp_limb_t *z1,
+	 const mp_limb_t *x2, const mp_limb_t *z2,
+	 mp_limb_t *scratch)
+{
+#define t0 scratch
+#define t1 (scratch + p->size)
+
+  ecc_mod_mul (p, t0, x1, z2, t0);
+  if (mpn_cmp (t0, p->m, p->size) >= 0)
+    mpn_sub_n (t0, t0, p->m, p->size);
+
+  ecc_mod_mul (p, t1, x2, z1, t1);
+  if (mpn_cmp (t1, p->m, p->size) >= 0)
+    mpn_sub_n (t1, t1, p->m, p->size);
+
+  return mpn_cmp (t0, t1, p->size) == 0;
+
+#undef t0
+#undef t1
+}","equal_h (const struct ecc_modulo *p,
+	 const mp_limb_t *x1, const mp_limb_t *z1,
+	 const mp_limb_t *x2, const mp_limb_t *z2,
+	 mp_limb_t *scratch)
+{
+#define t0 scratch
+#define t1 (scratch + p->size)
+
+  ecc_mod_mul_canonical (p, t0, x1, z2, t0);
+  ecc_mod_mul_canonical (p, t1, x2, z1, t1);
+
+  return mpn_cmp (t0, t1, p->size) == 0;
+
+#undef t0
+#undef t1
+}",
+2577,"[""CWE-787""]",nettle,51f643eee00e2caa65c8a2f5857f49acdf3ef1ce,51f643eee00e2caa65c8a2f5857f49acdf3ef1ce,0,499619,1.3039430627364872e+38,44.0,"Ensure ecdsa_sign output is canonically reduced.
+
+* ecc-ecdsa-sign.c (ecc_ecdsa_sign): Ensure s output is reduced to
+canonical range.
+
+(cherry picked from commit c24b36160dc5303f7541dd9da1429c4046f27398)",other,"ecc_ecdsa_sign (const struct ecc_curve *ecc,
+		const mp_limb_t *zp,
+		/* Random nonce, must be invertible mod ecc group
+		   order. */
+		const mp_limb_t *kp,
+		size_t length, const uint8_t *digest,
+		mp_limb_t *rp, mp_limb_t *sp,
+		mp_limb_t *scratch)
+{
+#define P	    scratch
+#define kinv	    scratch
+#define hp	    (scratch  + ecc->p.size) /* NOTE: ecc->p.size + 1 limbs! */
+#define tp	    (scratch + 2*ecc->p.size)
+  /* Procedure, according to RFC 6090, ""KT-I"". q denotes the group
+     order.
+
+     1. k <-- uniformly random, 0 < k < q
+
+     2. R <-- (r_x, r_y) = k g
+
+     3. s1 <-- r_x mod q
+
+     4. s2 <-- (h + z*s1)/k mod q.
+  */
+
+  ecc->mul_g (ecc, P, kp, P + 3*ecc->p.size);
+  /* x coordinate only, modulo q */
+  ecc->h_to_a (ecc, 2, rp, P, P + 3*ecc->p.size);
+
+  /* Invert k, uses up to 7 * ecc->p.size including scratch (for secp384). */
+  ecc->q.invert (&ecc->q, kinv, kp, tp);
+  
+  /* Process hash digest */
+  ecc_hash (&ecc->q, hp, length, digest);
+
+  ecc_mod_mul (&ecc->q, tp, zp, rp, tp);
+  ecc_mod_add (&ecc->q, hp, hp, tp);
+  ecc_mod_mul (&ecc->q, tp, hp, kinv, tp);
+
+  mpn_copyi (sp, tp, ecc->p.size);
+#undef P
+#undef hp
+#undef kinv
+#undef tp
+}","ecc_ecdsa_sign (const struct ecc_curve *ecc,
+		const mp_limb_t *zp,
+		/* Random nonce, must be invertible mod ecc group
+		   order. */
+		const mp_limb_t *kp,
+		size_t length, const uint8_t *digest,
+		mp_limb_t *rp, mp_limb_t *sp,
+		mp_limb_t *scratch)
+{
+#define P	    scratch
+#define kinv	    scratch
+#define hp	    (scratch  + ecc->p.size) /* NOTE: ecc->p.size + 1 limbs! */
+#define tp	    (scratch + 2*ecc->p.size)
+  /* Procedure, according to RFC 6090, ""KT-I"". q denotes the group
+     order.
+
+     1. k <-- uniformly random, 0 < k < q
+
+     2. R <-- (r_x, r_y) = k g
+
+     3. s1 <-- r_x mod q
+
+     4. s2 <-- (h + z*s1)/k mod q.
+  */
+
+  ecc->mul_g (ecc, P, kp, P + 3*ecc->p.size);
+  /* x coordinate only, modulo q */
+  ecc->h_to_a (ecc, 2, rp, P, P + 3*ecc->p.size);
+
+  /* Invert k, uses up to 7 * ecc->p.size including scratch (for secp384). */
+  ecc->q.invert (&ecc->q, kinv, kp, tp);
+  
+  /* Process hash digest */
+  ecc_hash (&ecc->q, hp, length, digest);
+
+  ecc_mod_mul (&ecc->q, tp, zp, rp, tp);
+  ecc_mod_add (&ecc->q, hp, hp, tp);
+  ecc_mod_mul_canonical (&ecc->q, sp, hp, kinv, tp);
+
+#undef P
+#undef hp
+#undef kinv
+#undef tp
+}",
+2578,"[""CWE-787""]",nettle,401c8d53d8a8cf1e79980e62bda3f946f8e07c14,401c8d53d8a8cf1e79980e62bda3f946f8e07c14,0,499622,2.5566958613629253e+38,70.0,"Analogous fix to ecc_gostdsa_verify.
+
+* ecc-gostdsa-verify.c (ecc_gostdsa_verify): Use ecc_mod_mul_canonical
+to compute the scalars used for ecc multiplication.
+
+(cherry picked from commit fbaefb64b90cb45b7075a0ed72a92f2a1fbcd2ab)",other,"ecc_gostdsa_verify (const struct ecc_curve *ecc,
+		  const mp_limb_t *pp, /* Public key */
+		  size_t length, const uint8_t *digest,
+		  const mp_limb_t *rp, const mp_limb_t *sp,
+		  mp_limb_t *scratch)
+{
+  /* Procedure, according to GOST R 34.10. q denotes the group
+     order.
+
+     1. Check 0 < r, s < q.
+
+     2. v <-- h^{-1}  (mod q)
+
+     3. z1  <-- s * v (mod q)
+
+     4. z2  <-- -r * v (mod q)
+
+     5. R = u1 G + u2 Y
+
+     6. Signature is valid if R_x = r (mod q).
+  */
+
+#define hp (scratch)
+#define vp (scratch + ecc->p.size)
+#define z1 (scratch + 3*ecc->p.size)
+#define z2 (scratch + 4*ecc->p.size)
+
+#define P1 (scratch + 4*ecc->p.size)
+#define P2 (scratch)
+
+
+  if (! (ecdsa_in_range (ecc, rp)
+	 && ecdsa_in_range (ecc, sp)))
+    return 0;
+
+  gost_hash (&ecc->q, hp, length, digest);
+
+  if (mpn_zero_p (hp, ecc->p.size))
+    mpn_add_1 (hp, hp, ecc->p.size, 1);
+
+  /* Compute v */
+  ecc->q.invert (&ecc->q, vp, hp, vp + ecc->p.size);
+
+  /* z1 = s / h, P1 = z1 * G */
+  ecc_mod_mul (&ecc->q, z1, sp, vp, z1);
+
+  /* z2 = - r / h, P2 = z2 * Y */
+  ecc_mod_mul (&ecc->q, z2, rp, vp, z2);
+  mpn_sub_n (z2, ecc->q.m, z2, ecc->p.size);
+
+   /* Total storage: 5*ecc->p.size + ecc->mul_itch */
+  ecc->mul (ecc, P2, z2, pp, z2 + ecc->p.size);
+
+  /* Total storage: 7*ecc->p.size + ecc->mul_g_itch (ecc->p.size) */
+  ecc->mul_g (ecc, P1, z1, P1 + 3*ecc->p.size);
+
+  /* Total storage: 6*ecc->p.size + ecc->add_hhh_itch */
+  ecc->add_hhh (ecc, P1, P1, P2, P1 + 3*ecc->p.size);
+
+  /* x coordinate only, modulo q */
+  ecc->h_to_a (ecc, 2, P2, P1, P1 + 3*ecc->p.size);
+
+  return (mpn_cmp (rp, P2, ecc->p.size) == 0);
+#undef P2
+#undef P1
+#undef z2
+#undef z1
+#undef hp
+#undef vp
+}","ecc_gostdsa_verify (const struct ecc_curve *ecc,
+		  const mp_limb_t *pp, /* Public key */
+		  size_t length, const uint8_t *digest,
+		  const mp_limb_t *rp, const mp_limb_t *sp,
+		  mp_limb_t *scratch)
+{
+  /* Procedure, according to GOST R 34.10. q denotes the group
+     order.
+
+     1. Check 0 < r, s < q.
+
+     2. v <-- h^{-1}  (mod q)
+
+     3. z1  <-- s * v (mod q)
+
+     4. z2  <-- -r * v (mod q)
+
+     5. R = u1 G + u2 Y
+
+     6. Signature is valid if R_x = r (mod q).
+  */
+
+#define hp (scratch)
+#define vp (scratch + ecc->p.size)
+#define z1 (scratch + 3*ecc->p.size)
+#define z2 (scratch + 4*ecc->p.size)
+
+#define P1 (scratch + 4*ecc->p.size)
+#define P2 (scratch)
+
+
+  if (! (ecdsa_in_range (ecc, rp)
+	 && ecdsa_in_range (ecc, sp)))
+    return 0;
+
+  gost_hash (&ecc->q, hp, length, digest);
+
+  if (mpn_zero_p (hp, ecc->p.size))
+    mpn_add_1 (hp, hp, ecc->p.size, 1);
+
+  /* Compute v */
+  ecc->q.invert (&ecc->q, vp, hp, vp + ecc->p.size);
+
+  /* z1 = s / h, P1 = z1 * G */
+  ecc_mod_mul_canonical (&ecc->q, z1, sp, vp, z1);
+
+  /* z2 = - r / h, P2 = z2 * Y */
+  mpn_sub_n (hp, ecc->q.m, rp, ecc->p.size);
+  ecc_mod_mul_canonical (&ecc->q, z2, hp, vp, z2);
+
+   /* Total storage: 5*ecc->p.size + ecc->mul_itch */
+  ecc->mul (ecc, P2, z2, pp, z2 + ecc->p.size);
+
+  /* Total storage: 7*ecc->p.size + ecc->mul_g_itch (ecc->p.size) */
+  ecc->mul_g (ecc, P1, z1, P1 + 3*ecc->p.size);
+
+  /* Total storage: 6*ecc->p.size + ecc->add_hhh_itch */
+  ecc->add_hhh (ecc, P1, P1, P2, P1 + 3*ecc->p.size);
+
+  /* x coordinate only, modulo q */
+  ecc->h_to_a (ecc, 2, P2, P1, P1 + 3*ecc->p.size);
+
+  return (mpn_cmp (rp, P2, ecc->p.size) == 0);
+#undef P2
+#undef P1
+#undef z2
+#undef z1
+#undef hp
+#undef vp
+}",
+2579,"[""CWE-787""]",nettle,63f222c60b03470c0005aa9bc4296fbf585f68b9,63f222c60b03470c0005aa9bc4296fbf585f68b9,0,499624,1.4723046405162762e+38,40.0,"Fix canonical reduction in gostdsa_vko.
+
+* gostdsa-vko.c (gostdsa_vko): Use ecc_mod_mul_canonical to
+compute the scalar used for ecc multiplication.
+
+(cherry picked from commit b30e0ca6d2b41579a5b6a010fc54065d790e8d55)",other,"gostdsa_vko (const struct ecc_scalar *priv,
+		const struct ecc_point *pub,
+		size_t ukm_length, const uint8_t *ukm,
+		uint8_t *out)
+{
+  const struct ecc_curve *ecc = priv->ecc;
+  unsigned bsize = (ecc_bit_size (ecc) + 7) / 8;
+  mp_size_t size = ecc->p.size;
+  mp_size_t itch = 4*size + ecc->mul_itch;
+  mp_limb_t *scratch;
+
+  if (itch < 5*size + ecc->h_to_a_itch)
+      itch = 5*size + ecc->h_to_a_itch;
+
+  assert (pub->ecc == ecc);
+  assert (priv->ecc == ecc);
+  assert (ukm_length <= bsize);
+
+  scratch = gmp_alloc_limbs (itch);
+
+#define UKM scratch
+#define TEMP (scratch + 3*size)
+#define XYZ scratch
+#define TEMP_Y (scratch + 4*size)
+
+  mpn_set_base256_le (UKM, size, ukm, ukm_length);
+
+  /* If ukm is 0, set it to 1, otherwise the result will be allways equal to 0,
+   * no matter what private and public keys are. See RFC 4357 referencing GOST
+   * R 34.10-2001 (RFC 5832) Section 6.1 step 2. */
+  if (mpn_zero_p (UKM, size))
+    UKM[0] = 1;
+
+  ecc_mod_mul (&ecc->q, TEMP, priv->p, UKM, TEMP); /* TEMP = UKM * priv */
+  ecc->mul (ecc, XYZ, TEMP, pub->p, scratch + 4*size); /* XYZ = UKM * priv * pub */
+  ecc->h_to_a (ecc, 0, TEMP, XYZ, scratch + 5*size); /* TEMP = XYZ */
+  mpn_get_base256_le (out, bsize, TEMP, size);
+  mpn_get_base256_le (out+bsize, bsize, TEMP_Y, size);
+  gmp_free_limbs (scratch, itch);
+}","gostdsa_vko (const struct ecc_scalar *priv,
+		const struct ecc_point *pub,
+		size_t ukm_length, const uint8_t *ukm,
+		uint8_t *out)
+{
+  const struct ecc_curve *ecc = priv->ecc;
+  unsigned bsize = (ecc_bit_size (ecc) + 7) / 8;
+  mp_size_t size = ecc->p.size;
+  mp_size_t itch = 4*size + ecc->mul_itch;
+  mp_limb_t *scratch;
+
+  if (itch < 5*size + ecc->h_to_a_itch)
+      itch = 5*size + ecc->h_to_a_itch;
+
+  assert (pub->ecc == ecc);
+  assert (priv->ecc == ecc);
+  assert (ukm_length <= bsize);
+
+  scratch = gmp_alloc_limbs (itch);
+
+#define UKM scratch
+#define TEMP (scratch + 3*size)
+#define XYZ scratch
+#define TEMP_Y (scratch + 4*size)
+
+  mpn_set_base256_le (UKM, size, ukm, ukm_length);
+
+  /* If ukm is 0, set it to 1, otherwise the result will be allways equal to 0,
+   * no matter what private and public keys are. See RFC 4357 referencing GOST
+   * R 34.10-2001 (RFC 5832) Section 6.1 step 2. */
+  if (mpn_zero_p (UKM, size))
+    UKM[0] = 1;
+
+  ecc_mod_mul_canonical (&ecc->q, TEMP, priv->p, UKM, TEMP); /* TEMP = UKM * priv */
+  ecc->mul (ecc, XYZ, TEMP, pub->p, scratch + 4*size); /* XYZ = UKM * priv * pub */
+  ecc->h_to_a (ecc, 0, TEMP, XYZ, scratch + 5*size); /* TEMP = XYZ */
+  mpn_get_base256_le (out, bsize, TEMP, size);
+  mpn_get_base256_le (out+bsize, bsize, TEMP_Y, size);
+  gmp_free_limbs (scratch, itch);
+}",
+2615,"[""CWE-787""]",openssl,07bed46f332fce8c1d157689a2cdf915a982ae34,07bed46f332fce8c1d157689a2cdf915a982ae34,0,503663,1.2898906811876816e+38,71.0,"Check for errors in BN_bn2dec()
+
+If an oversize BIGNUM is presented to BN_bn2dec() it can cause
+BN_div_word() to fail and not reduce the value of 't' resulting
+in OOB writes to the bn_data buffer and eventually crashing.
+
+Fix by checking return value of BN_div_word() and checking writes
+don't overflow buffer.
+
+Thanks to Shi Lei for reporting this bug.
+
+CVE-2016-2182
+
+Reviewed-by: Tim Hudson <tjh@openssl.org>",other,"char *BN_bn2dec(const BIGNUM *a)
+{
+    int i = 0, num, ok = 0;
+    char *buf = NULL;
+    char *p;
+    BIGNUM *t = NULL;
+    BN_ULONG *bn_data = NULL, *lp;
+
+    /*-
+     * get an upper bound for the length of the decimal integer
+     * num <= (BN_num_bits(a) + 1) * log(2)
+     *     <= 3 * BN_num_bits(a) * 0.1001 + log(2) + 1     (rounding error)
+     *     <= BN_num_bits(a)/10 + BN_num_bits/1000 + 1 + 1
+     */
+    i = BN_num_bits(a) * 3;
+    num = (i / 10 + i / 1000 + 1) + 1;
+    bn_data = OPENSSL_malloc((num / BN_DEC_NUM + 1) * sizeof(BN_ULONG));
+    buf = OPENSSL_malloc(num + 3);
+    if ((buf == NULL) || (bn_data == NULL)) {
+        BNerr(BN_F_BN_BN2DEC, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    if ((t = BN_dup(a)) == NULL)
+        goto err;
+
+#define BUF_REMAIN (num+3 - (size_t)(p - buf))
+    p = buf;
+    lp = bn_data;
+    if (BN_is_zero(t)) {
+        *(p++) = '0';
+        *(p++) = '\0';
+    } else {
+        if (BN_is_negative(t))
+            *p++ = '-';
+
+        i = 0;
+        while (!BN_is_zero(t)) {
+            *lp = BN_div_word(t, BN_DEC_CONV);
+            lp++;
+        }
+        lp--;
+        /*
+         * We now have a series of blocks, BN_DEC_NUM chars in length, where
+         * the last one needs truncation. The blocks need to be reversed in
+         * order.
+         */
+        BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT1, *lp);
+        while (*p)
+            p++;
+        while (lp != bn_data) {
+            lp--;
+            BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT2, *lp);
+            while (*p)
+                p++;
+        }
+    }
+    ok = 1;
+ err:
+    OPENSSL_free(bn_data);
+    BN_free(t);
+    if (ok)
+        return buf;
+    OPENSSL_free(buf);
+    return NULL;
+}","char *BN_bn2dec(const BIGNUM *a)
+{
+    int i = 0, num, ok = 0;
+    char *buf = NULL;
+    char *p;
+    BIGNUM *t = NULL;
+    BN_ULONG *bn_data = NULL, *lp;
+    int bn_data_num;
+
+    /*-
+     * get an upper bound for the length of the decimal integer
+     * num <= (BN_num_bits(a) + 1) * log(2)
+     *     <= 3 * BN_num_bits(a) * 0.1001 + log(2) + 1     (rounding error)
+     *     <= BN_num_bits(a)/10 + BN_num_bits/1000 + 1 + 1
+     */
+    i = BN_num_bits(a) * 3;
+    num = (i / 10 + i / 1000 + 1) + 1;
+    bn_data_num = num / BN_DEC_NUM + 1;
+    bn_data = OPENSSL_malloc(bn_data_num * sizeof(BN_ULONG));
+    buf = OPENSSL_malloc(num + 3);
+    if ((buf == NULL) || (bn_data == NULL)) {
+        BNerr(BN_F_BN_BN2DEC, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    if ((t = BN_dup(a)) == NULL)
+        goto err;
+
+#define BUF_REMAIN (num+3 - (size_t)(p - buf))
+    p = buf;
+    lp = bn_data;
+    if (BN_is_zero(t)) {
+        *(p++) = '0';
+        *(p++) = '\0';
+    } else {
+        if (BN_is_negative(t))
+            *p++ = '-';
+
+        i = 0;
+        while (!BN_is_zero(t)) {
+            *lp = BN_div_word(t, BN_DEC_CONV);
+            if (*lp == (BN_ULONG)-1)
+                goto err;
+            lp++;
+            if (lp - bn_data >= bn_data_num)
+                goto err;
+        }
+        lp--;
+        /*
+         * We now have a series of blocks, BN_DEC_NUM chars in length, where
+         * the last one needs truncation. The blocks need to be reversed in
+         * order.
+         */
+        BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT1, *lp);
+        while (*p)
+            p++;
+        while (lp != bn_data) {
+            lp--;
+            BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT2, *lp);
+            while (*p)
+                p++;
+        }
+    }
+    ok = 1;
+ err:
+    OPENSSL_free(bn_data);
+    BN_free(t);
+    if (ok)
+        return buf;
+    OPENSSL_free(buf);
+    return NULL;
+}",
+2616,"[""CWE-787""]",openssl,3612ff6fcec0e3d1f2a598135fe12177c0419582,3612ff6fcec0e3d1f2a598135fe12177c0419582,0,503666,5.810490911618367e+37,74.0,"Fix overflow check in BN_bn2dec()
+
+Fix an off by one error in the overflow check added by 07bed46f332fc
+(""Check for errors in BN_bn2dec()"").
+
+Reviewed-by: Stephen Henson <steve@openssl.org>
+Reviewed-by: Matt Caswell <matt@openssl.org>
+(cherry picked from commit 099e2968ed3c7d256cda048995626664082b1b30)",other,"char *BN_bn2dec(const BIGNUM *a)
+{
+    int i = 0, num, ok = 0;
+    char *buf = NULL;
+    char *p;
+    BIGNUM *t = NULL;
+    BN_ULONG *bn_data = NULL, *lp;
+    int bn_data_num;
+
+    /*-
+     * get an upper bound for the length of the decimal integer
+     * num <= (BN_num_bits(a) + 1) * log(2)
+     *     <= 3 * BN_num_bits(a) * 0.1001 + log(2) + 1     (rounding error)
+     *     <= BN_num_bits(a)/10 + BN_num_bits/1000 + 1 + 1
+     */
+    i = BN_num_bits(a) * 3;
+    num = (i / 10 + i / 1000 + 1) + 1;
+    bn_data_num = num / BN_DEC_NUM + 1;
+    bn_data = OPENSSL_malloc(bn_data_num * sizeof(BN_ULONG));
+    buf = OPENSSL_malloc(num + 3);
+    if ((buf == NULL) || (bn_data == NULL)) {
+        BNerr(BN_F_BN_BN2DEC, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    if ((t = BN_dup(a)) == NULL)
+        goto err;
+
+#define BUF_REMAIN (num+3 - (size_t)(p - buf))
+    p = buf;
+    lp = bn_data;
+    if (BN_is_zero(t)) {
+        *(p++) = '0';
+        *(p++) = '\0';
+    } else {
+        if (BN_is_negative(t))
+            *p++ = '-';
+
+        i = 0;
+        while (!BN_is_zero(t)) {
+            *lp = BN_div_word(t, BN_DEC_CONV);
+            if (*lp == (BN_ULONG)-1)
+                goto err;
+            lp++;
+            if (lp - bn_data >= bn_data_num)
+                goto err;
+        }
+        lp--;
+        /*
+         * We now have a series of blocks, BN_DEC_NUM chars in length, where
+         * the last one needs truncation. The blocks need to be reversed in
+         * order.
+         */
+        BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT1, *lp);
+        while (*p)
+            p++;
+        while (lp != bn_data) {
+            lp--;
+            BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT2, *lp);
+            while (*p)
+                p++;
+        }
+    }
+    ok = 1;
+ err:
+    if (bn_data != NULL)
+        OPENSSL_free(bn_data);
+    if (t != NULL)
+        BN_free(t);
+    if (!ok && buf) {
+        OPENSSL_free(buf);
+        buf = NULL;
+    }
+
+    return (buf);
+}","char *BN_bn2dec(const BIGNUM *a)
+{
+    int i = 0, num, ok = 0;
+    char *buf = NULL;
+    char *p;
+    BIGNUM *t = NULL;
+    BN_ULONG *bn_data = NULL, *lp;
+    int bn_data_num;
+
+    /*-
+     * get an upper bound for the length of the decimal integer
+     * num <= (BN_num_bits(a) + 1) * log(2)
+     *     <= 3 * BN_num_bits(a) * 0.1001 + log(2) + 1     (rounding error)
+     *     <= BN_num_bits(a)/10 + BN_num_bits/1000 + 1 + 1
+     */
+    i = BN_num_bits(a) * 3;
+    num = (i / 10 + i / 1000 + 1) + 1;
+    bn_data_num = num / BN_DEC_NUM + 1;
+    bn_data = OPENSSL_malloc(bn_data_num * sizeof(BN_ULONG));
+    buf = OPENSSL_malloc(num + 3);
+    if ((buf == NULL) || (bn_data == NULL)) {
+        BNerr(BN_F_BN_BN2DEC, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+    if ((t = BN_dup(a)) == NULL)
+        goto err;
+
+#define BUF_REMAIN (num+3 - (size_t)(p - buf))
+    p = buf;
+    lp = bn_data;
+    if (BN_is_zero(t)) {
+        *(p++) = '0';
+        *(p++) = '\0';
+    } else {
+        if (BN_is_negative(t))
+            *p++ = '-';
+
+        while (!BN_is_zero(t)) {
+            if (lp - bn_data >= bn_data_num)
+                goto err;
+            *lp = BN_div_word(t, BN_DEC_CONV);
+            if (*lp == (BN_ULONG)-1)
+                goto err;
+            lp++;
+        }
+        lp--;
+        /*
+         * We now have a series of blocks, BN_DEC_NUM chars in length, where
+         * the last one needs truncation. The blocks need to be reversed in
+         * order.
+         */
+        BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT1, *lp);
+        while (*p)
+            p++;
+        while (lp != bn_data) {
+            lp--;
+            BIO_snprintf(p, BUF_REMAIN, BN_DEC_FMT2, *lp);
+            while (*p)
+                p++;
+        }
+    }
+    ok = 1;
+ err:
+    if (bn_data != NULL)
+        OPENSSL_free(bn_data);
+    if (t != NULL)
+        BN_free(t);
+    if (!ok && buf) {
+        OPENSSL_free(buf);
+        buf = NULL;
+    }
+
+    return (buf);
+}",
+2627,"[""CWE-787""]",libtiff,69bfeec247899776b1b396651adb47436e5f1556,69bfeec247899776b1b396651adb47436e5f1556,0,504510,1.98947257611571e+38,633.0,"* tools/tiff2pdf.c: prevent heap buffer overflow write in ""Raw""
+mode on PlanarConfig=Contig input images.
+Fixes http://bugzilla.maptools.org/show_bug.cgi?id=2715
+Reported by team OWL337",other,"void t2p_read_tiff_data(T2P* t2p, TIFF* input){
+
+	int i=0;
+	uint16* r;
+	uint16* g;
+	uint16* b;
+	uint16* a;
+	uint16 xuint16;
+	uint16* xuint16p;
+	float* xfloatp;
+
+	t2p->pdf_transcode = T2P_TRANSCODE_ENCODE;
+	t2p->pdf_sample = T2P_SAMPLE_NOTHING;
+        t2p->pdf_switchdecode = t2p->pdf_colorspace_invert;
+        
+	
+	TIFFSetDirectory(input, t2p->tiff_pages[t2p->pdf_page].page_directory);
+
+	TIFFGetField(input, TIFFTAG_IMAGEWIDTH, &(t2p->tiff_width));
+	if(t2p->tiff_width == 0){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with zero width"", 
+			TIFFFileName(input)	);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	}
+
+	TIFFGetField(input, TIFFTAG_IMAGELENGTH, &(t2p->tiff_length));
+	if(t2p->tiff_length == 0){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with zero length"", 
+			TIFFFileName(input)	);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	}
+
+        if(TIFFGetField(input, TIFFTAG_COMPRESSION, &(t2p->tiff_compression)) == 0){
+                TIFFError(
+                        TIFF2PDF_MODULE, 
+                        ""No support for %s with no compression tag"", 
+                        TIFFFileName(input)     );
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+
+        }
+        if( TIFFIsCODECConfigured(t2p->tiff_compression) == 0){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with compression type %u:  not configured"", 
+			TIFFFileName(input), 
+			t2p->tiff_compression	
+			);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	
+	}
+
+	TIFFGetFieldDefaulted(input, TIFFTAG_BITSPERSAMPLE, &(t2p->tiff_bitspersample));
+	switch(t2p->tiff_bitspersample){
+		case 1:
+		case 2:
+		case 4:
+		case 8:
+			break;
+		case 0:
+			TIFFWarning(
+				TIFF2PDF_MODULE, 
+				""Image %s has 0 bits per sample, assuming 1"",
+				TIFFFileName(input));
+			t2p->tiff_bitspersample=1;
+			break;
+		default:
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with %u bits per sample"",
+				TIFFFileName(input),
+				t2p->tiff_bitspersample);
+			t2p->t2p_error = T2P_ERR_ERROR;
+			return;
+	}
+
+	TIFFGetFieldDefaulted(input, TIFFTAG_SAMPLESPERPIXEL, &(t2p->tiff_samplesperpixel));
+	if(t2p->tiff_samplesperpixel>4){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with %u samples per pixel"",
+			TIFFFileName(input),
+			t2p->tiff_samplesperpixel);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	}
+	if(t2p->tiff_samplesperpixel==0){
+		TIFFWarning(
+			TIFF2PDF_MODULE, 
+			""Image %s has 0 samples per pixel, assuming 1"",
+			TIFFFileName(input));
+		t2p->tiff_samplesperpixel=1;
+	}
+	
+	if(TIFFGetField(input, TIFFTAG_SAMPLEFORMAT, &xuint16) != 0 ){
+		switch(xuint16){
+			case 0:
+			case 1:
+			case 4:
+				break;
+			default:
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for %s with sample format %u"",
+					TIFFFileName(input),
+					xuint16);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+				break;
+		}
+	}
+	
+	TIFFGetFieldDefaulted(input, TIFFTAG_FILLORDER, &(t2p->tiff_fillorder));
+	
+        if(TIFFGetField(input, TIFFTAG_PHOTOMETRIC, &(t2p->tiff_photometric)) == 0){
+                TIFFError(
+                        TIFF2PDF_MODULE, 
+                        ""No support for %s with no photometric interpretation tag"", 
+                        TIFFFileName(input)     );
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+
+        }
+        
+	switch(t2p->tiff_photometric){
+		case PHOTOMETRIC_MINISWHITE:
+		case PHOTOMETRIC_MINISBLACK: 
+			if (t2p->tiff_bitspersample==1){
+				t2p->pdf_colorspace=T2P_CS_BILEVEL;
+				if(t2p->tiff_photometric==PHOTOMETRIC_MINISWHITE){
+					t2p->pdf_switchdecode ^= 1;
+				}
+			} else {
+				t2p->pdf_colorspace=T2P_CS_GRAY;
+				if(t2p->tiff_photometric==PHOTOMETRIC_MINISWHITE){
+					t2p->pdf_switchdecode ^= 1;
+				} 
+			}
+			break;
+		case PHOTOMETRIC_RGB: 
+			t2p->pdf_colorspace=T2P_CS_RGB;
+			if(t2p->tiff_samplesperpixel == 3){
+				break;
+			}
+			if(TIFFGetField(input, TIFFTAG_INDEXED, &xuint16)){
+				if(xuint16==1)
+					goto photometric_palette;
+			}
+			if(t2p->tiff_samplesperpixel > 3) {
+				if(t2p->tiff_samplesperpixel == 4) {
+					t2p->pdf_colorspace = T2P_CS_RGB;
+					if(TIFFGetField(input,
+							TIFFTAG_EXTRASAMPLES,
+							&xuint16, &xuint16p)
+					   && xuint16 == 1) {
+						if(xuint16p[0] == EXTRASAMPLE_ASSOCALPHA){
+							if( t2p->tiff_bitspersample != 8 )
+							{
+							    TIFFError(
+								    TIFF2PDF_MODULE, 
+								    ""No support for BitsPerSample=%d for RGBA"",
+								    t2p->tiff_bitspersample);
+							    t2p->t2p_error = T2P_ERR_ERROR;
+							    return;
+							}
+							t2p->pdf_sample=T2P_SAMPLE_RGBAA_TO_RGB;
+							break;
+						}
+						if(xuint16p[0] == EXTRASAMPLE_UNASSALPHA){
+							if( t2p->tiff_bitspersample != 8 )
+							{
+							    TIFFError(
+								    TIFF2PDF_MODULE, 
+								    ""No support for BitsPerSample=%d for RGBA"",
+								    t2p->tiff_bitspersample);
+							    t2p->t2p_error = T2P_ERR_ERROR;
+							    return;
+							}
+							t2p->pdf_sample=T2P_SAMPLE_RGBA_TO_RGB;
+							break;
+						}
+						TIFFWarning(
+							TIFF2PDF_MODULE, 
+							""RGB image %s has 4 samples per pixel, assuming RGBA"",
+							TIFFFileName(input));
+							break;
+					}
+					t2p->pdf_colorspace=T2P_CS_CMYK;
+					t2p->pdf_switchdecode ^= 1;
+					TIFFWarning(
+						TIFF2PDF_MODULE, 
+						""RGB image %s has 4 samples per pixel, assuming inverse CMYK"",
+					TIFFFileName(input));
+					break;
+				} else {
+					TIFFError(
+						TIFF2PDF_MODULE, 
+						""No support for RGB image %s with %u samples per pixel"", 
+						TIFFFileName(input), 
+						t2p->tiff_samplesperpixel);
+					t2p->t2p_error = T2P_ERR_ERROR;
+					break;
+				}
+			} else {
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for RGB image %s with %u samples per pixel"", 
+					TIFFFileName(input), 
+					t2p->tiff_samplesperpixel);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				break;
+			}
+		case PHOTOMETRIC_PALETTE: 
+			photometric_palette:
+			if(t2p->tiff_samplesperpixel!=1){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for palettized image %s with not one sample per pixel"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			t2p->pdf_colorspace=T2P_CS_RGB | T2P_CS_PALETTE;
+			t2p->pdf_palettesize=0x0001<<t2p->tiff_bitspersample;
+			if(!TIFFGetField(input, TIFFTAG_COLORMAP, &r, &g, &b)){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Palettized image %s has no color map"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			} 
+			if(t2p->pdf_palette != NULL){
+				_TIFFfree(t2p->pdf_palette);
+				t2p->pdf_palette=NULL;
+			}
+			t2p->pdf_palette = (unsigned char*)
+				_TIFFmalloc(TIFFSafeMultiply(tmsize_t,t2p->pdf_palettesize,3));
+			if(t2p->pdf_palette==NULL){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Can't allocate %u bytes of memory for t2p_read_tiff_image, %s"", 
+					t2p->pdf_palettesize, 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			for(i=0;i<t2p->pdf_palettesize;i++){
+				t2p->pdf_palette[(i*3)]  = (unsigned char) (r[i]>>8);
+				t2p->pdf_palette[(i*3)+1]= (unsigned char) (g[i]>>8);
+				t2p->pdf_palette[(i*3)+2]= (unsigned char) (b[i]>>8);
+			}
+			t2p->pdf_palettesize *= 3;
+			break;
+		case PHOTOMETRIC_SEPARATED:
+			if(TIFFGetField(input, TIFFTAG_INDEXED, &xuint16)){
+				if(xuint16==1){
+						goto photometric_palette_cmyk;
+				}
+			}
+			if( TIFFGetField(input, TIFFTAG_INKSET, &xuint16) ){
+				if(xuint16 != INKSET_CMYK){
+					TIFFError(
+						TIFF2PDF_MODULE, 
+						""No support for %s because its inkset is not CMYK"",
+						TIFFFileName(input) );
+					t2p->t2p_error = T2P_ERR_ERROR;
+					return;
+				}
+			}
+			if(t2p->tiff_samplesperpixel==4){
+				t2p->pdf_colorspace=T2P_CS_CMYK;
+			} else {
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for %s because it has %u samples per pixel"",
+					TIFFFileName(input), 
+					t2p->tiff_samplesperpixel);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			break;
+			photometric_palette_cmyk:
+			if(t2p->tiff_samplesperpixel!=1){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for palettized CMYK image %s with not one sample per pixel"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			t2p->pdf_colorspace=T2P_CS_CMYK | T2P_CS_PALETTE;
+			t2p->pdf_palettesize=0x0001<<t2p->tiff_bitspersample;
+			if(!TIFFGetField(input, TIFFTAG_COLORMAP, &r, &g, &b, &a)){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Palettized image %s has no color map"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			} 
+			if(t2p->pdf_palette != NULL){
+				_TIFFfree(t2p->pdf_palette);
+				t2p->pdf_palette=NULL;
+			}
+			t2p->pdf_palette = (unsigned char*) 
+				_TIFFmalloc(TIFFSafeMultiply(tmsize_t,t2p->pdf_palettesize,4));
+			if(t2p->pdf_palette==NULL){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Can't allocate %u bytes of memory for t2p_read_tiff_image, %s"", 
+					t2p->pdf_palettesize, 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			for(i=0;i<t2p->pdf_palettesize;i++){
+				t2p->pdf_palette[(i*4)]  = (unsigned char) (r[i]>>8);
+				t2p->pdf_palette[(i*4)+1]= (unsigned char) (g[i]>>8);
+				t2p->pdf_palette[(i*4)+2]= (unsigned char) (b[i]>>8);
+				t2p->pdf_palette[(i*4)+3]= (unsigned char) (a[i]>>8);
+			}
+			t2p->pdf_palettesize *= 4;
+			break;
+		case PHOTOMETRIC_YCBCR:
+			t2p->pdf_colorspace=T2P_CS_RGB;
+			if(t2p->tiff_samplesperpixel==1){
+				t2p->pdf_colorspace=T2P_CS_GRAY;
+				t2p->tiff_photometric=PHOTOMETRIC_MINISBLACK;
+				break;
+			}
+			t2p->pdf_sample=T2P_SAMPLE_YCBCR_TO_RGB;
+#ifdef JPEG_SUPPORT
+			if(t2p->pdf_defaultcompression==T2P_COMPRESS_JPEG){
+				t2p->pdf_sample=T2P_SAMPLE_NOTHING;
+			}
+#endif
+			break;
+		case PHOTOMETRIC_CIELAB:
+            if( t2p->tiff_samplesperpixel != 3){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Unsupported samplesperpixel = %d for CIELAB"", 
+                    t2p->tiff_samplesperpixel);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+            if( t2p->tiff_bitspersample != 8){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Invalid bitspersample = %d for CIELAB"", 
+                    t2p->tiff_bitspersample);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+			t2p->pdf_labrange[0]= -127;
+			t2p->pdf_labrange[1]= 127;
+			t2p->pdf_labrange[2]= -127;
+			t2p->pdf_labrange[3]= 127;
+			t2p->pdf_sample=T2P_SAMPLE_LAB_SIGNED_TO_UNSIGNED;
+			t2p->pdf_colorspace=T2P_CS_LAB;
+			break;
+		case PHOTOMETRIC_ICCLAB:
+			t2p->pdf_labrange[0]= 0;
+			t2p->pdf_labrange[1]= 255;
+			t2p->pdf_labrange[2]= 0;
+			t2p->pdf_labrange[3]= 255;
+			t2p->pdf_colorspace=T2P_CS_LAB;
+			break;
+		case PHOTOMETRIC_ITULAB:
+            if( t2p->tiff_samplesperpixel != 3){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Unsupported samplesperpixel = %d for ITULAB"", 
+                    t2p->tiff_samplesperpixel);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+            if( t2p->tiff_bitspersample != 8){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Invalid bitspersample = %d for ITULAB"", 
+                    t2p->tiff_bitspersample);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+			t2p->pdf_labrange[0]=-85;
+			t2p->pdf_labrange[1]=85;
+			t2p->pdf_labrange[2]=-75;
+			t2p->pdf_labrange[3]=124;
+			t2p->pdf_sample=T2P_SAMPLE_LAB_SIGNED_TO_UNSIGNED;
+			t2p->pdf_colorspace=T2P_CS_LAB;
+			break;
+		case PHOTOMETRIC_LOGL:
+		case PHOTOMETRIC_LOGLUV:
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with photometric interpretation LogL/LogLuv"", 
+				TIFFFileName(input));
+			t2p->t2p_error = T2P_ERR_ERROR;
+			return;
+		default:
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with photometric interpretation %u"", 
+				TIFFFileName(input),
+				t2p->tiff_photometric);
+			t2p->t2p_error = T2P_ERR_ERROR;
+			return;
+	}
+
+	if(TIFFGetField(input, TIFFTAG_PLANARCONFIG, &(t2p->tiff_planar))){
+		switch(t2p->tiff_planar){
+			case 0:
+				TIFFWarning(
+					TIFF2PDF_MODULE, 
+					""Image %s has planar configuration 0, assuming 1"", 
+					TIFFFileName(input));
+				t2p->tiff_planar=PLANARCONFIG_CONTIG;
+			case PLANARCONFIG_CONTIG:
+				break;
+			case PLANARCONFIG_SEPARATE:
+				t2p->pdf_sample=T2P_SAMPLE_PLANAR_SEPARATE_TO_CONTIG;
+				if(t2p->tiff_bitspersample!=8){
+					TIFFError(
+						TIFF2PDF_MODULE, 
+						""No support for %s with separated planar configuration and %u bits per sample"", 
+						TIFFFileName(input),
+						t2p->tiff_bitspersample);
+					t2p->t2p_error = T2P_ERR_ERROR;
+					return;
+				}
+				break;
+			default:
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for %s with planar configuration %u"", 
+					TIFFFileName(input),
+					t2p->tiff_planar);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+		}
+	}
+
+        TIFFGetFieldDefaulted(input, TIFFTAG_ORIENTATION,
+                              &(t2p->tiff_orientation));
+        if(t2p->tiff_orientation>8){
+                TIFFWarning(TIFF2PDF_MODULE,
+                            ""Image %s has orientation %u, assuming 0"",
+                            TIFFFileName(input), t2p->tiff_orientation);
+                t2p->tiff_orientation=0;
+        }
+
+        if(TIFFGetField(input, TIFFTAG_XRESOLUTION, &(t2p->tiff_xres) ) == 0){
+                t2p->tiff_xres=0.0;
+        }
+        if(TIFFGetField(input, TIFFTAG_YRESOLUTION, &(t2p->tiff_yres) ) == 0){
+                t2p->tiff_yres=0.0;
+        }
+	TIFFGetFieldDefaulted(input, TIFFTAG_RESOLUTIONUNIT,
+			      &(t2p->tiff_resunit));
+	if(t2p->tiff_resunit == RESUNIT_CENTIMETER) {
+		t2p->tiff_xres *= 2.54F;
+		t2p->tiff_yres *= 2.54F;
+	} else if (t2p->tiff_resunit != RESUNIT_INCH
+		   && t2p->pdf_centimeters != 0) {
+		t2p->tiff_xres *= 2.54F;
+		t2p->tiff_yres *= 2.54F;
+	}
+
+	t2p_compose_pdf_page(t2p);
+        if( t2p->t2p_error == T2P_ERR_ERROR )
+	    return;
+
+	t2p->pdf_transcode = T2P_TRANSCODE_ENCODE;
+	if(t2p->pdf_nopassthrough==0){
+#ifdef CCITT_SUPPORT
+		if(t2p->tiff_compression==COMPRESSION_CCITTFAX4  
+			){
+			if(TIFFIsTiled(input) || (TIFFNumberOfStrips(input)==1) ){
+				t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+				t2p->pdf_compression=T2P_COMPRESS_G4;
+			}
+		}
+#endif
+#ifdef ZIP_SUPPORT
+		if(t2p->tiff_compression== COMPRESSION_ADOBE_DEFLATE 
+			|| t2p->tiff_compression==COMPRESSION_DEFLATE){
+			if(TIFFIsTiled(input) || (TIFFNumberOfStrips(input)==1) ){
+				t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+				t2p->pdf_compression=T2P_COMPRESS_ZIP;
+			}
+		}
+#endif
+#ifdef OJPEG_SUPPORT
+		if(t2p->tiff_compression==COMPRESSION_OJPEG){
+			t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+			t2p->pdf_compression=T2P_COMPRESS_JPEG;
+			t2p_process_ojpeg_tables(t2p, input);
+		}
+#endif
+#ifdef JPEG_SUPPORT
+		if(t2p->tiff_compression==COMPRESSION_JPEG){
+			t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+			t2p->pdf_compression=T2P_COMPRESS_JPEG;
+		}
+#endif
+		(void)0;
+	}
+
+	if(t2p->pdf_transcode!=T2P_TRANSCODE_RAW){
+		t2p->pdf_compression = t2p->pdf_defaultcompression;
+	}
+
+#ifdef JPEG_SUPPORT
+	if(t2p->pdf_defaultcompression==T2P_COMPRESS_JPEG){
+		if(t2p->pdf_colorspace & T2P_CS_PALETTE){
+			t2p->pdf_sample|=T2P_SAMPLE_REALIZE_PALETTE;
+			t2p->pdf_colorspace ^= T2P_CS_PALETTE;
+			t2p->tiff_pages[t2p->pdf_page].page_extra--;
+		}
+	}
+	if(t2p->tiff_compression==COMPRESSION_JPEG){
+		if(t2p->tiff_planar==PLANARCONFIG_SEPARATE){
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with JPEG compression and separated planar configuration"", 
+				TIFFFileName(input));
+				t2p->t2p_error=T2P_ERR_ERROR;
+			return;
+		}
+	}
+#endif
+#ifdef OJPEG_SUPPORT
+	if(t2p->tiff_compression==COMPRESSION_OJPEG){
+		if(t2p->tiff_planar==PLANARCONFIG_SEPARATE){
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with OJPEG compression and separated planar configuration"", 
+				TIFFFileName(input));
+				t2p->t2p_error=T2P_ERR_ERROR;
+			return;
+		}
+	}
+#endif
+
+	if(t2p->pdf_sample & T2P_SAMPLE_REALIZE_PALETTE){
+		if(t2p->pdf_colorspace & T2P_CS_CMYK){
+			t2p->tiff_samplesperpixel=4;
+			t2p->tiff_photometric=PHOTOMETRIC_SEPARATED;
+		} else {
+			t2p->tiff_samplesperpixel=3;
+			t2p->tiff_photometric=PHOTOMETRIC_RGB;
+		}
+	}
+
+	if (TIFFGetField(input, TIFFTAG_TRANSFERFUNCTION,
+			 &(t2p->tiff_transferfunction[0]),
+			 &(t2p->tiff_transferfunction[1]),
+			 &(t2p->tiff_transferfunction[2]))) {
+		if((t2p->tiff_transferfunction[1] != (float*) NULL) &&
+                   (t2p->tiff_transferfunction[2] != (float*) NULL) &&
+                   (t2p->tiff_transferfunction[1] !=
+                    t2p->tiff_transferfunction[0])) {
+			t2p->tiff_transferfunctioncount=3;
+		} else {
+			t2p->tiff_transferfunctioncount=1;
+		}
+	} else {
+		t2p->tiff_transferfunctioncount=0;
+	}
+	if(TIFFGetField(input, TIFFTAG_WHITEPOINT, &xfloatp)!=0){
+		t2p->tiff_whitechromaticities[0]=xfloatp[0];
+		t2p->tiff_whitechromaticities[1]=xfloatp[1];
+		if(t2p->pdf_colorspace & T2P_CS_GRAY){
+			t2p->pdf_colorspace |= T2P_CS_CALGRAY;
+		}
+		if(t2p->pdf_colorspace & T2P_CS_RGB){
+			t2p->pdf_colorspace |= T2P_CS_CALRGB;
+		}
+	}
+	if(TIFFGetField(input, TIFFTAG_PRIMARYCHROMATICITIES, &xfloatp)!=0){
+		t2p->tiff_primarychromaticities[0]=xfloatp[0];
+		t2p->tiff_primarychromaticities[1]=xfloatp[1];
+		t2p->tiff_primarychromaticities[2]=xfloatp[2];
+		t2p->tiff_primarychromaticities[3]=xfloatp[3];
+		t2p->tiff_primarychromaticities[4]=xfloatp[4];
+		t2p->tiff_primarychromaticities[5]=xfloatp[5];
+		if(t2p->pdf_colorspace & T2P_CS_RGB){
+			t2p->pdf_colorspace |= T2P_CS_CALRGB;
+		}
+	}
+	if(t2p->pdf_colorspace & T2P_CS_LAB){
+		if(TIFFGetField(input, TIFFTAG_WHITEPOINT, &xfloatp) != 0){
+			t2p->tiff_whitechromaticities[0]=xfloatp[0];
+			t2p->tiff_whitechromaticities[1]=xfloatp[1];
+		} else {
+			t2p->tiff_whitechromaticities[0]=0.3457F; /* 0.3127F; */
+			t2p->tiff_whitechromaticities[1]=0.3585F; /* 0.3290F; */
+		}
+	}
+	if(TIFFGetField(input, 
+		TIFFTAG_ICCPROFILE, 
+		&(t2p->tiff_iccprofilelength), 
+		&(t2p->tiff_iccprofile))!=0){
+		t2p->pdf_colorspace |= T2P_CS_ICCBASED;
+	} else {
+		t2p->tiff_iccprofilelength=0;
+		t2p->tiff_iccprofile=NULL;
+	}
+	
+#ifdef CCITT_SUPPORT
+	if( t2p->tiff_bitspersample==1 &&
+		t2p->tiff_samplesperpixel==1){
+		t2p->pdf_compression = T2P_COMPRESS_G4;
+	}
+#endif
+
+
+	return;
+}","void t2p_read_tiff_data(T2P* t2p, TIFF* input){
+
+	int i=0;
+	uint16* r;
+	uint16* g;
+	uint16* b;
+	uint16* a;
+	uint16 xuint16;
+	uint16* xuint16p;
+	float* xfloatp;
+
+	t2p->pdf_transcode = T2P_TRANSCODE_ENCODE;
+	t2p->pdf_sample = T2P_SAMPLE_NOTHING;
+        t2p->pdf_switchdecode = t2p->pdf_colorspace_invert;
+        
+	
+	TIFFSetDirectory(input, t2p->tiff_pages[t2p->pdf_page].page_directory);
+
+	TIFFGetField(input, TIFFTAG_IMAGEWIDTH, &(t2p->tiff_width));
+	if(t2p->tiff_width == 0){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with zero width"", 
+			TIFFFileName(input)	);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	}
+
+	TIFFGetField(input, TIFFTAG_IMAGELENGTH, &(t2p->tiff_length));
+	if(t2p->tiff_length == 0){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with zero length"", 
+			TIFFFileName(input)	);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	}
+
+        if(TIFFGetField(input, TIFFTAG_COMPRESSION, &(t2p->tiff_compression)) == 0){
+                TIFFError(
+                        TIFF2PDF_MODULE, 
+                        ""No support for %s with no compression tag"", 
+                        TIFFFileName(input)     );
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+
+        }
+        if( TIFFIsCODECConfigured(t2p->tiff_compression) == 0){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with compression type %u:  not configured"", 
+			TIFFFileName(input), 
+			t2p->tiff_compression	
+			);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	
+	}
+
+	TIFFGetFieldDefaulted(input, TIFFTAG_BITSPERSAMPLE, &(t2p->tiff_bitspersample));
+	switch(t2p->tiff_bitspersample){
+		case 1:
+		case 2:
+		case 4:
+		case 8:
+			break;
+		case 0:
+			TIFFWarning(
+				TIFF2PDF_MODULE, 
+				""Image %s has 0 bits per sample, assuming 1"",
+				TIFFFileName(input));
+			t2p->tiff_bitspersample=1;
+			break;
+		default:
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with %u bits per sample"",
+				TIFFFileName(input),
+				t2p->tiff_bitspersample);
+			t2p->t2p_error = T2P_ERR_ERROR;
+			return;
+	}
+
+	TIFFGetFieldDefaulted(input, TIFFTAG_SAMPLESPERPIXEL, &(t2p->tiff_samplesperpixel));
+	if(t2p->tiff_samplesperpixel>4){
+		TIFFError(
+			TIFF2PDF_MODULE, 
+			""No support for %s with %u samples per pixel"",
+			TIFFFileName(input),
+			t2p->tiff_samplesperpixel);
+		t2p->t2p_error = T2P_ERR_ERROR;
+		return;
+	}
+	if(t2p->tiff_samplesperpixel==0){
+		TIFFWarning(
+			TIFF2PDF_MODULE, 
+			""Image %s has 0 samples per pixel, assuming 1"",
+			TIFFFileName(input));
+		t2p->tiff_samplesperpixel=1;
+	}
+	
+	if(TIFFGetField(input, TIFFTAG_SAMPLEFORMAT, &xuint16) != 0 ){
+		switch(xuint16){
+			case 0:
+			case 1:
+			case 4:
+				break;
+			default:
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for %s with sample format %u"",
+					TIFFFileName(input),
+					xuint16);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+				break;
+		}
+	}
+	
+	TIFFGetFieldDefaulted(input, TIFFTAG_FILLORDER, &(t2p->tiff_fillorder));
+	
+        if(TIFFGetField(input, TIFFTAG_PHOTOMETRIC, &(t2p->tiff_photometric)) == 0){
+                TIFFError(
+                        TIFF2PDF_MODULE, 
+                        ""No support for %s with no photometric interpretation tag"", 
+                        TIFFFileName(input)     );
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+
+        }
+        
+	switch(t2p->tiff_photometric){
+		case PHOTOMETRIC_MINISWHITE:
+		case PHOTOMETRIC_MINISBLACK: 
+			if (t2p->tiff_bitspersample==1){
+				t2p->pdf_colorspace=T2P_CS_BILEVEL;
+				if(t2p->tiff_photometric==PHOTOMETRIC_MINISWHITE){
+					t2p->pdf_switchdecode ^= 1;
+				}
+			} else {
+				t2p->pdf_colorspace=T2P_CS_GRAY;
+				if(t2p->tiff_photometric==PHOTOMETRIC_MINISWHITE){
+					t2p->pdf_switchdecode ^= 1;
+				} 
+			}
+			break;
+		case PHOTOMETRIC_RGB: 
+			t2p->pdf_colorspace=T2P_CS_RGB;
+			if(t2p->tiff_samplesperpixel == 3){
+				break;
+			}
+			if(TIFFGetField(input, TIFFTAG_INDEXED, &xuint16)){
+				if(xuint16==1)
+					goto photometric_palette;
+			}
+			if(t2p->tiff_samplesperpixel > 3) {
+				if(t2p->tiff_samplesperpixel == 4) {
+					t2p->pdf_colorspace = T2P_CS_RGB;
+					if(TIFFGetField(input,
+							TIFFTAG_EXTRASAMPLES,
+							&xuint16, &xuint16p)
+					   && xuint16 == 1) {
+						if(xuint16p[0] == EXTRASAMPLE_ASSOCALPHA){
+							if( t2p->tiff_bitspersample != 8 )
+							{
+							    TIFFError(
+								    TIFF2PDF_MODULE, 
+								    ""No support for BitsPerSample=%d for RGBA"",
+								    t2p->tiff_bitspersample);
+							    t2p->t2p_error = T2P_ERR_ERROR;
+							    return;
+							}
+							t2p->pdf_sample=T2P_SAMPLE_RGBAA_TO_RGB;
+							break;
+						}
+						if(xuint16p[0] == EXTRASAMPLE_UNASSALPHA){
+							if( t2p->tiff_bitspersample != 8 )
+							{
+							    TIFFError(
+								    TIFF2PDF_MODULE, 
+								    ""No support for BitsPerSample=%d for RGBA"",
+								    t2p->tiff_bitspersample);
+							    t2p->t2p_error = T2P_ERR_ERROR;
+							    return;
+							}
+							t2p->pdf_sample=T2P_SAMPLE_RGBA_TO_RGB;
+							break;
+						}
+						TIFFWarning(
+							TIFF2PDF_MODULE, 
+							""RGB image %s has 4 samples per pixel, assuming RGBA"",
+							TIFFFileName(input));
+							break;
+					}
+					t2p->pdf_colorspace=T2P_CS_CMYK;
+					t2p->pdf_switchdecode ^= 1;
+					TIFFWarning(
+						TIFF2PDF_MODULE, 
+						""RGB image %s has 4 samples per pixel, assuming inverse CMYK"",
+					TIFFFileName(input));
+					break;
+				} else {
+					TIFFError(
+						TIFF2PDF_MODULE, 
+						""No support for RGB image %s with %u samples per pixel"", 
+						TIFFFileName(input), 
+						t2p->tiff_samplesperpixel);
+					t2p->t2p_error = T2P_ERR_ERROR;
+					break;
+				}
+			} else {
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for RGB image %s with %u samples per pixel"", 
+					TIFFFileName(input), 
+					t2p->tiff_samplesperpixel);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				break;
+			}
+		case PHOTOMETRIC_PALETTE: 
+			photometric_palette:
+			if(t2p->tiff_samplesperpixel!=1){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for palettized image %s with not one sample per pixel"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			t2p->pdf_colorspace=T2P_CS_RGB | T2P_CS_PALETTE;
+			t2p->pdf_palettesize=0x0001<<t2p->tiff_bitspersample;
+			if(!TIFFGetField(input, TIFFTAG_COLORMAP, &r, &g, &b)){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Palettized image %s has no color map"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			} 
+			if(t2p->pdf_palette != NULL){
+				_TIFFfree(t2p->pdf_palette);
+				t2p->pdf_palette=NULL;
+			}
+			t2p->pdf_palette = (unsigned char*)
+				_TIFFmalloc(TIFFSafeMultiply(tmsize_t,t2p->pdf_palettesize,3));
+			if(t2p->pdf_palette==NULL){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Can't allocate %u bytes of memory for t2p_read_tiff_image, %s"", 
+					t2p->pdf_palettesize, 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			for(i=0;i<t2p->pdf_palettesize;i++){
+				t2p->pdf_palette[(i*3)]  = (unsigned char) (r[i]>>8);
+				t2p->pdf_palette[(i*3)+1]= (unsigned char) (g[i]>>8);
+				t2p->pdf_palette[(i*3)+2]= (unsigned char) (b[i]>>8);
+			}
+			t2p->pdf_palettesize *= 3;
+			break;
+		case PHOTOMETRIC_SEPARATED:
+			if(TIFFGetField(input, TIFFTAG_INDEXED, &xuint16)){
+				if(xuint16==1){
+						goto photometric_palette_cmyk;
+				}
+			}
+			if( TIFFGetField(input, TIFFTAG_INKSET, &xuint16) ){
+				if(xuint16 != INKSET_CMYK){
+					TIFFError(
+						TIFF2PDF_MODULE, 
+						""No support for %s because its inkset is not CMYK"",
+						TIFFFileName(input) );
+					t2p->t2p_error = T2P_ERR_ERROR;
+					return;
+				}
+			}
+			if(t2p->tiff_samplesperpixel==4){
+				t2p->pdf_colorspace=T2P_CS_CMYK;
+			} else {
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for %s because it has %u samples per pixel"",
+					TIFFFileName(input), 
+					t2p->tiff_samplesperpixel);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			break;
+			photometric_palette_cmyk:
+			if(t2p->tiff_samplesperpixel!=1){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for palettized CMYK image %s with not one sample per pixel"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			t2p->pdf_colorspace=T2P_CS_CMYK | T2P_CS_PALETTE;
+			t2p->pdf_palettesize=0x0001<<t2p->tiff_bitspersample;
+			if(!TIFFGetField(input, TIFFTAG_COLORMAP, &r, &g, &b, &a)){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Palettized image %s has no color map"", 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			} 
+			if(t2p->pdf_palette != NULL){
+				_TIFFfree(t2p->pdf_palette);
+				t2p->pdf_palette=NULL;
+			}
+			t2p->pdf_palette = (unsigned char*) 
+				_TIFFmalloc(TIFFSafeMultiply(tmsize_t,t2p->pdf_palettesize,4));
+			if(t2p->pdf_palette==NULL){
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""Can't allocate %u bytes of memory for t2p_read_tiff_image, %s"", 
+					t2p->pdf_palettesize, 
+					TIFFFileName(input));
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+			}
+			for(i=0;i<t2p->pdf_palettesize;i++){
+				t2p->pdf_palette[(i*4)]  = (unsigned char) (r[i]>>8);
+				t2p->pdf_palette[(i*4)+1]= (unsigned char) (g[i]>>8);
+				t2p->pdf_palette[(i*4)+2]= (unsigned char) (b[i]>>8);
+				t2p->pdf_palette[(i*4)+3]= (unsigned char) (a[i]>>8);
+			}
+			t2p->pdf_palettesize *= 4;
+			break;
+		case PHOTOMETRIC_YCBCR:
+			t2p->pdf_colorspace=T2P_CS_RGB;
+			if(t2p->tiff_samplesperpixel==1){
+				t2p->pdf_colorspace=T2P_CS_GRAY;
+				t2p->tiff_photometric=PHOTOMETRIC_MINISBLACK;
+				break;
+			}
+			t2p->pdf_sample=T2P_SAMPLE_YCBCR_TO_RGB;
+#ifdef JPEG_SUPPORT
+			if(t2p->pdf_defaultcompression==T2P_COMPRESS_JPEG){
+				t2p->pdf_sample=T2P_SAMPLE_NOTHING;
+			}
+#endif
+			break;
+		case PHOTOMETRIC_CIELAB:
+            if( t2p->tiff_samplesperpixel != 3){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Unsupported samplesperpixel = %d for CIELAB"", 
+                    t2p->tiff_samplesperpixel);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+            if( t2p->tiff_bitspersample != 8){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Invalid bitspersample = %d for CIELAB"", 
+                    t2p->tiff_bitspersample);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+			t2p->pdf_labrange[0]= -127;
+			t2p->pdf_labrange[1]= 127;
+			t2p->pdf_labrange[2]= -127;
+			t2p->pdf_labrange[3]= 127;
+			t2p->pdf_sample=T2P_SAMPLE_LAB_SIGNED_TO_UNSIGNED;
+			t2p->pdf_colorspace=T2P_CS_LAB;
+			break;
+		case PHOTOMETRIC_ICCLAB:
+			t2p->pdf_labrange[0]= 0;
+			t2p->pdf_labrange[1]= 255;
+			t2p->pdf_labrange[2]= 0;
+			t2p->pdf_labrange[3]= 255;
+			t2p->pdf_colorspace=T2P_CS_LAB;
+			break;
+		case PHOTOMETRIC_ITULAB:
+            if( t2p->tiff_samplesperpixel != 3){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Unsupported samplesperpixel = %d for ITULAB"", 
+                    t2p->tiff_samplesperpixel);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+            if( t2p->tiff_bitspersample != 8){
+                TIFFError(
+                    TIFF2PDF_MODULE, 
+                    ""Invalid bitspersample = %d for ITULAB"", 
+                    t2p->tiff_bitspersample);
+                t2p->t2p_error = T2P_ERR_ERROR;
+                return;
+            }
+			t2p->pdf_labrange[0]=-85;
+			t2p->pdf_labrange[1]=85;
+			t2p->pdf_labrange[2]=-75;
+			t2p->pdf_labrange[3]=124;
+			t2p->pdf_sample=T2P_SAMPLE_LAB_SIGNED_TO_UNSIGNED;
+			t2p->pdf_colorspace=T2P_CS_LAB;
+			break;
+		case PHOTOMETRIC_LOGL:
+		case PHOTOMETRIC_LOGLUV:
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with photometric interpretation LogL/LogLuv"", 
+				TIFFFileName(input));
+			t2p->t2p_error = T2P_ERR_ERROR;
+			return;
+		default:
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with photometric interpretation %u"", 
+				TIFFFileName(input),
+				t2p->tiff_photometric);
+			t2p->t2p_error = T2P_ERR_ERROR;
+			return;
+	}
+
+	if(TIFFGetField(input, TIFFTAG_PLANARCONFIG, &(t2p->tiff_planar))){
+		switch(t2p->tiff_planar){
+			case 0:
+				TIFFWarning(
+					TIFF2PDF_MODULE, 
+					""Image %s has planar configuration 0, assuming 1"", 
+					TIFFFileName(input));
+				t2p->tiff_planar=PLANARCONFIG_CONTIG;
+			case PLANARCONFIG_CONTIG:
+				break;
+			case PLANARCONFIG_SEPARATE:
+				t2p->pdf_sample=T2P_SAMPLE_PLANAR_SEPARATE_TO_CONTIG;
+				if(t2p->tiff_bitspersample!=8){
+					TIFFError(
+						TIFF2PDF_MODULE, 
+						""No support for %s with separated planar configuration and %u bits per sample"", 
+						TIFFFileName(input),
+						t2p->tiff_bitspersample);
+					t2p->t2p_error = T2P_ERR_ERROR;
+					return;
+				}
+				break;
+			default:
+				TIFFError(
+					TIFF2PDF_MODULE, 
+					""No support for %s with planar configuration %u"", 
+					TIFFFileName(input),
+					t2p->tiff_planar);
+				t2p->t2p_error = T2P_ERR_ERROR;
+				return;
+		}
+	}
+
+        TIFFGetFieldDefaulted(input, TIFFTAG_ORIENTATION,
+                              &(t2p->tiff_orientation));
+        if(t2p->tiff_orientation>8){
+                TIFFWarning(TIFF2PDF_MODULE,
+                            ""Image %s has orientation %u, assuming 0"",
+                            TIFFFileName(input), t2p->tiff_orientation);
+                t2p->tiff_orientation=0;
+        }
+
+        if(TIFFGetField(input, TIFFTAG_XRESOLUTION, &(t2p->tiff_xres) ) == 0){
+                t2p->tiff_xres=0.0;
+        }
+        if(TIFFGetField(input, TIFFTAG_YRESOLUTION, &(t2p->tiff_yres) ) == 0){
+                t2p->tiff_yres=0.0;
+        }
+	TIFFGetFieldDefaulted(input, TIFFTAG_RESOLUTIONUNIT,
+			      &(t2p->tiff_resunit));
+	if(t2p->tiff_resunit == RESUNIT_CENTIMETER) {
+		t2p->tiff_xres *= 2.54F;
+		t2p->tiff_yres *= 2.54F;
+	} else if (t2p->tiff_resunit != RESUNIT_INCH
+		   && t2p->pdf_centimeters != 0) {
+		t2p->tiff_xres *= 2.54F;
+		t2p->tiff_yres *= 2.54F;
+	}
+
+	t2p_compose_pdf_page(t2p);
+        if( t2p->t2p_error == T2P_ERR_ERROR )
+	    return;
+
+	t2p->pdf_transcode = T2P_TRANSCODE_ENCODE;
+        /* It seems that T2P_TRANSCODE_RAW mode doesn't support separate->contig */
+        /* conversion. At least t2p_read_tiff_size and t2p_read_tiff_size_tile */
+        /* do not take into account the number of samples, and thus */
+        /* that can cause heap buffer overflows such as in */
+        /* http://bugzilla.maptools.org/show_bug.cgi?id=2715 */
+	if(t2p->pdf_nopassthrough==0 && t2p->tiff_planar!=PLANARCONFIG_SEPARATE){
+#ifdef CCITT_SUPPORT
+		if(t2p->tiff_compression==COMPRESSION_CCITTFAX4  
+			){
+			if(TIFFIsTiled(input) || (TIFFNumberOfStrips(input)==1) ){
+				t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+				t2p->pdf_compression=T2P_COMPRESS_G4;
+			}
+		}
+#endif
+#ifdef ZIP_SUPPORT
+		if(t2p->tiff_compression== COMPRESSION_ADOBE_DEFLATE 
+			|| t2p->tiff_compression==COMPRESSION_DEFLATE){
+			if(TIFFIsTiled(input) || (TIFFNumberOfStrips(input)==1) ){
+				t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+				t2p->pdf_compression=T2P_COMPRESS_ZIP;
+			}
+		}
+#endif
+#ifdef OJPEG_SUPPORT
+		if(t2p->tiff_compression==COMPRESSION_OJPEG){
+			t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+			t2p->pdf_compression=T2P_COMPRESS_JPEG;
+			t2p_process_ojpeg_tables(t2p, input);
+		}
+#endif
+#ifdef JPEG_SUPPORT
+		if(t2p->tiff_compression==COMPRESSION_JPEG){
+			t2p->pdf_transcode = T2P_TRANSCODE_RAW;
+			t2p->pdf_compression=T2P_COMPRESS_JPEG;
+		}
+#endif
+		(void)0;
+	}
+
+	if(t2p->pdf_transcode!=T2P_TRANSCODE_RAW){
+		t2p->pdf_compression = t2p->pdf_defaultcompression;
+	}
+
+#ifdef JPEG_SUPPORT
+	if(t2p->pdf_defaultcompression==T2P_COMPRESS_JPEG){
+		if(t2p->pdf_colorspace & T2P_CS_PALETTE){
+			t2p->pdf_sample|=T2P_SAMPLE_REALIZE_PALETTE;
+			t2p->pdf_colorspace ^= T2P_CS_PALETTE;
+			t2p->tiff_pages[t2p->pdf_page].page_extra--;
+		}
+	}
+	if(t2p->tiff_compression==COMPRESSION_JPEG){
+		if(t2p->tiff_planar==PLANARCONFIG_SEPARATE){
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with JPEG compression and separated planar configuration"", 
+				TIFFFileName(input));
+				t2p->t2p_error=T2P_ERR_ERROR;
+			return;
+		}
+	}
+#endif
+#ifdef OJPEG_SUPPORT
+	if(t2p->tiff_compression==COMPRESSION_OJPEG){
+		if(t2p->tiff_planar==PLANARCONFIG_SEPARATE){
+			TIFFError(
+				TIFF2PDF_MODULE, 
+				""No support for %s with OJPEG compression and separated planar configuration"", 
+				TIFFFileName(input));
+				t2p->t2p_error=T2P_ERR_ERROR;
+			return;
+		}
+	}
+#endif
+
+	if(t2p->pdf_sample & T2P_SAMPLE_REALIZE_PALETTE){
+		if(t2p->pdf_colorspace & T2P_CS_CMYK){
+			t2p->tiff_samplesperpixel=4;
+			t2p->tiff_photometric=PHOTOMETRIC_SEPARATED;
+		} else {
+			t2p->tiff_samplesperpixel=3;
+			t2p->tiff_photometric=PHOTOMETRIC_RGB;
+		}
+	}
+
+	if (TIFFGetField(input, TIFFTAG_TRANSFERFUNCTION,
+			 &(t2p->tiff_transferfunction[0]),
+			 &(t2p->tiff_transferfunction[1]),
+			 &(t2p->tiff_transferfunction[2]))) {
+		if((t2p->tiff_transferfunction[1] != (float*) NULL) &&
+                   (t2p->tiff_transferfunction[2] != (float*) NULL) &&
+                   (t2p->tiff_transferfunction[1] !=
+                    t2p->tiff_transferfunction[0])) {
+			t2p->tiff_transferfunctioncount=3;
+		} else {
+			t2p->tiff_transferfunctioncount=1;
+		}
+	} else {
+		t2p->tiff_transferfunctioncount=0;
+	}
+	if(TIFFGetField(input, TIFFTAG_WHITEPOINT, &xfloatp)!=0){
+		t2p->tiff_whitechromaticities[0]=xfloatp[0];
+		t2p->tiff_whitechromaticities[1]=xfloatp[1];
+		if(t2p->pdf_colorspace & T2P_CS_GRAY){
+			t2p->pdf_colorspace |= T2P_CS_CALGRAY;
+		}
+		if(t2p->pdf_colorspace & T2P_CS_RGB){
+			t2p->pdf_colorspace |= T2P_CS_CALRGB;
+		}
+	}
+	if(TIFFGetField(input, TIFFTAG_PRIMARYCHROMATICITIES, &xfloatp)!=0){
+		t2p->tiff_primarychromaticities[0]=xfloatp[0];
+		t2p->tiff_primarychromaticities[1]=xfloatp[1];
+		t2p->tiff_primarychromaticities[2]=xfloatp[2];
+		t2p->tiff_primarychromaticities[3]=xfloatp[3];
+		t2p->tiff_primarychromaticities[4]=xfloatp[4];
+		t2p->tiff_primarychromaticities[5]=xfloatp[5];
+		if(t2p->pdf_colorspace & T2P_CS_RGB){
+			t2p->pdf_colorspace |= T2P_CS_CALRGB;
+		}
+	}
+	if(t2p->pdf_colorspace & T2P_CS_LAB){
+		if(TIFFGetField(input, TIFFTAG_WHITEPOINT, &xfloatp) != 0){
+			t2p->tiff_whitechromaticities[0]=xfloatp[0];
+			t2p->tiff_whitechromaticities[1]=xfloatp[1];
+		} else {
+			t2p->tiff_whitechromaticities[0]=0.3457F; /* 0.3127F; */
+			t2p->tiff_whitechromaticities[1]=0.3585F; /* 0.3290F; */
+		}
+	}
+	if(TIFFGetField(input, 
+		TIFFTAG_ICCPROFILE, 
+		&(t2p->tiff_iccprofilelength), 
+		&(t2p->tiff_iccprofile))!=0){
+		t2p->pdf_colorspace |= T2P_CS_ICCBASED;
+	} else {
+		t2p->tiff_iccprofilelength=0;
+		t2p->tiff_iccprofile=NULL;
+	}
+	
+#ifdef CCITT_SUPPORT
+	if( t2p->tiff_bitspersample==1 &&
+		t2p->tiff_samplesperpixel==1){
+		t2p->pdf_compression = T2P_COMPRESS_G4;
+	}
+#endif
+
+
+	return;
+}",
+2633,"[""CWE-787""]",audiofile,822b732fd31ffcb78f6920001e9b1fbd815fa712,822b732fd31ffcb78f6920001e9b1fbd815fa712,0,505415,2.1060519352068542e+38,6.0,"SimpleModule: set output chunk framecount after pull
+
+After pulling the data, set the output chunk to the amount of
+frames we pulled so that the next module in the chain has the correct
+frame count.
+
+Fixes #50 and #51",other,"void SimpleModule::runPull()
+{
+	pull(m_outChunk->frameCount);
+	run(*m_inChunk, *m_outChunk);
+}","void SimpleModule::runPull()
+{
+	pull(m_outChunk->frameCount);
+	m_outChunk->frameCount = m_inChunk->frameCount;
+	run(*m_inChunk, *m_outChunk);
+}",
+2634,"[""CWE-787""]",core,85fcb895ca7f0bcb8ee72047fe0e1e78532ff90b,85fcb895ca7f0bcb8ee72047fe0e1e78532ff90b,0,505558,3.195181870860075e+37,49.0,"lib-imap: Don't accept strings with NULs
+
+IMAP doesn't allow NULs except in binary literals. We'll still allow them
+in regular literals as well, but just not in strings.
+
+This fixes a bug with unescaping a string with NULs: str_unescape() could
+have been called for memory that points outside the allocated string,
+causing heap corruption. This could cause crashes or theoretically even
+result in remote code execution exploit.
+
+Found by Nick Roessler and Rafi Rubin",other,"static bool imap_parser_read_string(struct imap_parser *parser,
+				    const unsigned char *data, size_t data_size)
+{
+	size_t i;
+
+	/* read until we've found non-escaped "", CR or LF */
+	for (i = parser->cur_pos; i < data_size; i++) {
+		if (data[i] == '""') {
+			imap_parser_save_arg(parser, data, i);
+
+			i++; /* skip the trailing '""' too */
+			break;
+		}
+
+		if (data[i] == '\\') {
+			if (i+1 == data_size) {
+				/* known data ends with '\' - leave it to
+				   next time as well if it happens to be \"" */
+				break;
+			}
+
+			/* save the first escaped char */
+			if (parser->str_first_escape < 0)
+				parser->str_first_escape = i;
+
+			/* skip the escaped char */
+			i++;
+		}
+
+		/* check linebreaks here, so escaping CR/LF isn't possible.
+		   string always ends with '""', so it's an error if we found
+		   a linebreak.. */
+		if (is_linebreak(data[i]) &&
+		    (parser->flags & IMAP_PARSE_FLAG_MULTILINE_STR) == 0) {
+			parser->error = IMAP_PARSE_ERROR_BAD_SYNTAX;
+			parser->error_msg = ""Missing '\""'"";
+			return FALSE;
+		}
+	}
+
+	parser->cur_pos = i;
+	return parser->cur_type == ARG_PARSE_NONE;
+}","static bool imap_parser_read_string(struct imap_parser *parser,
+				    const unsigned char *data, size_t data_size)
+{
+	size_t i;
+
+	/* read until we've found non-escaped "", CR or LF */
+	for (i = parser->cur_pos; i < data_size; i++) {
+		if (data[i] == '""') {
+			imap_parser_save_arg(parser, data, i);
+
+			i++; /* skip the trailing '""' too */
+			break;
+		}
+
+		if (data[i] == '\0') {
+			parser->error = IMAP_PARSE_ERROR_BAD_SYNTAX;
+			parser->error_msg = ""NULs not allowed in strings"";
+			return FALSE;
+		}
+
+		if (data[i] == '\\') {
+			if (i+1 == data_size) {
+				/* known data ends with '\' - leave it to
+				   next time as well if it happens to be \"" */
+				break;
+			}
+
+			/* save the first escaped char */
+			if (parser->str_first_escape < 0)
+				parser->str_first_escape = i;
+
+			/* skip the escaped char */
+			i++;
+		}
+
+		/* check linebreaks here, so escaping CR/LF isn't possible.
+		   string always ends with '""', so it's an error if we found
+		   a linebreak.. */
+		if (is_linebreak(data[i]) &&
+		    (parser->flags & IMAP_PARSE_FLAG_MULTILINE_STR) == 0) {
+			parser->error = IMAP_PARSE_ERROR_BAD_SYNTAX;
+			parser->error_msg = ""Missing '\""'"";
+			return FALSE;
+		}
+	}
+
+	parser->cur_pos = i;
+	return parser->cur_type == ARG_PARSE_NONE;
+}",
+2635,"[""CWE-787""]",core,f904cbdfec25582bc5e2a7435bf82ff769f2526a,f904cbdfec25582bc5e2a7435bf82ff769f2526a,0,505580,2.4120571663183775e+38,63.0,"lib-imap: Make sure str_unescape() won't be writing past allocated memory
+
+The previous commit should already prevent this, but this makes sure it
+can't become broken in the future either. It makes the performance a tiny
+bit worse, but that's not practically noticeable.",other,"static void imap_parser_save_arg(struct imap_parser *parser,
+				 const unsigned char *data, size_t size)
+{
+	struct imap_arg *arg;
+	char *str;
+
+	arg = imap_arg_create(parser);
+
+	switch (parser->cur_type) {
+	case ARG_PARSE_ATOM:
+	case ARG_PARSE_TEXT:
+		if (size == 3 && i_memcasecmp(data, ""NIL"", 3) == 0) {
+			/* NIL argument. it might be an actual NIL, but if
+			   we're reading astring, it's an atom and we can't
+			   lose its case. */
+			arg->type = IMAP_ARG_NIL;
+		} else {
+			/* simply save the string */
+			arg->type = IMAP_ARG_ATOM;
+		}
+		arg->_data.str = imap_parser_strdup(parser, data, size);
+		arg->str_len = size;
+		break;
+	case ARG_PARSE_STRING:
+		/* data is quoted and may contain escapes. */
+		i_assert(size > 0);
+
+		arg->type = IMAP_ARG_STRING;
+		str = p_strndup(parser->pool, data+1, size-1);
+
+		/* remove the escapes */
+		if (parser->str_first_escape >= 0 &&
+		    (parser->flags & IMAP_PARSE_FLAG_NO_UNESCAPE) == 0) {
+			/* -1 because we skipped the '""' prefix */
+			(void)str_unescape(str + parser->str_first_escape-1);
+		}
+		arg->_data.str = str;
+		arg->str_len = strlen(str);
+		break;
+	case ARG_PARSE_LITERAL_DATA:
+		if ((parser->flags & IMAP_PARSE_FLAG_LITERAL_SIZE) != 0) {
+			/* save literal size */
+			arg->type = parser->literal_nonsync ?
+				IMAP_ARG_LITERAL_SIZE_NONSYNC :
+				IMAP_ARG_LITERAL_SIZE;
+			arg->_data.literal_size = parser->literal_size;
+			arg->literal8 = parser->literal8;
+			break;
+		}
+		/* fall through */
+	case ARG_PARSE_LITERAL_DATA_FORCED:
+		if ((parser->flags & IMAP_PARSE_FLAG_LITERAL_TYPE) != 0)
+			arg->type = IMAP_ARG_LITERAL;
+		else
+			arg->type = IMAP_ARG_STRING;
+		arg->_data.str = imap_parser_strdup(parser, data, size);
+		arg->literal8 = parser->literal8;
+		arg->str_len = size;
+		break;
+	default:
+                i_unreached();
+	}
+
+	parser->cur_type = ARG_PARSE_NONE;
+}","static void imap_parser_save_arg(struct imap_parser *parser,
+				 const unsigned char *data, size_t size)
+{
+	struct imap_arg *arg;
+	char *str;
+
+	arg = imap_arg_create(parser);
+
+	switch (parser->cur_type) {
+	case ARG_PARSE_ATOM:
+	case ARG_PARSE_TEXT:
+		if (size == 3 && i_memcasecmp(data, ""NIL"", 3) == 0) {
+			/* NIL argument. it might be an actual NIL, but if
+			   we're reading astring, it's an atom and we can't
+			   lose its case. */
+			arg->type = IMAP_ARG_NIL;
+		} else {
+			/* simply save the string */
+			arg->type = IMAP_ARG_ATOM;
+		}
+		arg->_data.str = imap_parser_strdup(parser, data, size);
+		arg->str_len = size;
+		break;
+	case ARG_PARSE_STRING:
+		/* data is quoted and may contain escapes. */
+		i_assert(size > 0);
+
+		arg->type = IMAP_ARG_STRING;
+		str = p_strndup(parser->pool, data+1, size-1);
+
+		/* remove the escapes */
+		if (parser->str_first_escape >= 0 &&
+		    (parser->flags & IMAP_PARSE_FLAG_NO_UNESCAPE) == 0)
+			(void)str_unescape(str);
+		arg->_data.str = str;
+		arg->str_len = strlen(str);
+		break;
+	case ARG_PARSE_LITERAL_DATA:
+		if ((parser->flags & IMAP_PARSE_FLAG_LITERAL_SIZE) != 0) {
+			/* save literal size */
+			arg->type = parser->literal_nonsync ?
+				IMAP_ARG_LITERAL_SIZE_NONSYNC :
+				IMAP_ARG_LITERAL_SIZE;
+			arg->_data.literal_size = parser->literal_size;
+			arg->literal8 = parser->literal8;
+			break;
+		}
+		/* fall through */
+	case ARG_PARSE_LITERAL_DATA_FORCED:
+		if ((parser->flags & IMAP_PARSE_FLAG_LITERAL_TYPE) != 0)
+			arg->type = IMAP_ARG_LITERAL;
+		else
+			arg->type = IMAP_ARG_STRING;
+		arg->_data.str = imap_parser_strdup(parser, data, size);
+		arg->literal8 = parser->literal8;
+		arg->str_len = size;
+		break;
+	default:
+                i_unreached();
+	}
+
+	parser->cur_type = ARG_PARSE_NONE;
+}",
+2658,"[""CWE-787""]",qemu,defac5e2fbddf8423a354ff0454283a2115e1367,defac5e2fbddf8423a354ff0454283a2115e1367,0,507394,2.6032437195289803e+38,113.0,"hw/block/fdc: Prevent end-of-track overrun (CVE-2021-3507)
+
+Per the 82078 datasheet, if the end-of-track (EOT byte in
+the FIFO) is more than the number of sectors per side, the
+command is terminated unsuccessfully:
+
+* 5.2.5 DATA TRANSFER TERMINATION
+
+  The 82078 supports terminal count explicitly through
+  the TC pin and implicitly through the underrun/over-
+  run and end-of-track (EOT) functions. For full sector
+  transfers, the EOT parameter can define the last
+  sector to be transferred in a single or multisector
+  transfer. If the last sector to be transferred is a par-
+  tial sector, the host can stop transferring the data in
+  mid-sector, and the 82078 will continue to complete
+  the sector as if a hardware TC was received. The
+  only difference between these implicit functions and
+  TC is that they return ""abnormal termination"" result
+  status. Such status indications can be ignored if they
+  were expected.
+
+* 6.1.3 READ TRACK
+
+  This command terminates when the EOT specified
+  number of sectors have been read. If the 82078
+  does not find an I D Address Mark on the diskette
+  after the second· occurrence of a pulse on the
+  INDX# pin, then it sets the IC code in Status Regis-
+  ter 0 to ""01"" (Abnormal termination), sets the MA bit
+  in Status Register 1 to ""1"", and terminates the com-
+  mand.
+
+* 6.1.6 VERIFY
+
+  Refer to Table 6-6 and Table 6-7 for information
+  concerning the values of MT and EC versus SC and
+  EOT value.
+
+* Table 6·6. Result Phase Table
+
+* Table 6-7. Verify Command Result Phase Table
+
+Fix by aborting the transfer when EOT > # Sectors Per Side.
+
+Cc: qemu-stable@nongnu.org
+Cc: Hervé Poussineau <hpoussin@reactos.org>
+Fixes: baca51faff0 (""floppy driver: disk geometry auto detect"")
+Reported-by: Alexander Bulekov <alxndr@bu.edu>
+Resolves: https://gitlab.com/qemu-project/qemu/-/issues/339
+Signed-off-by: Philippe Mathieu-Daudé <philmd@redhat.com>
+Message-Id: <20211118115733.4038610-2-philmd@redhat.com>
+Reviewed-by: Hanna Reitz <hreitz@redhat.com>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>",other,"static void fdctrl_start_transfer(FDCtrl *fdctrl, int direction)
+{
+    FDrive *cur_drv;
+    uint8_t kh, kt, ks;
+
+    SET_CUR_DRV(fdctrl, fdctrl->fifo[1] & FD_DOR_SELMASK);
+    cur_drv = get_cur_drv(fdctrl);
+    kt = fdctrl->fifo[2];
+    kh = fdctrl->fifo[3];
+    ks = fdctrl->fifo[4];
+    FLOPPY_DPRINTF(""Start transfer at %d %d %02x %02x (%d)\n"",
+                   GET_CUR_DRV(fdctrl), kh, kt, ks,
+                   fd_sector_calc(kh, kt, ks, cur_drv->last_sect,
+                                  NUM_SIDES(cur_drv)));
+    switch (fd_seek(cur_drv, kh, kt, ks, fdctrl->config & FD_CONFIG_EIS)) {
+    case 2:
+        /* sect too big */
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, 0x00, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    case 3:
+        /* track too big */
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, FD_SR1_EC, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    case 4:
+        /* No seek enabled */
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, 0x00, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    case 1:
+        fdctrl->status0 |= FD_SR0_SEEK;
+        break;
+    default:
+        break;
+    }
+
+    /* Check the data rate. If the programmed data rate does not match
+     * the currently inserted medium, the operation has to fail. */
+    if ((fdctrl->dsr & FD_DSR_DRATEMASK) != cur_drv->media_rate) {
+        FLOPPY_DPRINTF(""data rate mismatch (fdc=%d, media=%d)\n"",
+                       fdctrl->dsr & FD_DSR_DRATEMASK, cur_drv->media_rate);
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, FD_SR1_MA, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    }
+
+    /* Set the FIFO state */
+    fdctrl->data_dir = direction;
+    fdctrl->data_pos = 0;
+    assert(fdctrl->msr & FD_MSR_CMDBUSY);
+    if (fdctrl->fifo[0] & 0x80)
+        fdctrl->data_state |= FD_STATE_MULTI;
+    else
+        fdctrl->data_state &= ~FD_STATE_MULTI;
+    if (fdctrl->fifo[5] == 0) {
+        fdctrl->data_len = fdctrl->fifo[8];
+    } else {
+        int tmp;
+        fdctrl->data_len = 128 << (fdctrl->fifo[5] > 7 ? 7 : fdctrl->fifo[5]);
+        tmp = (fdctrl->fifo[6] - ks + 1);
+        if (fdctrl->fifo[0] & 0x80)
+            tmp += fdctrl->fifo[6];
+        fdctrl->data_len *= tmp;
+    }
+    fdctrl->eot = fdctrl->fifo[6];
+    if (fdctrl->dor & FD_DOR_DMAEN) {
+        /* DMA transfer is enabled. */
+        IsaDmaClass *k = ISADMA_GET_CLASS(fdctrl->dma);
+
+        FLOPPY_DPRINTF(""direction=%d (%d - %d)\n"",
+                       direction, (128 << fdctrl->fifo[5]) *
+                       (cur_drv->last_sect - ks + 1), fdctrl->data_len);
+
+        /* No access is allowed until DMA transfer has completed */
+        fdctrl->msr &= ~FD_MSR_RQM;
+        if (direction != FD_DIR_VERIFY) {
+            /*
+             * Now, we just have to wait for the DMA controller to
+             * recall us...
+             */
+            k->hold_DREQ(fdctrl->dma, fdctrl->dma_chann);
+            k->schedule(fdctrl->dma);
+        } else {
+            /* Start transfer */
+            fdctrl_transfer_handler(fdctrl, fdctrl->dma_chann, 0,
+                    fdctrl->data_len);
+        }
+        return;
+    }
+    FLOPPY_DPRINTF(""start non-DMA transfer\n"");
+    fdctrl->msr |= FD_MSR_NONDMA | FD_MSR_RQM;
+    if (direction != FD_DIR_WRITE)
+        fdctrl->msr |= FD_MSR_DIO;
+    /* IO based transfer: calculate len */
+    fdctrl_raise_irq(fdctrl);
+}","static void fdctrl_start_transfer(FDCtrl *fdctrl, int direction)
+{
+    FDrive *cur_drv;
+    uint8_t kh, kt, ks;
+
+    SET_CUR_DRV(fdctrl, fdctrl->fifo[1] & FD_DOR_SELMASK);
+    cur_drv = get_cur_drv(fdctrl);
+    kt = fdctrl->fifo[2];
+    kh = fdctrl->fifo[3];
+    ks = fdctrl->fifo[4];
+    FLOPPY_DPRINTF(""Start transfer at %d %d %02x %02x (%d)\n"",
+                   GET_CUR_DRV(fdctrl), kh, kt, ks,
+                   fd_sector_calc(kh, kt, ks, cur_drv->last_sect,
+                                  NUM_SIDES(cur_drv)));
+    switch (fd_seek(cur_drv, kh, kt, ks, fdctrl->config & FD_CONFIG_EIS)) {
+    case 2:
+        /* sect too big */
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, 0x00, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    case 3:
+        /* track too big */
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, FD_SR1_EC, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    case 4:
+        /* No seek enabled */
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, 0x00, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    case 1:
+        fdctrl->status0 |= FD_SR0_SEEK;
+        break;
+    default:
+        break;
+    }
+
+    /* Check the data rate. If the programmed data rate does not match
+     * the currently inserted medium, the operation has to fail. */
+    if ((fdctrl->dsr & FD_DSR_DRATEMASK) != cur_drv->media_rate) {
+        FLOPPY_DPRINTF(""data rate mismatch (fdc=%d, media=%d)\n"",
+                       fdctrl->dsr & FD_DSR_DRATEMASK, cur_drv->media_rate);
+        fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, FD_SR1_MA, 0x00);
+        fdctrl->fifo[3] = kt;
+        fdctrl->fifo[4] = kh;
+        fdctrl->fifo[5] = ks;
+        return;
+    }
+
+    /* Set the FIFO state */
+    fdctrl->data_dir = direction;
+    fdctrl->data_pos = 0;
+    assert(fdctrl->msr & FD_MSR_CMDBUSY);
+    if (fdctrl->fifo[0] & 0x80)
+        fdctrl->data_state |= FD_STATE_MULTI;
+    else
+        fdctrl->data_state &= ~FD_STATE_MULTI;
+    if (fdctrl->fifo[5] == 0) {
+        fdctrl->data_len = fdctrl->fifo[8];
+    } else {
+        int tmp;
+        fdctrl->data_len = 128 << (fdctrl->fifo[5] > 7 ? 7 : fdctrl->fifo[5]);
+        tmp = (fdctrl->fifo[6] - ks + 1);
+        if (tmp < 0) {
+            FLOPPY_DPRINTF(""invalid EOT: %d\n"", tmp);
+            fdctrl_stop_transfer(fdctrl, FD_SR0_ABNTERM, FD_SR1_MA, 0x00);
+            fdctrl->fifo[3] = kt;
+            fdctrl->fifo[4] = kh;
+            fdctrl->fifo[5] = ks;
+            return;
+        }
+        if (fdctrl->fifo[0] & 0x80)
+            tmp += fdctrl->fifo[6];
+        fdctrl->data_len *= tmp;
+    }
+    fdctrl->eot = fdctrl->fifo[6];
+    if (fdctrl->dor & FD_DOR_DMAEN) {
+        /* DMA transfer is enabled. */
+        IsaDmaClass *k = ISADMA_GET_CLASS(fdctrl->dma);
+
+        FLOPPY_DPRINTF(""direction=%d (%d - %d)\n"",
+                       direction, (128 << fdctrl->fifo[5]) *
+                       (cur_drv->last_sect - ks + 1), fdctrl->data_len);
+
+        /* No access is allowed until DMA transfer has completed */
+        fdctrl->msr &= ~FD_MSR_RQM;
+        if (direction != FD_DIR_VERIFY) {
+            /*
+             * Now, we just have to wait for the DMA controller to
+             * recall us...
+             */
+            k->hold_DREQ(fdctrl->dma, fdctrl->dma_chann);
+            k->schedule(fdctrl->dma);
+        } else {
+            /* Start transfer */
+            fdctrl_transfer_handler(fdctrl, fdctrl->dma_chann, 0,
+                    fdctrl->data_len);
+        }
+        return;
+    }
+    FLOPPY_DPRINTF(""start non-DMA transfer\n"");
+    fdctrl->msr |= FD_MSR_NONDMA | FD_MSR_RQM;
+    if (direction != FD_DIR_WRITE)
+        fdctrl->msr |= FD_MSR_DIO;
+    /* IO based transfer: calculate len */
+    fdctrl_raise_irq(fdctrl);
+}",
+2659,"[""CWE-787""]",qemu,46609b90d9e3a6304def11038a76b58ff43f77bc,46609b90d9e3a6304def11038a76b58ff43f77bc,0,507404,1.5698766695641489e+38,41.0,"tests/qtest/fdc-test: Add a regression test for CVE-2021-3507
+
+Add the reproducer from https://gitlab.com/qemu-project/qemu/-/issues/339
+
+Without the previous commit, when running 'make check-qtest-i386'
+with QEMU configured with '--enable-sanitizers' we get:
+
+  ==4028352==ERROR: AddressSanitizer: heap-buffer-overflow on address 0x619000062a00 at pc 0x5626d03c491a bp 0x7ffdb4199410 sp 0x7ffdb4198bc0
+  READ of size 786432 at 0x619000062a00 thread T0
+      #0 0x5626d03c4919 in __asan_memcpy (qemu-system-i386+0x1e65919)
+      #1 0x5626d1c023cc in flatview_write_continue softmmu/physmem.c:2787:13
+      #2 0x5626d1bf0c0f in flatview_write softmmu/physmem.c:2822:14
+      #3 0x5626d1bf0798 in address_space_write softmmu/physmem.c:2914:18
+      #4 0x5626d1bf0f37 in address_space_rw softmmu/physmem.c:2924:16
+      #5 0x5626d1bf14c8 in cpu_physical_memory_rw softmmu/physmem.c:2933:5
+      #6 0x5626d0bd5649 in cpu_physical_memory_write include/exec/cpu-common.h:82:5
+      #7 0x5626d0bd0a07 in i8257_dma_write_memory hw/dma/i8257.c:452:9
+      #8 0x5626d09f825d in fdctrl_transfer_handler hw/block/fdc.c:1616:13
+      #9 0x5626d0a048b4 in fdctrl_start_transfer hw/block/fdc.c:1539:13
+      #10 0x5626d09f4c3e in fdctrl_write_data hw/block/fdc.c:2266:13
+      #11 0x5626d09f22f7 in fdctrl_write hw/block/fdc.c:829:9
+      #12 0x5626d1c20bc5 in portio_write softmmu/ioport.c:207:17
+
+  0x619000062a00 is located 0 bytes to the right of 512-byte region [0x619000062800,0x619000062a00)
+  allocated by thread T0 here:
+      #0 0x5626d03c66ec in posix_memalign (qemu-system-i386+0x1e676ec)
+      #1 0x5626d2b988d4 in qemu_try_memalign util/oslib-posix.c:210:11
+      #2 0x5626d2b98b0c in qemu_memalign util/oslib-posix.c:226:27
+      #3 0x5626d09fbaf0 in fdctrl_realize_common hw/block/fdc.c:2341:20
+      #4 0x5626d0a150ed in isabus_fdc_realize hw/block/fdc-isa.c:113:5
+      #5 0x5626d2367935 in device_set_realized hw/core/qdev.c:531:13
+
+  SUMMARY: AddressSanitizer: heap-buffer-overflow (qemu-system-i386+0x1e65919) in __asan_memcpy
+  Shadow bytes around the buggy address:
+    0x0c32800044f0: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+    0x0c3280004500: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0x0c3280004510: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0x0c3280004520: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+    0x0c3280004530: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  =>0x0c3280004540:[fa]fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+    0x0c3280004550: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+    0x0c3280004560: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+    0x0c3280004570: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+    0x0c3280004580: fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa fa
+    0x0c3280004590: fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd fd
+  Shadow byte legend (one shadow byte represents 8 application bytes):
+    Addressable:           00
+    Heap left redzone:       fa
+    Freed heap region:       fd
+  ==4028352==ABORTING
+
+[ kwolf: Added snapshot=on to prevent write file lock failure ]
+
+Reported-by: Alexander Bulekov <alxndr@bu.edu>
+Signed-off-by: Philippe Mathieu-Daudé <philmd@redhat.com>
+Reviewed-by: Alexander Bulekov <alxndr@bu.edu>
+Signed-off-by: Kevin Wolf <kwolf@redhat.com>",other,"int main(int argc, char **argv)
+{
+    int fd;
+    int ret;
+
+    /* Create a temporary raw image */
+    fd = mkstemp(test_image);
+    g_assert(fd >= 0);
+    ret = ftruncate(fd, TEST_IMAGE_SIZE);
+    g_assert(ret == 0);
+    close(fd);
+
+    /* Run the tests */
+    g_test_init(&argc, &argv, NULL);
+
+    qtest_start(""-machine pc -device floppy,id=floppy0"");
+    qtest_irq_intercept_in(global_qtest, ""ioapic"");
+    qtest_add_func(""/fdc/cmos"", test_cmos);
+    qtest_add_func(""/fdc/no_media_on_start"", test_no_media_on_start);
+    qtest_add_func(""/fdc/read_without_media"", test_read_without_media);
+    qtest_add_func(""/fdc/media_change"", test_media_change);
+    qtest_add_func(""/fdc/sense_interrupt"", test_sense_interrupt);
+    qtest_add_func(""/fdc/relative_seek"", test_relative_seek);
+    qtest_add_func(""/fdc/read_id"", test_read_id);
+    qtest_add_func(""/fdc/verify"", test_verify);
+    qtest_add_func(""/fdc/media_insert"", test_media_insert);
+    qtest_add_func(""/fdc/read_no_dma_1"", test_read_no_dma_1);
+    qtest_add_func(""/fdc/read_no_dma_18"", test_read_no_dma_18);
+    qtest_add_func(""/fdc/read_no_dma_19"", test_read_no_dma_19);
+    qtest_add_func(""/fdc/fuzz-registers"", fuzz_registers);
+    qtest_add_func(""/fdc/fuzz/cve_2021_20196"", test_cve_2021_20196);
+
+    ret = g_test_run();
+
+    /* Cleanup */
+    qtest_end();
+    unlink(test_image);
+
+    return ret;
+}","int main(int argc, char **argv)
+{
+    int fd;
+    int ret;
+
+    /* Create a temporary raw image */
+    fd = mkstemp(test_image);
+    g_assert(fd >= 0);
+    ret = ftruncate(fd, TEST_IMAGE_SIZE);
+    g_assert(ret == 0);
+    close(fd);
+
+    /* Run the tests */
+    g_test_init(&argc, &argv, NULL);
+
+    qtest_start(""-machine pc -device floppy,id=floppy0"");
+    qtest_irq_intercept_in(global_qtest, ""ioapic"");
+    qtest_add_func(""/fdc/cmos"", test_cmos);
+    qtest_add_func(""/fdc/no_media_on_start"", test_no_media_on_start);
+    qtest_add_func(""/fdc/read_without_media"", test_read_without_media);
+    qtest_add_func(""/fdc/media_change"", test_media_change);
+    qtest_add_func(""/fdc/sense_interrupt"", test_sense_interrupt);
+    qtest_add_func(""/fdc/relative_seek"", test_relative_seek);
+    qtest_add_func(""/fdc/read_id"", test_read_id);
+    qtest_add_func(""/fdc/verify"", test_verify);
+    qtest_add_func(""/fdc/media_insert"", test_media_insert);
+    qtest_add_func(""/fdc/read_no_dma_1"", test_read_no_dma_1);
+    qtest_add_func(""/fdc/read_no_dma_18"", test_read_no_dma_18);
+    qtest_add_func(""/fdc/read_no_dma_19"", test_read_no_dma_19);
+    qtest_add_func(""/fdc/fuzz-registers"", fuzz_registers);
+    qtest_add_func(""/fdc/fuzz/cve_2021_20196"", test_cve_2021_20196);
+    qtest_add_func(""/fdc/fuzz/cve_2021_3507"", test_cve_2021_3507);
+
+    ret = g_test_run();
+
+    /* Cleanup */
+    qtest_end();
+    unlink(test_image);
+
+    return ret;
+}",
+2678,"[""CWE-787""]",openssl,4d8a88c134df634ba610ff8db1eb8478ac5fd345,4d8a88c134df634ba610ff8db1eb8478ac5fd345,0,514727,1.0651397769901391e+38,134.0,"rsa: fix bn_reduce_once_in_place call for rsaz_mod_exp_avx512_x2
+
+bn_reduce_once_in_place expects the number of BN_ULONG, but factor_size
+is moduli bit size.
+
+Fixes #18625.
+
+Signed-off-by: Xi Ruoyao <xry111@xry111.site>
+
+Reviewed-by: Tomas Mraz <tomas@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>
+(Merged from https://github.com/openssl/openssl/pull/18626)",other,"int ossl_rsaz_mod_exp_avx512_x2(BN_ULONG *res1,
+                                const BN_ULONG *base1,
+                                const BN_ULONG *exp1,
+                                const BN_ULONG *m1,
+                                const BN_ULONG *rr1,
+                                BN_ULONG k0_1,
+                                BN_ULONG *res2,
+                                const BN_ULONG *base2,
+                                const BN_ULONG *exp2,
+                                const BN_ULONG *m2,
+                                const BN_ULONG *rr2,
+                                BN_ULONG k0_2,
+                                int factor_size)
+{
+    typedef void (*AMM)(BN_ULONG *res, const BN_ULONG *a,
+                        const BN_ULONG *b, const BN_ULONG *m, BN_ULONG k0);
+    int ret = 0;
+
+    /*
+     * Number of word-size (BN_ULONG) digits to store exponent in redundant
+     * representation.
+     */
+    int exp_digits = number_of_digits(factor_size + 2, DIGIT_SIZE);
+    int coeff_pow = 4 * (DIGIT_SIZE * exp_digits - factor_size);
+
+    /*  Number of YMM registers required to store exponent's digits */
+    int ymm_regs_num = NUMBER_OF_REGISTERS(exp_digits, 256 /* ymm bit size */);
+    /* Capacity of the register set (in qwords) to store exponent */
+    int regs_capacity = ymm_regs_num * 4;
+
+    BN_ULONG *base1_red, *m1_red, *rr1_red;
+    BN_ULONG *base2_red, *m2_red, *rr2_red;
+    BN_ULONG *coeff_red;
+    BN_ULONG *storage = NULL;
+    BN_ULONG *storage_aligned = NULL;
+    int storage_len_bytes = 7 * regs_capacity * sizeof(BN_ULONG)
+                           + 64 /* alignment */;
+
+    const BN_ULONG *exp[2] = {0};
+    BN_ULONG k0[2] = {0};
+    /* AMM = Almost Montgomery Multiplication */
+    AMM amm = NULL;
+
+    switch (factor_size) {
+    case 1024:
+        amm = ossl_rsaz_amm52x20_x1_ifma256;
+        break;
+    case 1536:
+        amm = ossl_rsaz_amm52x30_x1_ifma256;
+        break;
+    case 2048:
+        amm = ossl_rsaz_amm52x40_x1_ifma256;
+        break;
+    default:
+        goto err;
+    }
+
+    storage = (BN_ULONG *)OPENSSL_malloc(storage_len_bytes);
+    if (storage == NULL)
+        goto err;
+    storage_aligned = (BN_ULONG *)ALIGN_OF(storage, 64);
+
+    /* Memory layout for red(undant) representations */
+    base1_red = storage_aligned;
+    base2_red = storage_aligned + 1 * regs_capacity;
+    m1_red    = storage_aligned + 2 * regs_capacity;
+    m2_red    = storage_aligned + 3 * regs_capacity;
+    rr1_red   = storage_aligned + 4 * regs_capacity;
+    rr2_red   = storage_aligned + 5 * regs_capacity;
+    coeff_red = storage_aligned + 6 * regs_capacity;
+
+    /* Convert base_i, m_i, rr_i, from regular to 52-bit radix */
+    to_words52(base1_red, regs_capacity, base1, factor_size);
+    to_words52(base2_red, regs_capacity, base2, factor_size);
+    to_words52(m1_red,    regs_capacity, m1,    factor_size);
+    to_words52(m2_red,    regs_capacity, m2,    factor_size);
+    to_words52(rr1_red,   regs_capacity, rr1,   factor_size);
+    to_words52(rr2_red,   regs_capacity, rr2,   factor_size);
+
+    /*
+     * Compute target domain Montgomery converters RR' for each modulus
+     * based on precomputed original domain's RR.
+     *
+     * RR -> RR' transformation steps:
+     *  (1) coeff = 2^k
+     *  (2) t = AMM(RR,RR) = RR^2 / R' mod m
+     *  (3) RR' = AMM(t, coeff) = RR^2 * 2^k / R'^2 mod m
+     * where
+     *  k = 4 * (52 * digits52 - modlen)
+     *  R  = 2^(64 * ceil(modlen/64)) mod m
+     *  RR = R^2 mod m
+     *  R' = 2^(52 * ceil(modlen/52)) mod m
+     *
+     *  EX/ modlen = 1024: k = 64, RR = 2^2048 mod m, RR' = 2^2080 mod m
+     */
+    memset(coeff_red, 0, exp_digits * sizeof(BN_ULONG));
+    /* (1) in reduced domain representation */
+    set_bit(coeff_red, 64 * (int)(coeff_pow / 52) + coeff_pow % 52);
+
+    amm(rr1_red, rr1_red, rr1_red, m1_red, k0_1);     /* (2) for m1 */
+    amm(rr1_red, rr1_red, coeff_red, m1_red, k0_1);   /* (3) for m1 */
+
+    amm(rr2_red, rr2_red, rr2_red, m2_red, k0_2);     /* (2) for m2 */
+    amm(rr2_red, rr2_red, coeff_red, m2_red, k0_2);   /* (3) for m2 */
+
+    exp[0] = exp1;
+    exp[1] = exp2;
+
+    k0[0] = k0_1;
+    k0[1] = k0_2;
+
+    /* Dual (2-exps in parallel) exponentiation */
+    ret = RSAZ_mod_exp_x2_ifma256(rr1_red, base1_red, exp, m1_red, rr1_red,
+                                  k0, factor_size);
+    if (!ret)
+        goto err;
+
+    /* Convert rr_i back to regular radix */
+    from_words52(res1, factor_size, rr1_red);
+    from_words52(res2, factor_size, rr2_red);
+
+    bn_reduce_once_in_place(res1, /*carry=*/0, m1, storage, factor_size);
+    bn_reduce_once_in_place(res2, /*carry=*/0, m2, storage, factor_size);
+
+err:
+    if (storage != NULL) {
+        OPENSSL_cleanse(storage, storage_len_bytes);
+        OPENSSL_free(storage);
+    }
+    return ret;
+}","int ossl_rsaz_mod_exp_avx512_x2(BN_ULONG *res1,
+                                const BN_ULONG *base1,
+                                const BN_ULONG *exp1,
+                                const BN_ULONG *m1,
+                                const BN_ULONG *rr1,
+                                BN_ULONG k0_1,
+                                BN_ULONG *res2,
+                                const BN_ULONG *base2,
+                                const BN_ULONG *exp2,
+                                const BN_ULONG *m2,
+                                const BN_ULONG *rr2,
+                                BN_ULONG k0_2,
+                                int factor_size)
+{
+    typedef void (*AMM)(BN_ULONG *res, const BN_ULONG *a,
+                        const BN_ULONG *b, const BN_ULONG *m, BN_ULONG k0);
+    int ret = 0;
+
+    /*
+     * Number of word-size (BN_ULONG) digits to store exponent in redundant
+     * representation.
+     */
+    int exp_digits = number_of_digits(factor_size + 2, DIGIT_SIZE);
+    int coeff_pow = 4 * (DIGIT_SIZE * exp_digits - factor_size);
+
+    /*  Number of YMM registers required to store exponent's digits */
+    int ymm_regs_num = NUMBER_OF_REGISTERS(exp_digits, 256 /* ymm bit size */);
+    /* Capacity of the register set (in qwords) to store exponent */
+    int regs_capacity = ymm_regs_num * 4;
+
+    BN_ULONG *base1_red, *m1_red, *rr1_red;
+    BN_ULONG *base2_red, *m2_red, *rr2_red;
+    BN_ULONG *coeff_red;
+    BN_ULONG *storage = NULL;
+    BN_ULONG *storage_aligned = NULL;
+    int storage_len_bytes = 7 * regs_capacity * sizeof(BN_ULONG)
+                           + 64 /* alignment */;
+
+    const BN_ULONG *exp[2] = {0};
+    BN_ULONG k0[2] = {0};
+    /* AMM = Almost Montgomery Multiplication */
+    AMM amm = NULL;
+
+    switch (factor_size) {
+    case 1024:
+        amm = ossl_rsaz_amm52x20_x1_ifma256;
+        break;
+    case 1536:
+        amm = ossl_rsaz_amm52x30_x1_ifma256;
+        break;
+    case 2048:
+        amm = ossl_rsaz_amm52x40_x1_ifma256;
+        break;
+    default:
+        goto err;
+    }
+
+    storage = (BN_ULONG *)OPENSSL_malloc(storage_len_bytes);
+    if (storage == NULL)
+        goto err;
+    storage_aligned = (BN_ULONG *)ALIGN_OF(storage, 64);
+
+    /* Memory layout for red(undant) representations */
+    base1_red = storage_aligned;
+    base2_red = storage_aligned + 1 * regs_capacity;
+    m1_red    = storage_aligned + 2 * regs_capacity;
+    m2_red    = storage_aligned + 3 * regs_capacity;
+    rr1_red   = storage_aligned + 4 * regs_capacity;
+    rr2_red   = storage_aligned + 5 * regs_capacity;
+    coeff_red = storage_aligned + 6 * regs_capacity;
+
+    /* Convert base_i, m_i, rr_i, from regular to 52-bit radix */
+    to_words52(base1_red, regs_capacity, base1, factor_size);
+    to_words52(base2_red, regs_capacity, base2, factor_size);
+    to_words52(m1_red,    regs_capacity, m1,    factor_size);
+    to_words52(m2_red,    regs_capacity, m2,    factor_size);
+    to_words52(rr1_red,   regs_capacity, rr1,   factor_size);
+    to_words52(rr2_red,   regs_capacity, rr2,   factor_size);
+
+    /*
+     * Compute target domain Montgomery converters RR' for each modulus
+     * based on precomputed original domain's RR.
+     *
+     * RR -> RR' transformation steps:
+     *  (1) coeff = 2^k
+     *  (2) t = AMM(RR,RR) = RR^2 / R' mod m
+     *  (3) RR' = AMM(t, coeff) = RR^2 * 2^k / R'^2 mod m
+     * where
+     *  k = 4 * (52 * digits52 - modlen)
+     *  R  = 2^(64 * ceil(modlen/64)) mod m
+     *  RR = R^2 mod m
+     *  R' = 2^(52 * ceil(modlen/52)) mod m
+     *
+     *  EX/ modlen = 1024: k = 64, RR = 2^2048 mod m, RR' = 2^2080 mod m
+     */
+    memset(coeff_red, 0, exp_digits * sizeof(BN_ULONG));
+    /* (1) in reduced domain representation */
+    set_bit(coeff_red, 64 * (int)(coeff_pow / 52) + coeff_pow % 52);
+
+    amm(rr1_red, rr1_red, rr1_red, m1_red, k0_1);     /* (2) for m1 */
+    amm(rr1_red, rr1_red, coeff_red, m1_red, k0_1);   /* (3) for m1 */
+
+    amm(rr2_red, rr2_red, rr2_red, m2_red, k0_2);     /* (2) for m2 */
+    amm(rr2_red, rr2_red, coeff_red, m2_red, k0_2);   /* (3) for m2 */
+
+    exp[0] = exp1;
+    exp[1] = exp2;
+
+    k0[0] = k0_1;
+    k0[1] = k0_2;
+
+    /* Dual (2-exps in parallel) exponentiation */
+    ret = RSAZ_mod_exp_x2_ifma256(rr1_red, base1_red, exp, m1_red, rr1_red,
+                                  k0, factor_size);
+    if (!ret)
+        goto err;
+
+    /* Convert rr_i back to regular radix */
+    from_words52(res1, factor_size, rr1_red);
+    from_words52(res2, factor_size, rr2_red);
+
+    /* bn_reduce_once_in_place expects number of BN_ULONG, not bit size */
+    factor_size /= sizeof(BN_ULONG) * 8;
+
+    bn_reduce_once_in_place(res1, /*carry=*/0, m1, storage, factor_size);
+    bn_reduce_once_in_place(res2, /*carry=*/0, m2, storage, factor_size);
+
+err:
+    if (storage != NULL) {
+        OPENSSL_cleanse(storage, storage_len_bytes);
+        OPENSSL_free(storage);
+    }
+    return ret;
+}",
+2679,"[""CWE-787""]",accel-ppp,a0b8bfc4e74ff31b15ccfa6c626e3bbc591ba98f,a0b8bfc4e74ff31b15ccfa6c626e3bbc591ba98f,0,515534,3.1249841647613428e+38,31.0,"Fix post_msg implementation bug
+
+I think the error handling code of `post_msg` is wrongly implemented due to coding typo. The `EPIPE` should be also considered and then return -1, just like `PPTP_write`:
+https://github.com/xebd/accel-ppp/blob/1b8711cf75a7c278d99840112bc7a396398e0205/accel-pppd/ctrl/pptp/pptp.c#L539-L570
+
+This pr fixes #158.",other,"static int post_msg(struct pptp_conn_t *conn, void *buf, int size)
+{
+	int n;
+	if (conn->out_size) {
+		log_error(""pptp: buffer is not empty\n"");
+		return -1;
+	}
+
+again:
+	n=write(conn->hnd.fd, buf, size);
+	if (n < 0) {
+		if (errno == EINTR)
+			goto again;
+		else if (errno == EAGAIN)
+			n = 0;
+		else {
+			if (errno != EPIPE) {
+				if (conf_verbose)
+					log_ppp_info2(""pptp: write: %s\n"", strerror(errno));
+				return -1;
+			}
+		}
+	}
+
+	if ( n<size ) {
+		memcpy(conn->out_buf, (uint8_t *)buf + n, size - n);
+		triton_md_enable_handler(&conn->hnd, MD_MODE_WRITE);
+	}
+
+	return 0;
+}","static int post_msg(struct pptp_conn_t *conn, void *buf, int size)
+{
+	int n;
+	if (conn->out_size) {
+		log_error(""pptp: buffer is not empty\n"");
+		return -1;
+	}
+
+again:
+	n=write(conn->hnd.fd, buf, size);
+	if (n < 0) {
+		if (errno == EINTR)
+			goto again;
+		else if (errno == EAGAIN)
+			n = 0;
+		else {
+			if (errno != EPIPE) {
+				if (conf_verbose)
+					log_ppp_info2(""pptp: write: %s\n"", strerror(errno));
+			}
+			return -1;
+		}
+	}
+
+	if ( n<size ) {
+		memcpy(conn->out_buf, (uint8_t *)buf + n, size - n);
+		triton_md_enable_handler(&conn->hnd, MD_MODE_WRITE);
+	}
+
+	return 0;
+}",
+2680,"[""CWE-787""]",openssl,a1f7034bbd8f0730d360211f5ba0feeaef0b7b2c,a1f7034bbd8f0730d360211f5ba0feeaef0b7b2c,0,515562,2.349337015466919e+38,121.0,"rsa: fix bn_reduce_once_in_place call for rsaz_mod_exp_avx512_x2
+
+bn_reduce_once_in_place expects the number of BN_ULONG, but factor_size
+is moduli bit size.
+
+Fixes #18625.
+
+Signed-off-by: Xi Ruoyao <xry111@xry111.site>
+
+Reviewed-by: Tomas Mraz <tomas@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>
+(Merged from https://github.com/openssl/openssl/pull/18626)
+
+(cherry picked from commit 4d8a88c134df634ba610ff8db1eb8478ac5fd345)",other,"int ossl_rsaz_mod_exp_avx512_x2(BN_ULONG *res1,
+                                const BN_ULONG *base1,
+                                const BN_ULONG *exp1,
+                                const BN_ULONG *m1,
+                                const BN_ULONG *rr1,
+                                BN_ULONG k0_1,
+                                BN_ULONG *res2,
+                                const BN_ULONG *base2,
+                                const BN_ULONG *exp2,
+                                const BN_ULONG *m2,
+                                const BN_ULONG *rr2,
+                                BN_ULONG k0_2,
+                                int factor_size)
+{
+    int ret = 0;
+
+    /*
+     * Number of word-size (BN_ULONG) digits to store exponent in redundant
+     * representation.
+     */
+    int exp_digits = number_of_digits(factor_size + 2, DIGIT_SIZE);
+    int coeff_pow = 4 * (DIGIT_SIZE * exp_digits - factor_size);
+    BN_ULONG *base1_red, *m1_red, *rr1_red;
+    BN_ULONG *base2_red, *m2_red, *rr2_red;
+    BN_ULONG *coeff_red;
+    BN_ULONG *storage = NULL;
+    BN_ULONG *storage_aligned = NULL;
+    BN_ULONG storage_len_bytes = 7 * exp_digits * sizeof(BN_ULONG);
+
+    /* AMM = Almost Montgomery Multiplication */
+    AMM52 amm = NULL;
+    /* Dual (2-exps in parallel) exponentiation */
+    EXP52_x2 exp_x2 = NULL;
+
+    const BN_ULONG *exp[2] = {0};
+    BN_ULONG k0[2] = {0};
+
+    /* Only 1024-bit factor size is supported now */
+    switch (factor_size) {
+    case 1024:
+        amm = ossl_rsaz_amm52x20_x1_256;
+        exp_x2 = RSAZ_exp52x20_x2_256;
+        break;
+    default:
+        goto err;
+    }
+
+    storage = (BN_ULONG *)OPENSSL_malloc(storage_len_bytes + 64);
+    if (storage == NULL)
+        goto err;
+    storage_aligned = (BN_ULONG *)ALIGN_OF(storage, 64);
+
+    /* Memory layout for red(undant) representations */
+    base1_red = storage_aligned;
+    base2_red = storage_aligned + 1 * exp_digits;
+    m1_red    = storage_aligned + 2 * exp_digits;
+    m2_red    = storage_aligned + 3 * exp_digits;
+    rr1_red   = storage_aligned + 4 * exp_digits;
+    rr2_red   = storage_aligned + 5 * exp_digits;
+    coeff_red = storage_aligned + 6 * exp_digits;
+
+    /* Convert base_i, m_i, rr_i, from regular to 52-bit radix */
+    to_words52(base1_red, exp_digits, base1, factor_size);
+    to_words52(base2_red, exp_digits, base2, factor_size);
+    to_words52(m1_red, exp_digits, m1, factor_size);
+    to_words52(m2_red, exp_digits, m2, factor_size);
+    to_words52(rr1_red, exp_digits, rr1, factor_size);
+    to_words52(rr2_red, exp_digits, rr2, factor_size);
+
+    /*
+     * Compute target domain Montgomery converters RR' for each modulus
+     * based on precomputed original domain's RR.
+     *
+     * RR -> RR' transformation steps:
+     *  (1) coeff = 2^k
+     *  (2) t = AMM(RR,RR) = RR^2 / R' mod m
+     *  (3) RR' = AMM(t, coeff) = RR^2 * 2^k / R'^2 mod m
+     * where
+     *  k = 4 * (52 * digits52 - modlen)
+     *  R  = 2^(64 * ceil(modlen/64)) mod m
+     *  RR = R^2 mod M
+     *  R' = 2^(52 * ceil(modlen/52)) mod m
+     *
+     *  modlen = 1024: k = 64, RR = 2^2048 mod m, RR' = 2^2080 mod m
+     */
+    memset(coeff_red, 0, exp_digits * sizeof(BN_ULONG));
+    /* (1) in reduced domain representation */
+    set_bit(coeff_red, 64 * (int)(coeff_pow / 52) + coeff_pow % 52);
+
+    amm(rr1_red, rr1_red, rr1_red, m1_red, k0_1);     /* (2) for m1 */
+    amm(rr1_red, rr1_red, coeff_red, m1_red, k0_1);   /* (3) for m1 */
+
+    amm(rr2_red, rr2_red, rr2_red, m2_red, k0_2);     /* (2) for m2 */
+    amm(rr2_red, rr2_red, coeff_red, m2_red, k0_2);   /* (3) for m2 */
+
+    exp[0] = exp1;
+    exp[1] = exp2;
+
+    k0[0] = k0_1;
+    k0[1] = k0_2;
+
+    exp_x2(rr1_red, base1_red, exp, m1_red, rr1_red, k0);
+
+    /* Convert rr_i back to regular radix */
+    from_words52(res1, factor_size, rr1_red);
+    from_words52(res2, factor_size, rr2_red);
+
+    bn_reduce_once_in_place(res1, /*carry=*/0, m1, storage, factor_size);
+    bn_reduce_once_in_place(res2, /*carry=*/0, m2, storage, factor_size);
+
+    ret = 1;
+err:
+    if (storage != NULL) {
+        OPENSSL_cleanse(storage, storage_len_bytes);
+        OPENSSL_free(storage);
+    }
+    return ret;
+}","int ossl_rsaz_mod_exp_avx512_x2(BN_ULONG *res1,
+                                const BN_ULONG *base1,
+                                const BN_ULONG *exp1,
+                                const BN_ULONG *m1,
+                                const BN_ULONG *rr1,
+                                BN_ULONG k0_1,
+                                BN_ULONG *res2,
+                                const BN_ULONG *base2,
+                                const BN_ULONG *exp2,
+                                const BN_ULONG *m2,
+                                const BN_ULONG *rr2,
+                                BN_ULONG k0_2,
+                                int factor_size)
+{
+    int ret = 0;
+
+    /*
+     * Number of word-size (BN_ULONG) digits to store exponent in redundant
+     * representation.
+     */
+    int exp_digits = number_of_digits(factor_size + 2, DIGIT_SIZE);
+    int coeff_pow = 4 * (DIGIT_SIZE * exp_digits - factor_size);
+    BN_ULONG *base1_red, *m1_red, *rr1_red;
+    BN_ULONG *base2_red, *m2_red, *rr2_red;
+    BN_ULONG *coeff_red;
+    BN_ULONG *storage = NULL;
+    BN_ULONG *storage_aligned = NULL;
+    BN_ULONG storage_len_bytes = 7 * exp_digits * sizeof(BN_ULONG);
+
+    /* AMM = Almost Montgomery Multiplication */
+    AMM52 amm = NULL;
+    /* Dual (2-exps in parallel) exponentiation */
+    EXP52_x2 exp_x2 = NULL;
+
+    const BN_ULONG *exp[2] = {0};
+    BN_ULONG k0[2] = {0};
+
+    /* Only 1024-bit factor size is supported now */
+    switch (factor_size) {
+    case 1024:
+        amm = ossl_rsaz_amm52x20_x1_256;
+        exp_x2 = RSAZ_exp52x20_x2_256;
+        break;
+    default:
+        goto err;
+    }
+
+    storage = (BN_ULONG *)OPENSSL_malloc(storage_len_bytes + 64);
+    if (storage == NULL)
+        goto err;
+    storage_aligned = (BN_ULONG *)ALIGN_OF(storage, 64);
+
+    /* Memory layout for red(undant) representations */
+    base1_red = storage_aligned;
+    base2_red = storage_aligned + 1 * exp_digits;
+    m1_red    = storage_aligned + 2 * exp_digits;
+    m2_red    = storage_aligned + 3 * exp_digits;
+    rr1_red   = storage_aligned + 4 * exp_digits;
+    rr2_red   = storage_aligned + 5 * exp_digits;
+    coeff_red = storage_aligned + 6 * exp_digits;
+
+    /* Convert base_i, m_i, rr_i, from regular to 52-bit radix */
+    to_words52(base1_red, exp_digits, base1, factor_size);
+    to_words52(base2_red, exp_digits, base2, factor_size);
+    to_words52(m1_red, exp_digits, m1, factor_size);
+    to_words52(m2_red, exp_digits, m2, factor_size);
+    to_words52(rr1_red, exp_digits, rr1, factor_size);
+    to_words52(rr2_red, exp_digits, rr2, factor_size);
+
+    /*
+     * Compute target domain Montgomery converters RR' for each modulus
+     * based on precomputed original domain's RR.
+     *
+     * RR -> RR' transformation steps:
+     *  (1) coeff = 2^k
+     *  (2) t = AMM(RR,RR) = RR^2 / R' mod m
+     *  (3) RR' = AMM(t, coeff) = RR^2 * 2^k / R'^2 mod m
+     * where
+     *  k = 4 * (52 * digits52 - modlen)
+     *  R  = 2^(64 * ceil(modlen/64)) mod m
+     *  RR = R^2 mod M
+     *  R' = 2^(52 * ceil(modlen/52)) mod m
+     *
+     *  modlen = 1024: k = 64, RR = 2^2048 mod m, RR' = 2^2080 mod m
+     */
+    memset(coeff_red, 0, exp_digits * sizeof(BN_ULONG));
+    /* (1) in reduced domain representation */
+    set_bit(coeff_red, 64 * (int)(coeff_pow / 52) + coeff_pow % 52);
+
+    amm(rr1_red, rr1_red, rr1_red, m1_red, k0_1);     /* (2) for m1 */
+    amm(rr1_red, rr1_red, coeff_red, m1_red, k0_1);   /* (3) for m1 */
+
+    amm(rr2_red, rr2_red, rr2_red, m2_red, k0_2);     /* (2) for m2 */
+    amm(rr2_red, rr2_red, coeff_red, m2_red, k0_2);   /* (3) for m2 */
+
+    exp[0] = exp1;
+    exp[1] = exp2;
+
+    k0[0] = k0_1;
+    k0[1] = k0_2;
+
+    exp_x2(rr1_red, base1_red, exp, m1_red, rr1_red, k0);
+
+    /* Convert rr_i back to regular radix */
+    from_words52(res1, factor_size, rr1_red);
+    from_words52(res2, factor_size, rr2_red);
+
+    /* bn_reduce_once_in_place expects number of BN_ULONG, not bit size */
+    factor_size /= sizeof(BN_ULONG) * 8;
+
+    bn_reduce_once_in_place(res1, /*carry=*/0, m1, storage, factor_size);
+    bn_reduce_once_in_place(res2, /*carry=*/0, m2, storage, factor_size);
+
+    ret = 1;
+err:
+    if (storage != NULL) {
+        OPENSSL_cleanse(storage, storage_len_bytes);
+        OPENSSL_free(storage);
+    }
+    return ret;
+}",
+3233,"[""CWE-787""]",nettle,ae3801a0e5cce276c270973214385c86048d5f7b,ae3801a0e5cce276c270973214385c86048d5f7b,0,499623,1.8458966489656387e+38,33.0,"Similar fix for eddsa.
+
+* eddsa-hash.c (_eddsa_hash): Ensure result is canonically
+reduced. Two of the three call sites need that.
+
+(cherry picked from commit d9b564e4b3b3a5691afb9328c7342b3f7ca64288)",other,"_eddsa_hash (const struct ecc_modulo *m,
+	     mp_limb_t *rp, size_t digest_size, const uint8_t *digest)
+{
+  mp_size_t nlimbs = (8*digest_size + GMP_NUMB_BITS - 1) / GMP_NUMB_BITS;
+
+  mpn_set_base256_le (rp, nlimbs, digest, digest_size);
+
+  if (nlimbs > 2*m->size)
+    {
+      /* Special case for Ed448: reduce rp to 2*m->size limbs.
+	 After decoding rp from a hash of size 2*rn:
+
+	 rp = r2 || r1 || r0
+
+	 where r0 and r1 have m->size limbs.  Reduce this to:
+
+	 rp = r1' || r0
+
+	 where r1' has m->size limbs.  */
+      mp_limb_t hi = rp[2*m->size];
+      assert (nlimbs == 2*m->size + 1);
+
+      hi = mpn_addmul_1 (rp + m->size, m->B, m->size, hi);
+      assert (hi <= 1);
+      hi = mpn_cnd_add_n (hi, rp + m->size, rp + m->size, m->B, m->size);
+      assert (hi == 0);
+    }
+  m->mod (m, rp, rp);
+}","_eddsa_hash (const struct ecc_modulo *m,
+	     mp_limb_t *rp, size_t digest_size, const uint8_t *digest)
+{
+  mp_size_t nlimbs = (8*digest_size + GMP_NUMB_BITS - 1) / GMP_NUMB_BITS;
+  mp_limb_t cy;
+
+  mpn_set_base256_le (rp, nlimbs, digest, digest_size);
+
+  if (nlimbs > 2*m->size)
+    {
+      /* Special case for Ed448: reduce rp to 2*m->size limbs.
+	 After decoding rp from a hash of size 2*rn:
+
+	 rp = r2 || r1 || r0
+
+	 where r0 and r1 have m->size limbs.  Reduce this to:
+
+	 rp = r1' || r0
+
+	 where r1' has m->size limbs.  */
+      mp_limb_t hi = rp[2*m->size];
+      assert (nlimbs == 2*m->size + 1);
+
+      hi = mpn_addmul_1 (rp + m->size, m->B, m->size, hi);
+      assert (hi <= 1);
+      hi = mpn_cnd_add_n (hi, rp + m->size, rp + m->size, m->B, m->size);
+      assert (hi == 0);
+    }
+  m->mod (m, rp + m->size , rp);
+  /* Ensure canonical reduction. */
+  cy = mpn_sub_n (rp, rp + m->size, m->m, m->size);
+  cnd_copy (cy, rp, rp + m->size, m->size);
+}",
+3247,"[""CWE-787""]",gnuplot,963c7df3e0c5266efff260d0dff757dfe03d3632,963c7df3e0c5266efff260d0dff757dfe03d3632,0,506600,1.4934233665959696e+38,391.0,"Better error handling for faulty font syntax
+
+A missing close-quote in an enhanced text font specification could
+cause a segfault.
+Bug #2303",other,"enhanced_recursion(
+    const char *p,
+    TBOOLEAN brace,
+    char *fontname,
+    double fontsize,
+    double base,
+    TBOOLEAN widthflag,
+    TBOOLEAN showflag,
+    int overprint)
+{
+    TBOOLEAN wasitalic, wasbold;
+
+    /* Keep track of the style of the font passed in at this recursion level */
+    wasitalic = (strstr(fontname, "":Italic"") != NULL);
+    wasbold = (strstr(fontname, "":Bold"") != NULL);
+
+    FPRINTF((stderr, ""RECURSE WITH \""%s\"", %d %s %.1f %.1f %d %d %d"",
+		p, brace, fontname, fontsize, base, widthflag, showflag, overprint));
+
+    /* Start each recursion with a clean string */
+    (term->enhanced_flush)();
+
+    if (base + fontsize > enhanced_max_height) {
+	enhanced_max_height = base + fontsize;
+	ENH_DEBUG((""Setting max height to %.1f\n"", enhanced_max_height));
+    }
+
+    if (base < enhanced_min_height) {
+	enhanced_min_height = base;
+	ENH_DEBUG((""Setting min height to %.1f\n"", enhanced_min_height));
+    }
+
+    while (*p) {
+	double shift;
+
+	/*
+	 * EAM Jun 2009 - treating bytes one at a time does not work for multibyte
+	 * encodings, including utf-8. If we hit a byte with the high bit set, test
+	 * whether it starts a legal UTF-8 sequence and if so copy the whole thing.
+	 * Other multibyte encodings are still a problem.
+	 * Gnuplot's other defined encodings are all single-byte; for those we
+	 * really do want to treat one byte at a time.
+	 */
+	if ((*p & 0x80) && (encoding == S_ENC_DEFAULT || encoding == S_ENC_UTF8)) {
+	    unsigned long utf8char;
+	    const char *nextchar = p;
+
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    if (utf8toulong(&utf8char, &nextchar)) {	/* Legal UTF8 sequence */
+		while (p < nextchar)
+		    (term->enhanced_writec)(*p++);
+		p--;
+	    } else {					/* Some other multibyte encoding? */
+		(term->enhanced_writec)(*p);
+	    }
+/* shige : for Shift_JIS */
+	} else if ((*p & 0x80) && (encoding == S_ENC_SJIS)) {
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    (term->enhanced_writec)(*(p++));
+	    (term->enhanced_writec)(*p);
+	} else
+
+	switch (*p) {
+	case '}'  :
+	    /*{{{  deal with it*/
+	    if (brace)
+		return (p);
+
+	    int_warn(NO_CARET, ""enhanced text parser - spurious }"");
+	    break;
+	    /*}}}*/
+
+	case '_'  :
+	case '^'  :
+	    /*{{{  deal with super/sub script*/
+	    shift = (*p == '^') ? 0.5 : -0.3;
+	    (term->enhanced_flush)();
+	    p = enhanced_recursion(p + 1, FALSE, fontname, fontsize * 0.8,
+			      base + shift * fontsize, widthflag,
+			      showflag, overprint);
+	    break;
+	    /*}}}*/
+	case '{'  :
+	    {
+		TBOOLEAN isitalic = FALSE, isbold = FALSE, isnormal = FALSE;
+		const char *start_of_fontname = NULL;
+		const char *end_of_fontname = NULL;
+		char *localfontname = NULL;
+		char ch;
+		double f = fontsize, ovp;
+
+		/* Mar 2014 - this will hold ""fontfamily{:Italic}{:Bold}"" */
+		char *styledfontname = NULL;
+
+		/*{{{  recurse (possibly with a new font) */
+
+		ENH_DEBUG((""Dealing with {\n""));
+
+		/* 30 Sep 2016:  Remove incorrect whitespace-eating loop going */
+		/* waaay back to 31-May-2000 */        /* while (*++p == ' '); */
+		++p;
+		/* get vertical offset (if present) for overprinted text */
+		if (overprint == 2) {
+		    char *end;
+		    ovp = strtod(p,&end);
+		    p = end;
+		    if (term->flags & TERM_IS_POSTSCRIPT)
+			base = ovp*f;
+		    else
+			base += ovp*f;
+		}
+		--p;
+
+		if (*++p == '/') {
+		    /* then parse a fontname, optional fontsize */
+		    while (*++p == ' ')
+			;       /* do nothing */
+		    if (*p=='-') {
+			while (*++p == ' ')
+			    ;   /* do nothing */
+		    }
+		    start_of_fontname = p;
+
+		    /* Allow font name to be in quotes.
+		     * This makes it possible to handle font names containing spaces.
+		     */
+		    if (*p == '\'' || *p == '""') {
+			++p;
+			while (*p != '\0' && *p != '}' && *p != *start_of_fontname)
+			    ++p;
+			if (*p != *start_of_fontname) {
+			    int_warn(NO_CARET, ""cannot interpret font name %s"", start_of_fontname);
+			    p = start_of_fontname;
+			}
+			start_of_fontname++;
+			end_of_fontname = p++;
+			ch = *p;
+		    } else {
+
+		    /* Normal unquoted font name */
+			while ((ch = *p) > ' ' && ch != '=' && ch != '*' && ch != '}' && ch != ':')
+			    ++p;
+			end_of_fontname = p;
+		    }
+
+		    do {
+			if (ch == '=') {
+			    /* get optional font size */
+			    char *end;
+			    p++;
+			    ENH_DEBUG((""Calling strtod(\""%s\"") ..."", p));
+			    f = strtod(p, &end);
+			    p = end;
+			    ENH_DEBUG((""Returned %.1f and \""%s\""\n"", f, p));
+
+			    if (f == 0)
+				f = fontsize;
+			    else
+				f *= enhanced_fontscale;  /* remember the scaling */
+
+			    ENH_DEBUG((""Font size %.1f\n"", f));
+			} else if (ch == '*') {
+			    /* get optional font size scale factor */
+			    char *end;
+			    p++;
+			    ENH_DEBUG((""Calling strtod(\""%s\"") ..."", p));
+			    f = strtod(p, &end);
+			    p = end;
+			    ENH_DEBUG((""Returned %.1f and \""%s\""\n"", f, p));
+
+			    if (f)
+				f *= fontsize;  /* apply the scale factor */
+			    else
+				f = fontsize;
+
+			    ENH_DEBUG((""Font size %.1f\n"", f));
+			} else if (ch == ':') {
+			    /* get optional style markup attributes */
+			    p++;
+			    if (!strncmp(p,""Bold"",4))
+				isbold = TRUE;
+			    if (!strncmp(p,""Italic"",6))
+				isitalic = TRUE;
+			    if (!strncmp(p,""Normal"",6))
+				isnormal = TRUE;
+			    while (isalpha((unsigned char)*p)) {p++;}
+			}
+		    } while (((ch = *p) == '=') || (ch == ':') || (ch == '*'));
+
+		    if (ch == '}')
+			int_warn(NO_CARET,""bad syntax in enhanced text string"");
+
+		    if (*p == ' ')	/* Eat up a single space following a font spec */
+			++p;
+		    if (!start_of_fontname || (start_of_fontname == end_of_fontname)) {
+			/* Use the font name passed in to us */
+			localfontname = gp_strdup(fontname);
+		    } else {
+			/* We found a new font name {/Font ...} */
+			int len = end_of_fontname - start_of_fontname;
+			localfontname = gp_alloc(len+1,""localfontname"");
+			strncpy(localfontname, start_of_fontname, len);
+			localfontname[len] = '\0';
+		    }
+		}
+		/*}}}*/
+
+		/* Collect cumulative style markup before passing it in the font name */
+		isitalic = (wasitalic || isitalic) && !isnormal;
+		isbold = (wasbold || isbold) && !isnormal;
+
+		styledfontname = stylefont(localfontname ? localfontname : fontname,
+					    isbold, isitalic);
+
+		p = enhanced_recursion(p, TRUE, styledfontname, f, base,
+				  widthflag, showflag, overprint);
+
+		(term->enhanced_flush)();
+
+		free(styledfontname);
+		free(localfontname);
+
+		break;
+	    } /* case '{' */
+	case '@' :
+	    /*{{{  phantom box - prints next 'char', then restores currentpoint */
+	    (term->enhanced_flush)();
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, 3);
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      widthflag, showflag, overprint);
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, 4);
+	    break;
+	    /*}}}*/
+
+	case '&' :
+	    /*{{{  character skip - skips space equal to length of character(s) */
+	    (term->enhanced_flush)();
+
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      widthflag, FALSE, overprint);
+	    break;
+	    /*}}}*/
+
+	case '~' :
+	    /*{{{ overprinted text */
+	    /* the second string is overwritten on the first, centered
+	     * horizontally on the first and (optionally) vertically
+	     * shifted by an amount specified (as a fraction of the
+	     * current fontsize) at the beginning of the second string
+
+	     * Note that in this implementation neither the under- nor
+	     * overprinted string can contain syntax that would result
+	     * in additional recursions -- no subscripts,
+	     * superscripts, or anything else, with the exception of a
+	     * font definition at the beginning of the text */
+
+	    (term->enhanced_flush)();
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      widthflag, showflag, 1);
+	    (term->enhanced_flush)();
+	    if (!*p)
+	        break;
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      FALSE, showflag, 2);
+
+	    overprint = 0;   /* may not be necessary, but just in case . . . */
+	    break;
+	    /*}}}*/
+
+	case '('  :
+	case ')'  :
+	    /*{{{  an escape and print it */
+	    /* special cases */
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    if (term->flags & TERM_IS_POSTSCRIPT)
+		(term->enhanced_writec)('\\');
+	    (term->enhanced_writec)(*p);
+	    break;
+	    /*}}}*/
+
+	case '\\'  :
+	    /*{{{  various types of escape sequences, some context-dependent */
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+
+	    /*     Unicode represented as \U+hhhhh where hhhhh is hexadecimal code point.
+	     *     For UTF-8 encoding we translate hhhhh to a UTF-8 byte sequence and
+	     *     output the bytes one by one.
+	     */
+	    if (p[1] == 'U' && p[2] == '+') {
+		if (encoding == S_ENC_UTF8) {
+		    uint32_t codepoint;
+		    unsigned char utf8char[8];
+		    int i, length;
+
+		    sscanf(&(p[3]), ""%5x"", &codepoint);
+		    length = ucs4toutf8(codepoint, utf8char);
+		    p += (codepoint > 0xFFFF) ? 7 : 6;
+		    for (i=0; i<length; i++)
+			(term->enhanced_writec)(utf8char[i]);
+		    break;
+		}
+
+	    /*     FIXME: non-utf8 environments not yet supported.
+	     *     Note that some terminals may have an alternative way to handle unicode
+	     *     escape sequences that is not dependent on encoding.
+	     *     E.g. svg and html output could convert to xml sequences &#xhhhh;
+	     *     For these cases we must retain the leading backslash so that the
+	     *     unicode escape sequence can be recognized by the terminal driver.
+	     */
+		(term->enhanced_writec)(p[0]);
+		break;
+	    }
+
+	    /* Enhanced mode always uses \xyz as an octal character representation
+	     * but each terminal type must give us the actual output format wanted.
+	     * pdf.trm wants the raw character code, which is why we use strtol();
+	     * most other terminal types want some variant of ""\\%o"".
+	     */
+	    if (p[1] >= '0' && p[1] <= '7') {
+		char *e, escape[16], octal[4] = {'\0','\0','\0','\0'};
+
+		octal[0] = *(++p);
+		if (p[1] >= '0' && p[1] <= '7') {
+		    octal[1] = *(++p);
+		    if (p[1] >= '0' && p[1] <= '7')
+			octal[2] = *(++p);
+		}
+		sprintf(escape, enhanced_escape_format, strtol(octal,NULL,8));
+		for (e=escape; *e; e++) {
+		    (term->enhanced_writec)(*e);
+		}
+		break;
+	    }
+
+	    /* This was the original (prior to version 4) enhanced text code specific
+	     * to the reserved characters of PostScript.
+	     */
+	    if (term->flags & TERM_IS_POSTSCRIPT) {
+		if (p[1]=='\\' || p[1]=='(' || p[1]==')') {
+		    (term->enhanced_writec)('\\');
+		} else if (strchr(""^_@&~{}"",p[1]) == NULL) {
+		    (term->enhanced_writec)('\\');
+		    (term->enhanced_writec)('\\');
+		    break;
+		}
+	    }
+
+	    /* Step past the backslash character in the input stream */
+	    ++p;
+
+	    /* HBB: Avoid broken output if there's a \ exactly at the end of the line */
+	    if (*p == '\0') {
+		int_warn(NO_CARET, ""enhanced text parser -- spurious backslash"");
+		break;
+	    }
+
+	    /* SVG requires an escaped '&' to be passed as something else */
+	    /* FIXME: terminal-dependent code does not belong here */
+	    if (*p == '&' && encoding == S_ENC_DEFAULT && !strcmp(term->name, ""svg"")) {
+		(term->enhanced_writec)('\376');
+		break;
+	    }
+
+	    /* print the character following the backslash */
+	    (term->enhanced_writec)(*p);
+	    break;
+	    /*}}}*/
+
+	default:
+	    /*{{{  print it */
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    (term->enhanced_writec)(*p);
+	    /*}}}*/
+	} /* switch (*p) */
+
+	/* like TeX, we only do one character in a recursion, unless it's
+	 * in braces
+	 */
+
+	if (!brace) {
+	    (term->enhanced_flush)();
+	    return(p);  /* the ++p in the outer copy will increment us */
+	}
+
+	if (*p) /* only not true if { not terminated, I think */
+	    ++p;
+    } /* while (*p) */
+
+    (term->enhanced_flush)();
+    return p;
+}","enhanced_recursion(
+    const char *p,
+    TBOOLEAN brace,
+    char *fontname,
+    double fontsize,
+    double base,
+    TBOOLEAN widthflag,
+    TBOOLEAN showflag,
+    int overprint)
+{
+    TBOOLEAN wasitalic, wasbold;
+
+    /* Keep track of the style of the font passed in at this recursion level */
+    wasitalic = (strstr(fontname, "":Italic"") != NULL);
+    wasbold = (strstr(fontname, "":Bold"") != NULL);
+
+    FPRINTF((stderr, ""RECURSE WITH \""%s\"", %d %s %.1f %.1f %d %d %d"",
+		p, brace, fontname, fontsize, base, widthflag, showflag, overprint));
+
+    /* Start each recursion with a clean string */
+    (term->enhanced_flush)();
+
+    if (base + fontsize > enhanced_max_height) {
+	enhanced_max_height = base + fontsize;
+	ENH_DEBUG((""Setting max height to %.1f\n"", enhanced_max_height));
+    }
+
+    if (base < enhanced_min_height) {
+	enhanced_min_height = base;
+	ENH_DEBUG((""Setting min height to %.1f\n"", enhanced_min_height));
+    }
+
+    while (*p) {
+	double shift;
+
+	/*
+	 * EAM Jun 2009 - treating bytes one at a time does not work for multibyte
+	 * encodings, including utf-8. If we hit a byte with the high bit set, test
+	 * whether it starts a legal UTF-8 sequence and if so copy the whole thing.
+	 * Other multibyte encodings are still a problem.
+	 * Gnuplot's other defined encodings are all single-byte; for those we
+	 * really do want to treat one byte at a time.
+	 */
+	if ((*p & 0x80) && (encoding == S_ENC_DEFAULT || encoding == S_ENC_UTF8)) {
+	    unsigned long utf8char;
+	    const char *nextchar = p;
+
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    if (utf8toulong(&utf8char, &nextchar)) {	/* Legal UTF8 sequence */
+		while (p < nextchar)
+		    (term->enhanced_writec)(*p++);
+		p--;
+	    } else {					/* Some other multibyte encoding? */
+		(term->enhanced_writec)(*p);
+	    }
+/* shige : for Shift_JIS */
+	} else if ((*p & 0x80) && (encoding == S_ENC_SJIS)) {
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    (term->enhanced_writec)(*(p++));
+	    (term->enhanced_writec)(*p);
+	} else
+
+	switch (*p) {
+	case '}'  :
+	    /*{{{  deal with it*/
+	    if (brace)
+		return (p);
+
+	    int_warn(NO_CARET, ""enhanced text parser - spurious }"");
+	    break;
+	    /*}}}*/
+
+	case '_'  :
+	case '^'  :
+	    /*{{{  deal with super/sub script*/
+	    shift = (*p == '^') ? 0.5 : -0.3;
+	    (term->enhanced_flush)();
+	    p = enhanced_recursion(p + 1, FALSE, fontname, fontsize * 0.8,
+			      base + shift * fontsize, widthflag,
+			      showflag, overprint);
+	    break;
+	    /*}}}*/
+	case '{'  :
+	    {
+		TBOOLEAN isitalic = FALSE, isbold = FALSE, isnormal = FALSE;
+		const char *start_of_fontname = NULL;
+		const char *end_of_fontname = NULL;
+		char *localfontname = NULL;
+		char ch;
+		double f = fontsize, ovp;
+
+		/* Mar 2014 - this will hold ""fontfamily{:Italic}{:Bold}"" */
+		char *styledfontname = NULL;
+
+		/*{{{  recurse (possibly with a new font) */
+
+		ENH_DEBUG((""Dealing with {\n""));
+
+		/* 30 Sep 2016:  Remove incorrect whitespace-eating loop going */
+		/* waaay back to 31-May-2000 */        /* while (*++p == ' '); */
+		++p;
+		/* get vertical offset (if present) for overprinted text */
+		if (overprint == 2) {
+		    char *end;
+		    ovp = strtod(p,&end);
+		    p = end;
+		    if (term->flags & TERM_IS_POSTSCRIPT)
+			base = ovp*f;
+		    else
+			base += ovp*f;
+		}
+		--p;
+
+		if (*++p == '/') {
+		    /* then parse a fontname, optional fontsize */
+		    while (*++p == ' ')
+			;       /* do nothing */
+		    if (*p=='-') {
+			while (*++p == ' ')
+			    ;   /* do nothing */
+		    }
+		    start_of_fontname = p;
+
+		    /* Allow font name to be in quotes.
+		     * This makes it possible to handle font names containing spaces.
+		     */
+		    if (*p == '\'' || *p == '""') {
+			++p;
+			while (*p != '\0' && *p != '}' && *p != *start_of_fontname)
+			    ++p;
+			if (*p != *start_of_fontname) {
+			    int_warn(NO_CARET, ""cannot interpret font name %s"", start_of_fontname);
+			    p = start_of_fontname + 1;
+			}
+			start_of_fontname++;
+			end_of_fontname = p++;
+			ch = *p;
+		    } else {
+
+		    /* Normal unquoted font name */
+			while ((ch = *p) > ' ' && ch != '=' && ch != '*' && ch != '}' && ch != ':')
+			    ++p;
+			end_of_fontname = p;
+		    }
+
+		    do {
+			if (ch == '=') {
+			    /* get optional font size */
+			    char *end;
+			    p++;
+			    ENH_DEBUG((""Calling strtod(\""%s\"") ..."", p));
+			    f = strtod(p, &end);
+			    p = end;
+			    ENH_DEBUG((""Returned %.1f and \""%s\""\n"", f, p));
+
+			    if (f == 0)
+				f = fontsize;
+			    else
+				f *= enhanced_fontscale;  /* remember the scaling */
+
+			    ENH_DEBUG((""Font size %.1f\n"", f));
+			} else if (ch == '*') {
+			    /* get optional font size scale factor */
+			    char *end;
+			    p++;
+			    ENH_DEBUG((""Calling strtod(\""%s\"") ..."", p));
+			    f = strtod(p, &end);
+			    p = end;
+			    ENH_DEBUG((""Returned %.1f and \""%s\""\n"", f, p));
+
+			    if (f)
+				f *= fontsize;  /* apply the scale factor */
+			    else
+				f = fontsize;
+
+			    ENH_DEBUG((""Font size %.1f\n"", f));
+			} else if (ch == ':') {
+			    /* get optional style markup attributes */
+			    p++;
+			    if (!strncmp(p,""Bold"",4))
+				isbold = TRUE;
+			    if (!strncmp(p,""Italic"",6))
+				isitalic = TRUE;
+			    if (!strncmp(p,""Normal"",6))
+				isnormal = TRUE;
+			    while (isalpha((unsigned char)*p)) {p++;}
+			}
+		    } while (((ch = *p) == '=') || (ch == ':') || (ch == '*'));
+
+		    if (ch == '}')
+			int_warn(NO_CARET,""bad syntax in enhanced text string"");
+
+		    if (*p == ' ')	/* Eat up a single space following a font spec */
+			++p;
+		    if (!start_of_fontname || (start_of_fontname == end_of_fontname)) {
+			/* Use the font name passed in to us */
+			localfontname = gp_strdup(fontname);
+		    } else {
+			/* We found a new font name {/Font ...} */
+			int len = end_of_fontname - start_of_fontname;
+			localfontname = gp_alloc(len+1,""localfontname"");
+			strncpy(localfontname, start_of_fontname, len);
+			localfontname[len] = '\0';
+		    }
+		}
+		/*}}}*/
+
+		/* Collect cumulative style markup before passing it in the font name */
+		isitalic = (wasitalic || isitalic) && !isnormal;
+		isbold = (wasbold || isbold) && !isnormal;
+
+		styledfontname = stylefont(localfontname ? localfontname : fontname,
+					    isbold, isitalic);
+
+		p = enhanced_recursion(p, TRUE, styledfontname, f, base,
+				  widthflag, showflag, overprint);
+
+		(term->enhanced_flush)();
+
+		free(styledfontname);
+		free(localfontname);
+
+		break;
+	    } /* case '{' */
+	case '@' :
+	    /*{{{  phantom box - prints next 'char', then restores currentpoint */
+	    (term->enhanced_flush)();
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, 3);
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      widthflag, showflag, overprint);
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, 4);
+	    break;
+	    /*}}}*/
+
+	case '&' :
+	    /*{{{  character skip - skips space equal to length of character(s) */
+	    (term->enhanced_flush)();
+
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      widthflag, FALSE, overprint);
+	    break;
+	    /*}}}*/
+
+	case '~' :
+	    /*{{{ overprinted text */
+	    /* the second string is overwritten on the first, centered
+	     * horizontally on the first and (optionally) vertically
+	     * shifted by an amount specified (as a fraction of the
+	     * current fontsize) at the beginning of the second string
+
+	     * Note that in this implementation neither the under- nor
+	     * overprinted string can contain syntax that would result
+	     * in additional recursions -- no subscripts,
+	     * superscripts, or anything else, with the exception of a
+	     * font definition at the beginning of the text */
+
+	    (term->enhanced_flush)();
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      widthflag, showflag, 1);
+	    (term->enhanced_flush)();
+	    if (!*p)
+	        break;
+	    p = enhanced_recursion(++p, FALSE, fontname, fontsize, base,
+			      FALSE, showflag, 2);
+
+	    overprint = 0;   /* may not be necessary, but just in case . . . */
+	    break;
+	    /*}}}*/
+
+	case '('  :
+	case ')'  :
+	    /*{{{  an escape and print it */
+	    /* special cases */
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    if (term->flags & TERM_IS_POSTSCRIPT)
+		(term->enhanced_writec)('\\');
+	    (term->enhanced_writec)(*p);
+	    break;
+	    /*}}}*/
+
+	case '\\'  :
+	    /*{{{  various types of escape sequences, some context-dependent */
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+
+	    /*     Unicode represented as \U+hhhhh where hhhhh is hexadecimal code point.
+	     *     For UTF-8 encoding we translate hhhhh to a UTF-8 byte sequence and
+	     *     output the bytes one by one.
+	     */
+	    if (p[1] == 'U' && p[2] == '+') {
+		if (encoding == S_ENC_UTF8) {
+		    uint32_t codepoint;
+		    unsigned char utf8char[8];
+		    int i, length;
+
+		    sscanf(&(p[3]), ""%5x"", &codepoint);
+		    length = ucs4toutf8(codepoint, utf8char);
+		    p += (codepoint > 0xFFFF) ? 7 : 6;
+		    for (i=0; i<length; i++)
+			(term->enhanced_writec)(utf8char[i]);
+		    break;
+		}
+
+	    /*     FIXME: non-utf8 environments not yet supported.
+	     *     Note that some terminals may have an alternative way to handle unicode
+	     *     escape sequences that is not dependent on encoding.
+	     *     E.g. svg and html output could convert to xml sequences &#xhhhh;
+	     *     For these cases we must retain the leading backslash so that the
+	     *     unicode escape sequence can be recognized by the terminal driver.
+	     */
+		(term->enhanced_writec)(p[0]);
+		break;
+	    }
+
+	    /* Enhanced mode always uses \xyz as an octal character representation
+	     * but each terminal type must give us the actual output format wanted.
+	     * pdf.trm wants the raw character code, which is why we use strtol();
+	     * most other terminal types want some variant of ""\\%o"".
+	     */
+	    if (p[1] >= '0' && p[1] <= '7') {
+		char *e, escape[16], octal[4] = {'\0','\0','\0','\0'};
+
+		octal[0] = *(++p);
+		if (p[1] >= '0' && p[1] <= '7') {
+		    octal[1] = *(++p);
+		    if (p[1] >= '0' && p[1] <= '7')
+			octal[2] = *(++p);
+		}
+		sprintf(escape, enhanced_escape_format, strtol(octal,NULL,8));
+		for (e=escape; *e; e++) {
+		    (term->enhanced_writec)(*e);
+		}
+		break;
+	    }
+
+	    /* This was the original (prior to version 4) enhanced text code specific
+	     * to the reserved characters of PostScript.
+	     */
+	    if (term->flags & TERM_IS_POSTSCRIPT) {
+		if (p[1]=='\\' || p[1]=='(' || p[1]==')') {
+		    (term->enhanced_writec)('\\');
+		} else if (strchr(""^_@&~{}"",p[1]) == NULL) {
+		    (term->enhanced_writec)('\\');
+		    (term->enhanced_writec)('\\');
+		    break;
+		}
+	    }
+
+	    /* Step past the backslash character in the input stream */
+	    ++p;
+
+	    /* HBB: Avoid broken output if there's a \ exactly at the end of the line */
+	    if (*p == '\0') {
+		int_warn(NO_CARET, ""enhanced text parser -- spurious backslash"");
+		break;
+	    }
+
+	    /* SVG requires an escaped '&' to be passed as something else */
+	    /* FIXME: terminal-dependent code does not belong here */
+	    if (*p == '&' && encoding == S_ENC_DEFAULT && !strcmp(term->name, ""svg"")) {
+		(term->enhanced_writec)('\376');
+		break;
+	    }
+
+	    /* print the character following the backslash */
+	    (term->enhanced_writec)(*p);
+	    break;
+	    /*}}}*/
+
+	default:
+	    /*{{{  print it */
+	    (term->enhanced_open)(fontname, fontsize, base, widthflag, showflag, overprint);
+	    (term->enhanced_writec)(*p);
+	    /*}}}*/
+	} /* switch (*p) */
+
+	/* like TeX, we only do one character in a recursion, unless it's
+	 * in braces
+	 */
+
+	if (!brace) {
+	    (term->enhanced_flush)();
+	    return(p);  /* the ++p in the outer copy will increment us */
+	}
+
+	if (*p) /* only not true if { not terminated, I think */
+	    ++p;
+    } /* while (*p) */
+
+    (term->enhanced_flush)();
+    return p;
+}",

@@ -1,0 +1,4326 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+540,"[""CWE-125""]",core,69ad3c902ea4bbf9f21ab1857d8923f975dc6145,69ad3c902ea4bbf9f21ab1857d8923f975dc6145,0,506428,3.3941114188919994e+38,20.0,auth: mech-rpa - Fail on zero len buffer,other,"rpa_read_buffer(pool_t pool, const unsigned char **data,
+		const unsigned char *end, unsigned char **buffer)
+{
+	const unsigned char *p = *data;
+	unsigned int len;
+
+	if (p > end)
+		return 0;
+
+	len = *p++;
+	if (p + len > end)
+		return 0;
+
+	*buffer = p_malloc(pool, len);
+	memcpy(*buffer, p, len);
+
+	*data += 1 + len;
+
+	return len;
+}","rpa_read_buffer(pool_t pool, const unsigned char **data,
+		const unsigned char *end, unsigned char **buffer)
+{
+	const unsigned char *p = *data;
+	unsigned int len;
+
+	if (p > end)
+		return 0;
+
+	len = *p++;
+	if (p + len > end || len == 0)
+		return 0;
+
+	*buffer = p_malloc(pool, len);
+	memcpy(*buffer, p, len);
+
+	*data += 1 + len;
+
+	return len;
+}",
+542,"[""CWE-125""]",openssl,94d23fcff9b2a7a8368dfe52214d5c2569882c11,94d23fcff9b2a7a8368dfe52214d5c2569882c11,0,507778,2.6109423988499375e+38,318.0,"Fix EC_GROUP_new_from_ecparameters to check the base length
+
+Check that there's at least one byte in params->base before trying to
+read it.
+
+CVE-2021-3712
+
+Reviewed-by: Viktor Dukhovni <viktor@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"EC_GROUP *EC_GROUP_new_from_ecparameters(const ECPARAMETERS *params)
+{
+    int ok = 0, tmp;
+    EC_GROUP *ret = NULL, *dup = NULL;
+    BIGNUM *p = NULL, *a = NULL, *b = NULL;
+    EC_POINT *point = NULL;
+    long field_bits;
+    int curve_name = NID_undef;
+    BN_CTX *ctx = NULL;
+
+    if (!params->fieldID || !params->fieldID->fieldType ||
+        !params->fieldID->p.ptr) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+        goto err;
+    }
+
+    /*
+     * Now extract the curve parameters a and b. Note that, although SEC 1
+     * specifies the length of their encodings, historical versions of OpenSSL
+     * encoded them incorrectly, so we must accept any length for backwards
+     * compatibility.
+     */
+    if (!params->curve || !params->curve->a ||
+        !params->curve->a->data || !params->curve->b ||
+        !params->curve->b->data) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+        goto err;
+    }
+    a = BN_bin2bn(params->curve->a->data, params->curve->a->length, NULL);
+    if (a == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_BN_LIB);
+        goto err;
+    }
+    b = BN_bin2bn(params->curve->b->data, params->curve->b->length, NULL);
+    if (b == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_BN_LIB);
+        goto err;
+    }
+
+    /* get the field parameters */
+    tmp = OBJ_obj2nid(params->fieldID->fieldType);
+    if (tmp == NID_X9_62_characteristic_two_field)
+#ifdef OPENSSL_NO_EC2M
+    {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_GF2M_NOT_SUPPORTED);
+        goto err;
+    }
+#else
+    {
+        X9_62_CHARACTERISTIC_TWO *char_two;
+
+        char_two = params->fieldID->p.char_two;
+
+        field_bits = char_two->m;
+        if (field_bits > OPENSSL_ECC_MAX_FIELD_BITS) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_FIELD_TOO_LARGE);
+            goto err;
+        }
+
+        if ((p = BN_new()) == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_MALLOC_FAILURE);
+            goto err;
+        }
+
+        /* get the base type */
+        tmp = OBJ_obj2nid(char_two->type);
+
+        if (tmp == NID_X9_62_tpBasis) {
+            long tmp_long;
+
+            if (!char_two->p.tpBasis) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+                goto err;
+            }
+
+            tmp_long = ASN1_INTEGER_get(char_two->p.tpBasis);
+
+            if (!(char_two->m > tmp_long && tmp_long > 0)) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS,
+                      EC_R_INVALID_TRINOMIAL_BASIS);
+                goto err;
+            }
+
+            /* create the polynomial */
+            if (!BN_set_bit(p, (int)char_two->m))
+                goto err;
+            if (!BN_set_bit(p, (int)tmp_long))
+                goto err;
+            if (!BN_set_bit(p, 0))
+                goto err;
+        } else if (tmp == NID_X9_62_ppBasis) {
+            X9_62_PENTANOMIAL *penta;
+
+            penta = char_two->p.ppBasis;
+            if (!penta) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+                goto err;
+            }
+
+            if (!
+                (char_two->m > penta->k3 && penta->k3 > penta->k2
+                 && penta->k2 > penta->k1 && penta->k1 > 0)) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS,
+                      EC_R_INVALID_PENTANOMIAL_BASIS);
+                goto err;
+            }
+
+            /* create the polynomial */
+            if (!BN_set_bit(p, (int)char_two->m))
+                goto err;
+            if (!BN_set_bit(p, (int)penta->k1))
+                goto err;
+            if (!BN_set_bit(p, (int)penta->k2))
+                goto err;
+            if (!BN_set_bit(p, (int)penta->k3))
+                goto err;
+            if (!BN_set_bit(p, 0))
+                goto err;
+        } else if (tmp == NID_X9_62_onBasis) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_NOT_IMPLEMENTED);
+            goto err;
+        } else {                /* error */
+
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+            goto err;
+        }
+
+        /* create the EC_GROUP structure */
+        ret = EC_GROUP_new_curve_GF2m(p, a, b, NULL);
+    }
+#endif
+    else if (tmp == NID_X9_62_prime_field) {
+        /* we have a curve over a prime field */
+        /* extract the prime number */
+        if (!params->fieldID->p.prime) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+            goto err;
+        }
+        p = ASN1_INTEGER_to_BN(params->fieldID->p.prime, NULL);
+        if (p == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_ASN1_LIB);
+            goto err;
+        }
+
+        if (BN_is_negative(p) || BN_is_zero(p)) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_FIELD);
+            goto err;
+        }
+
+        field_bits = BN_num_bits(p);
+        if (field_bits > OPENSSL_ECC_MAX_FIELD_BITS) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_FIELD_TOO_LARGE);
+            goto err;
+        }
+
+        /* create the EC_GROUP structure */
+        ret = EC_GROUP_new_curve_GFp(p, a, b, NULL);
+    } else {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_FIELD);
+        goto err;
+    }
+
+    if (ret == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    /* extract seed (optional) */
+    if (params->curve->seed != NULL) {
+        OPENSSL_free(ret->seed);
+        if ((ret->seed = OPENSSL_malloc(params->curve->seed->length)) == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_MALLOC_FAILURE);
+            goto err;
+        }
+        memcpy(ret->seed, params->curve->seed->data,
+               params->curve->seed->length);
+        ret->seed_len = params->curve->seed->length;
+    }
+
+    if (!params->order || !params->base || !params->base->data) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+        goto err;
+    }
+
+    if ((point = EC_POINT_new(ret)) == NULL)
+        goto err;
+
+    /* set the point conversion form */
+    EC_GROUP_set_point_conversion_form(ret, (point_conversion_form_t)
+                                       (params->base->data[0] & ~0x01));
+
+    /* extract the ec point */
+    if (!EC_POINT_oct2point(ret, point, params->base->data,
+                            params->base->length, NULL)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    /* extract the order */
+    if ((a = ASN1_INTEGER_to_BN(params->order, a)) == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_ASN1_LIB);
+        goto err;
+    }
+    if (BN_is_negative(a) || BN_is_zero(a)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_GROUP_ORDER);
+        goto err;
+    }
+    if (BN_num_bits(a) > (int)field_bits + 1) { /* Hasse bound */
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_GROUP_ORDER);
+        goto err;
+    }
+
+    /* extract the cofactor (optional) */
+    if (params->cofactor == NULL) {
+        BN_free(b);
+        b = NULL;
+    } else if ((b = ASN1_INTEGER_to_BN(params->cofactor, b)) == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_ASN1_LIB);
+        goto err;
+    }
+    /* set the generator, order and cofactor (if present) */
+    if (!EC_GROUP_set_generator(ret, point, a, b)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    /*
+     * Check if the explicit parameters group just created matches one of the
+     * built-in curves.
+     *
+     * We create a copy of the group just built, so that we can remove optional
+     * fields for the lookup: we do this to avoid the possibility that one of
+     * the optional parameters is used to force the library into using a less
+     * performant and less secure EC_METHOD instead of the specialized one.
+     * In any case, `seed` is not really used in any computation, while a
+     * cofactor different from the one in the built-in table is just
+     * mathematically wrong anyway and should not be used.
+     */
+    if ((ctx = BN_CTX_new()) == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_BN_LIB);
+        goto err;
+    }
+    if ((dup = EC_GROUP_dup(ret)) == NULL
+            || EC_GROUP_set_seed(dup, NULL, 0) != 1
+            || !EC_GROUP_set_generator(dup, point, a, NULL)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+    if ((curve_name = ec_curve_nid_from_params(dup, ctx)) != NID_undef) {
+        /*
+         * The input explicit parameters successfully matched one of the
+         * built-in curves: often for built-in curves we have specialized
+         * methods with better performance and hardening.
+         *
+         * In this case we replace the `EC_GROUP` created through explicit
+         * parameters with one created from a named group.
+         */
+        EC_GROUP *named_group = NULL;
+
+#ifndef OPENSSL_NO_EC_NISTP_64_GCC_128
+        /*
+         * NID_wap_wsg_idm_ecid_wtls12 and NID_secp224r1 are both aliases for
+         * the same curve, we prefer the SECP nid when matching explicit
+         * parameters as that is associated with a specialized EC_METHOD.
+         */
+        if (curve_name == NID_wap_wsg_idm_ecid_wtls12)
+            curve_name = NID_secp224r1;
+#endif /* !def(OPENSSL_NO_EC_NISTP_64_GCC_128) */
+
+        if ((named_group = EC_GROUP_new_by_curve_name(curve_name)) == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+            goto err;
+        }
+        EC_GROUP_free(ret);
+        ret = named_group;
+
+        /*
+         * Set the flag so that EC_GROUPs created from explicit parameters are
+         * serialized using explicit parameters by default.
+         */
+        EC_GROUP_set_asn1_flag(ret, OPENSSL_EC_EXPLICIT_CURVE);
+
+        /*
+         * If the input params do not contain the optional seed field we make
+         * sure it is not added to the returned group.
+         *
+         * The seed field is not really used inside libcrypto anyway, and
+         * adding it to parsed explicit parameter keys would alter their DER
+         * encoding output (because of the extra field) which could impact
+         * applications fingerprinting keys by their DER encoding.
+         */
+        if (params->curve->seed == NULL) {
+            if (EC_GROUP_set_seed(ret, NULL, 0) != 1)
+                goto err;
+        }
+    }
+
+    ok = 1;
+
+ err:
+    if (!ok) {
+        EC_GROUP_free(ret);
+        ret = NULL;
+    }
+    EC_GROUP_free(dup);
+
+    BN_free(p);
+    BN_free(a);
+    BN_free(b);
+    EC_POINT_free(point);
+
+    BN_CTX_free(ctx);
+
+    return ret;
+}","EC_GROUP *EC_GROUP_new_from_ecparameters(const ECPARAMETERS *params)
+{
+    int ok = 0, tmp;
+    EC_GROUP *ret = NULL, *dup = NULL;
+    BIGNUM *p = NULL, *a = NULL, *b = NULL;
+    EC_POINT *point = NULL;
+    long field_bits;
+    int curve_name = NID_undef;
+    BN_CTX *ctx = NULL;
+
+    if (!params->fieldID || !params->fieldID->fieldType ||
+        !params->fieldID->p.ptr) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+        goto err;
+    }
+
+    /*
+     * Now extract the curve parameters a and b. Note that, although SEC 1
+     * specifies the length of their encodings, historical versions of OpenSSL
+     * encoded them incorrectly, so we must accept any length for backwards
+     * compatibility.
+     */
+    if (!params->curve || !params->curve->a ||
+        !params->curve->a->data || !params->curve->b ||
+        !params->curve->b->data) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+        goto err;
+    }
+    a = BN_bin2bn(params->curve->a->data, params->curve->a->length, NULL);
+    if (a == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_BN_LIB);
+        goto err;
+    }
+    b = BN_bin2bn(params->curve->b->data, params->curve->b->length, NULL);
+    if (b == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_BN_LIB);
+        goto err;
+    }
+
+    /* get the field parameters */
+    tmp = OBJ_obj2nid(params->fieldID->fieldType);
+    if (tmp == NID_X9_62_characteristic_two_field)
+#ifdef OPENSSL_NO_EC2M
+    {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_GF2M_NOT_SUPPORTED);
+        goto err;
+    }
+#else
+    {
+        X9_62_CHARACTERISTIC_TWO *char_two;
+
+        char_two = params->fieldID->p.char_two;
+
+        field_bits = char_two->m;
+        if (field_bits > OPENSSL_ECC_MAX_FIELD_BITS) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_FIELD_TOO_LARGE);
+            goto err;
+        }
+
+        if ((p = BN_new()) == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_MALLOC_FAILURE);
+            goto err;
+        }
+
+        /* get the base type */
+        tmp = OBJ_obj2nid(char_two->type);
+
+        if (tmp == NID_X9_62_tpBasis) {
+            long tmp_long;
+
+            if (!char_two->p.tpBasis) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+                goto err;
+            }
+
+            tmp_long = ASN1_INTEGER_get(char_two->p.tpBasis);
+
+            if (!(char_two->m > tmp_long && tmp_long > 0)) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS,
+                      EC_R_INVALID_TRINOMIAL_BASIS);
+                goto err;
+            }
+
+            /* create the polynomial */
+            if (!BN_set_bit(p, (int)char_two->m))
+                goto err;
+            if (!BN_set_bit(p, (int)tmp_long))
+                goto err;
+            if (!BN_set_bit(p, 0))
+                goto err;
+        } else if (tmp == NID_X9_62_ppBasis) {
+            X9_62_PENTANOMIAL *penta;
+
+            penta = char_two->p.ppBasis;
+            if (!penta) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+                goto err;
+            }
+
+            if (!
+                (char_two->m > penta->k3 && penta->k3 > penta->k2
+                 && penta->k2 > penta->k1 && penta->k1 > 0)) {
+                ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS,
+                      EC_R_INVALID_PENTANOMIAL_BASIS);
+                goto err;
+            }
+
+            /* create the polynomial */
+            if (!BN_set_bit(p, (int)char_two->m))
+                goto err;
+            if (!BN_set_bit(p, (int)penta->k1))
+                goto err;
+            if (!BN_set_bit(p, (int)penta->k2))
+                goto err;
+            if (!BN_set_bit(p, (int)penta->k3))
+                goto err;
+            if (!BN_set_bit(p, 0))
+                goto err;
+        } else if (tmp == NID_X9_62_onBasis) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_NOT_IMPLEMENTED);
+            goto err;
+        } else {                /* error */
+
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+            goto err;
+        }
+
+        /* create the EC_GROUP structure */
+        ret = EC_GROUP_new_curve_GF2m(p, a, b, NULL);
+    }
+#endif
+    else if (tmp == NID_X9_62_prime_field) {
+        /* we have a curve over a prime field */
+        /* extract the prime number */
+        if (!params->fieldID->p.prime) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+            goto err;
+        }
+        p = ASN1_INTEGER_to_BN(params->fieldID->p.prime, NULL);
+        if (p == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_ASN1_LIB);
+            goto err;
+        }
+
+        if (BN_is_negative(p) || BN_is_zero(p)) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_FIELD);
+            goto err;
+        }
+
+        field_bits = BN_num_bits(p);
+        if (field_bits > OPENSSL_ECC_MAX_FIELD_BITS) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_FIELD_TOO_LARGE);
+            goto err;
+        }
+
+        /* create the EC_GROUP structure */
+        ret = EC_GROUP_new_curve_GFp(p, a, b, NULL);
+    } else {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_FIELD);
+        goto err;
+    }
+
+    if (ret == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    /* extract seed (optional) */
+    if (params->curve->seed != NULL) {
+        OPENSSL_free(ret->seed);
+        if ((ret->seed = OPENSSL_malloc(params->curve->seed->length)) == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_MALLOC_FAILURE);
+            goto err;
+        }
+        memcpy(ret->seed, params->curve->seed->data,
+               params->curve->seed->length);
+        ret->seed_len = params->curve->seed->length;
+    }
+
+    if (params->order == NULL
+            || params->base == NULL
+            || params->base->data == NULL
+            || params->base->length == 0) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_ASN1_ERROR);
+        goto err;
+    }
+
+    if ((point = EC_POINT_new(ret)) == NULL)
+        goto err;
+
+    /* set the point conversion form */
+    EC_GROUP_set_point_conversion_form(ret, (point_conversion_form_t)
+                                       (params->base->data[0] & ~0x01));
+
+    /* extract the ec point */
+    if (!EC_POINT_oct2point(ret, point, params->base->data,
+                            params->base->length, NULL)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    /* extract the order */
+    if ((a = ASN1_INTEGER_to_BN(params->order, a)) == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_ASN1_LIB);
+        goto err;
+    }
+    if (BN_is_negative(a) || BN_is_zero(a)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_GROUP_ORDER);
+        goto err;
+    }
+    if (BN_num_bits(a) > (int)field_bits + 1) { /* Hasse bound */
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, EC_R_INVALID_GROUP_ORDER);
+        goto err;
+    }
+
+    /* extract the cofactor (optional) */
+    if (params->cofactor == NULL) {
+        BN_free(b);
+        b = NULL;
+    } else if ((b = ASN1_INTEGER_to_BN(params->cofactor, b)) == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_ASN1_LIB);
+        goto err;
+    }
+    /* set the generator, order and cofactor (if present) */
+    if (!EC_GROUP_set_generator(ret, point, a, b)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+
+    /*
+     * Check if the explicit parameters group just created matches one of the
+     * built-in curves.
+     *
+     * We create a copy of the group just built, so that we can remove optional
+     * fields for the lookup: we do this to avoid the possibility that one of
+     * the optional parameters is used to force the library into using a less
+     * performant and less secure EC_METHOD instead of the specialized one.
+     * In any case, `seed` is not really used in any computation, while a
+     * cofactor different from the one in the built-in table is just
+     * mathematically wrong anyway and should not be used.
+     */
+    if ((ctx = BN_CTX_new()) == NULL) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_BN_LIB);
+        goto err;
+    }
+    if ((dup = EC_GROUP_dup(ret)) == NULL
+            || EC_GROUP_set_seed(dup, NULL, 0) != 1
+            || !EC_GROUP_set_generator(dup, point, a, NULL)) {
+        ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+        goto err;
+    }
+    if ((curve_name = ec_curve_nid_from_params(dup, ctx)) != NID_undef) {
+        /*
+         * The input explicit parameters successfully matched one of the
+         * built-in curves: often for built-in curves we have specialized
+         * methods with better performance and hardening.
+         *
+         * In this case we replace the `EC_GROUP` created through explicit
+         * parameters with one created from a named group.
+         */
+        EC_GROUP *named_group = NULL;
+
+#ifndef OPENSSL_NO_EC_NISTP_64_GCC_128
+        /*
+         * NID_wap_wsg_idm_ecid_wtls12 and NID_secp224r1 are both aliases for
+         * the same curve, we prefer the SECP nid when matching explicit
+         * parameters as that is associated with a specialized EC_METHOD.
+         */
+        if (curve_name == NID_wap_wsg_idm_ecid_wtls12)
+            curve_name = NID_secp224r1;
+#endif /* !def(OPENSSL_NO_EC_NISTP_64_GCC_128) */
+
+        if ((named_group = EC_GROUP_new_by_curve_name(curve_name)) == NULL) {
+            ECerr(EC_F_EC_GROUP_NEW_FROM_ECPARAMETERS, ERR_R_EC_LIB);
+            goto err;
+        }
+        EC_GROUP_free(ret);
+        ret = named_group;
+
+        /*
+         * Set the flag so that EC_GROUPs created from explicit parameters are
+         * serialized using explicit parameters by default.
+         */
+        EC_GROUP_set_asn1_flag(ret, OPENSSL_EC_EXPLICIT_CURVE);
+
+        /*
+         * If the input params do not contain the optional seed field we make
+         * sure it is not added to the returned group.
+         *
+         * The seed field is not really used inside libcrypto anyway, and
+         * adding it to parsed explicit parameter keys would alter their DER
+         * encoding output (because of the extra field) which could impact
+         * applications fingerprinting keys by their DER encoding.
+         */
+        if (params->curve->seed == NULL) {
+            if (EC_GROUP_set_seed(ret, NULL, 0) != 1)
+                goto err;
+        }
+    }
+
+    ok = 1;
+
+ err:
+    if (!ok) {
+        EC_GROUP_free(ret);
+        ret = NULL;
+    }
+    EC_GROUP_free(dup);
+
+    BN_free(p);
+    BN_free(a);
+    BN_free(b);
+    EC_POINT_free(point);
+
+    BN_CTX_free(ctx);
+
+    return ret;
+}",
+2550,"[""CWE-125""]",libidn,11abd0e02c16f9e0b6944aea4ef0f2df44b42dd4,11abd0e02c16f9e0b6944aea4ef0f2df44b42dd4,0,498371,1.5781411401495107e+38,198.0,Fix memory leak in last fix.,other,"idna_to_ascii_4i (const uint32_t * in, size_t inlen, char *out, int flags)
+{
+  size_t len, outlen;
+  uint32_t *src;		/* XXX don't need to copy data? */
+  int rc;
+
+  /*
+   * ToASCII consists of the following steps:
+   *
+   * 1. If all code points in the sequence are in the ASCII range (0..7F)
+   * then skip to step 3.
+   */
+
+  {
+    size_t i;
+    int inasciirange;
+
+    inasciirange = 1;
+    for (i = 0; i < inlen; i++)
+      if (in[i] > 0x7F)
+	inasciirange = 0;
+    if (inasciirange)
+      {
+	src = malloc (sizeof (in[0]) * (inlen + 1));
+	if (src == NULL)
+	  return IDNA_MALLOC_ERROR;
+
+	memcpy (src, in, sizeof (in[0]) * inlen);
+	src[inlen] = 0;
+
+	goto step3;
+      }
+  }
+
+  /*
+   * 2. Perform the steps specified in [NAMEPREP] and fail if there is
+   * an error. The AllowUnassigned flag is used in [NAMEPREP].
+   */
+
+  {
+    char *p;
+
+    p = stringprep_ucs4_to_utf8 (in, (ssize_t) inlen, NULL, NULL);
+    if (p == NULL)
+      return IDNA_MALLOC_ERROR;
+
+    len = strlen (p);
+    do
+      {
+	char *newp;
+
+	len = 2 * len + 10;	/* XXX better guess? */
+	newp = realloc (p, len);
+	if (newp == NULL)
+	  {
+	    free (p);
+	    return IDNA_MALLOC_ERROR;
+	  }
+	p = newp;
+
+	if (flags & IDNA_ALLOW_UNASSIGNED)
+	  rc = stringprep_nameprep (p, len);
+	else
+	  rc = stringprep_nameprep_no_unassigned (p, len);
+      }
+    while (rc == STRINGPREP_TOO_SMALL_BUFFER);
+
+    if (rc != STRINGPREP_OK)
+      {
+	free (p);
+	return IDNA_STRINGPREP_ERROR;
+      }
+
+    src = stringprep_utf8_to_ucs4 (p, -1, NULL);
+
+    free (p);
+
+    if (!src)
+      return IDNA_MALLOC_ERROR;
+  }
+
+step3:
+  /*
+   * 3. If the UseSTD3ASCIIRules flag is set, then perform these checks:
+   *
+   * (a) Verify the absence of non-LDH ASCII code points; that is,
+   * the absence of 0..2C, 2E..2F, 3A..40, 5B..60, and 7B..7F.
+   *
+   * (b) Verify the absence of leading and trailing hyphen-minus;
+   * that is, the absence of U+002D at the beginning and end of
+   * the sequence.
+   */
+
+  if (flags & IDNA_USE_STD3_ASCII_RULES)
+    {
+      size_t i;
+
+      for (i = 0; src[i]; i++)
+	if (src[i] <= 0x2C || src[i] == 0x2E || src[i] == 0x2F ||
+	    (src[i] >= 0x3A && src[i] <= 0x40) ||
+	    (src[i] >= 0x5B && src[i] <= 0x60) ||
+	    (src[i] >= 0x7B && src[i] <= 0x7F))
+	  {
+	    free (src);
+	    return IDNA_CONTAINS_NON_LDH;
+	  }
+
+      if (src[0] == 0x002D || (i > 0 && src[i - 1] == 0x002D))
+	{
+	  free (src);
+	  return IDNA_CONTAINS_MINUS;
+	}
+    }
+
+  /*
+   * 4. If all code points in the sequence are in the ASCII range
+   * (0..7F), then skip to step 8.
+   */
+
+  {
+    size_t i;
+    int inasciirange;
+
+    inasciirange = 1;
+    for (i = 0; src[i]; i++)
+      {
+	if (src[i] > 0x7F)
+	  inasciirange = 0;
+	/* copy string to output buffer if we are about to skip to step8 */
+	if (i < 64)
+	  out[i] = src[i];
+      }
+    if (i < 64)
+      out[i] = '\0';
+    else
+      return IDNA_INVALID_LENGTH;
+    if (inasciirange)
+      goto step8;
+  }
+
+  /*
+   * 5. Verify that the sequence does NOT begin with the ACE prefix.
+   *
+   */
+
+  {
+    size_t i;
+    int match;
+
+    match = 1;
+    for (i = 0; match && i < strlen (IDNA_ACE_PREFIX); i++)
+      if (((uint32_t) IDNA_ACE_PREFIX[i] & 0xFF) != src[i])
+	match = 0;
+    if (match)
+      {
+	free (src);
+	return IDNA_CONTAINS_ACE_PREFIX;
+      }
+  }
+
+  /*
+   * 6. Encode the sequence using the encoding algorithm in [PUNYCODE]
+   * and fail if there is an error.
+   */
+  for (len = 0; src[len]; len++)
+    ;
+  src[len] = '\0';
+  outlen = 63 - strlen (IDNA_ACE_PREFIX);
+  rc = punycode_encode (len, src, NULL,
+			&outlen, &out[strlen (IDNA_ACE_PREFIX)]);
+  if (rc != PUNYCODE_SUCCESS)
+    {
+      free (src);
+      return IDNA_PUNYCODE_ERROR;
+    }
+  out[strlen (IDNA_ACE_PREFIX) + outlen] = '\0';
+
+  /*
+   * 7. Prepend the ACE prefix.
+   */
+
+  memcpy (out, IDNA_ACE_PREFIX, strlen (IDNA_ACE_PREFIX));
+
+  /*
+   * 8. Verify that the number of code points is in the range 1 to 63
+   * inclusive (0 is excluded).
+   */
+
+step8:
+  free (src);
+  if (strlen (out) < 1)
+    return IDNA_INVALID_LENGTH;
+
+  return IDNA_SUCCESS;
+}","idna_to_ascii_4i (const uint32_t * in, size_t inlen, char *out, int flags)
+{
+  size_t len, outlen;
+  uint32_t *src;		/* XXX don't need to copy data? */
+  int rc;
+
+  /*
+   * ToASCII consists of the following steps:
+   *
+   * 1. If all code points in the sequence are in the ASCII range (0..7F)
+   * then skip to step 3.
+   */
+
+  {
+    size_t i;
+    int inasciirange;
+
+    inasciirange = 1;
+    for (i = 0; i < inlen; i++)
+      if (in[i] > 0x7F)
+	inasciirange = 0;
+    if (inasciirange)
+      {
+	src = malloc (sizeof (in[0]) * (inlen + 1));
+	if (src == NULL)
+	  return IDNA_MALLOC_ERROR;
+
+	memcpy (src, in, sizeof (in[0]) * inlen);
+	src[inlen] = 0;
+
+	goto step3;
+      }
+  }
+
+  /*
+   * 2. Perform the steps specified in [NAMEPREP] and fail if there is
+   * an error. The AllowUnassigned flag is used in [NAMEPREP].
+   */
+
+  {
+    char *p;
+
+    p = stringprep_ucs4_to_utf8 (in, (ssize_t) inlen, NULL, NULL);
+    if (p == NULL)
+      return IDNA_MALLOC_ERROR;
+
+    len = strlen (p);
+    do
+      {
+	char *newp;
+
+	len = 2 * len + 10;	/* XXX better guess? */
+	newp = realloc (p, len);
+	if (newp == NULL)
+	  {
+	    free (p);
+	    return IDNA_MALLOC_ERROR;
+	  }
+	p = newp;
+
+	if (flags & IDNA_ALLOW_UNASSIGNED)
+	  rc = stringprep_nameprep (p, len);
+	else
+	  rc = stringprep_nameprep_no_unassigned (p, len);
+      }
+    while (rc == STRINGPREP_TOO_SMALL_BUFFER);
+
+    if (rc != STRINGPREP_OK)
+      {
+	free (p);
+	return IDNA_STRINGPREP_ERROR;
+      }
+
+    src = stringprep_utf8_to_ucs4 (p, -1, NULL);
+
+    free (p);
+
+    if (!src)
+      return IDNA_MALLOC_ERROR;
+  }
+
+step3:
+  /*
+   * 3. If the UseSTD3ASCIIRules flag is set, then perform these checks:
+   *
+   * (a) Verify the absence of non-LDH ASCII code points; that is,
+   * the absence of 0..2C, 2E..2F, 3A..40, 5B..60, and 7B..7F.
+   *
+   * (b) Verify the absence of leading and trailing hyphen-minus;
+   * that is, the absence of U+002D at the beginning and end of
+   * the sequence.
+   */
+
+  if (flags & IDNA_USE_STD3_ASCII_RULES)
+    {
+      size_t i;
+
+      for (i = 0; src[i]; i++)
+	if (src[i] <= 0x2C || src[i] == 0x2E || src[i] == 0x2F ||
+	    (src[i] >= 0x3A && src[i] <= 0x40) ||
+	    (src[i] >= 0x5B && src[i] <= 0x60) ||
+	    (src[i] >= 0x7B && src[i] <= 0x7F))
+	  {
+	    free (src);
+	    return IDNA_CONTAINS_NON_LDH;
+	  }
+
+      if (src[0] == 0x002D || (i > 0 && src[i - 1] == 0x002D))
+	{
+	  free (src);
+	  return IDNA_CONTAINS_MINUS;
+	}
+    }
+
+  /*
+   * 4. If all code points in the sequence are in the ASCII range
+   * (0..7F), then skip to step 8.
+   */
+
+  {
+    size_t i;
+    int inasciirange;
+
+    inasciirange = 1;
+    for (i = 0; src[i]; i++)
+      {
+	if (src[i] > 0x7F)
+	  inasciirange = 0;
+	/* copy string to output buffer if we are about to skip to step8 */
+	if (i < 64)
+	  out[i] = src[i];
+      }
+    if (i < 64)
+      out[i] = '\0';
+    else
+      {
+	free (src);
+	return IDNA_INVALID_LENGTH;
+      }
+    if (inasciirange)
+      goto step8;
+  }
+
+  /*
+   * 5. Verify that the sequence does NOT begin with the ACE prefix.
+   *
+   */
+
+  {
+    size_t i;
+    int match;
+
+    match = 1;
+    for (i = 0; match && i < strlen (IDNA_ACE_PREFIX); i++)
+      if (((uint32_t) IDNA_ACE_PREFIX[i] & 0xFF) != src[i])
+	match = 0;
+    if (match)
+      {
+	free (src);
+	return IDNA_CONTAINS_ACE_PREFIX;
+      }
+  }
+
+  /*
+   * 6. Encode the sequence using the encoding algorithm in [PUNYCODE]
+   * and fail if there is an error.
+   */
+  for (len = 0; src[len]; len++)
+    ;
+  src[len] = '\0';
+  outlen = 63 - strlen (IDNA_ACE_PREFIX);
+  rc = punycode_encode (len, src, NULL,
+			&outlen, &out[strlen (IDNA_ACE_PREFIX)]);
+  if (rc != PUNYCODE_SUCCESS)
+    {
+      free (src);
+      return IDNA_PUNYCODE_ERROR;
+    }
+  out[strlen (IDNA_ACE_PREFIX) + outlen] = '\0';
+
+  /*
+   * 7. Prepend the ACE prefix.
+   */
+
+  memcpy (out, IDNA_ACE_PREFIX, strlen (IDNA_ACE_PREFIX));
+
+  /*
+   * 8. Verify that the number of code points is in the range 1 to 63
+   * inclusive (0 is excluded).
+   */
+
+step8:
+  free (src);
+  if (strlen (out) < 1)
+    return IDNA_INVALID_LENGTH;
+
+  return IDNA_SUCCESS;
+}",
+2551,"[""CWE-125""]",libidn,5e3cb9c7b5bf0ce665b9d68f5ddf095af5c9ba60,5e3cb9c7b5bf0ce665b9d68f5ddf095af5c9ba60,0,498373,2.443059578460826e+37,455.0,Really fix bug when reading \00 inputs.,other,"main (int argc, char *argv[])
+{
+  struct gengetopt_args_info args_info;
+  char *line = NULL;
+  size_t linelen = 0;
+  char *p, *r;
+  uint32_t *q;
+  unsigned cmdn = 0;
+  int rc;
+
+  setlocale (LC_ALL, """");
+  set_program_name (argv[0]);
+  bindtextdomain (PACKAGE, LOCALEDIR);
+  textdomain (PACKAGE);
+
+  if (cmdline_parser (argc, argv, &args_info) != 0)
+    return EXIT_FAILURE;
+
+  if (args_info.version_given)
+    {
+      version_etc (stdout, ""idn"", PACKAGE_NAME, VERSION,
+		   ""Simon Josefsson"", (char *) NULL);
+      return EXIT_SUCCESS;
+    }
+
+  if (args_info.help_given)
+    usage (EXIT_SUCCESS);
+
+  /* Backwards compatibility: -n has always been the documented short
+     form for --nfkc but, before v1.10, -k was the implemented short
+     form.  We now accept both to avoid documentation changes.  */
+  if (args_info.hidden_nfkc_given)
+    args_info.nfkc_given = 1;
+
+  if (!args_info.stringprep_given &&
+      !args_info.punycode_encode_given && !args_info.punycode_decode_given &&
+      !args_info.idna_to_ascii_given && !args_info.idna_to_unicode_given &&
+      !args_info.nfkc_given)
+    args_info.idna_to_ascii_given = 1;
+
+  if ((args_info.stringprep_given ? 1 : 0) +
+      (args_info.punycode_encode_given ? 1 : 0) +
+      (args_info.punycode_decode_given ? 1 : 0) +
+      (args_info.idna_to_ascii_given ? 1 : 0) +
+      (args_info.idna_to_unicode_given ? 1 : 0) +
+      (args_info.nfkc_given ? 1 : 0) != 1)
+    {
+      error (0, 0, _(""only one of -s, -e, -d, -a, -u or -n can be specified""));
+      usage (EXIT_FAILURE);
+    }
+
+  if (!args_info.quiet_given
+      && args_info.inputs_num == 0
+      && isatty (fileno (stdin)))
+    fprintf (stderr, ""%s %s\n"" GREETING, PACKAGE, VERSION);
+
+  if (args_info.debug_given)
+    fprintf (stderr, _(""Charset `%s'.\n""), stringprep_locale_charset ());
+
+  if (!args_info.quiet_given
+      && args_info.inputs_num == 0
+      && isatty (fileno (stdin)))
+    fprintf (stderr, _(""Type each input string on a line by itself, ""
+		       ""terminated by a newline character.\n""));
+
+  do
+    {
+      if (cmdn < args_info.inputs_num)
+	line = strdup (args_info.inputs[cmdn++]);
+      else if (getline (&line, &linelen, stdin) == -1)
+	{
+	  if (feof (stdin))
+	    break;
+
+	  error (EXIT_FAILURE, errno, _(""input error""));
+	}
+
+      if (line[strlen (line) - 1] == '\n')
+	line[strlen (line) - 1] = '\0';
+
+      if (args_info.stringprep_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	  if (!q)
+	    {
+	      free (p);
+	      error (EXIT_FAILURE, 0,
+		     _(""could not convert from UTF-8 to UCS-4""));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+	  free (q);
+
+	  rc = stringprep_profile (p, &r,
+				   args_info.profile_given ?
+				   args_info.profile_arg : ""Nameprep"", 0);
+	  free (p);
+	  if (rc != STRINGPREP_OK)
+	    error (EXIT_FAILURE, 0, _(""stringprep_profile: %s""),
+		   stringprep_strerror (rc));
+
+	  q = stringprep_utf8_to_ucs4 (r, -1, NULL);
+	  if (!q)
+	    {
+	      free (r);
+	      error (EXIT_FAILURE, 0,
+		     _(""could not convert from UTF-8 to UCS-4""));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+	  free (q);
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.punycode_encode_given)
+	{
+	  char encbuf[BUFSIZ];
+	  size_t len, len2;
+
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, &len);
+	  free (p);
+	  if (!q)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UTF-8 to UCS-4""));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; i < len; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+	  len2 = BUFSIZ - 1;
+	  rc = punycode_encode (len, q, NULL, &len2, encbuf);
+	  free (q);
+	  if (rc != PUNYCODE_SUCCESS)
+	    error (EXIT_FAILURE, 0, _(""punycode_encode: %s""),
+		   punycode_strerror (rc));
+
+	  encbuf[len2] = '\0';
+
+	  p = stringprep_utf8_to_locale (encbuf);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.punycode_decode_given)
+	{
+	  size_t len;
+
+	  len = BUFSIZ;
+	  q = (uint32_t *) malloc (len * sizeof (q[0]));
+	  if (!q)
+	    error (EXIT_FAILURE, ENOMEM, N_(""malloc""));
+
+	  rc = punycode_decode (strlen (line), line, &len, q, NULL);
+	  if (rc != PUNYCODE_SUCCESS)
+	    {
+	      free (q);
+	      error (EXIT_FAILURE, 0, _(""punycode_decode: %s""),
+		     punycode_strerror (rc));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; i < len; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+	  q[len] = 0;
+	  r = stringprep_ucs4_to_utf8 (q, -1, NULL, NULL);
+	  free (q);
+	  if (!r)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UCS-4 to UTF-8""));
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!r)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.idna_to_ascii_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	  free (p);
+	  if (!q)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UCS-4 to UTF-8""));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+	  rc = idna_to_ascii_4z (q, &p,
+				 (args_info.allow_unassigned_given ?
+				  IDNA_ALLOW_UNASSIGNED : 0) |
+				 (args_info.usestd3asciirules_given ?
+				  IDNA_USE_STD3_ASCII_RULES : 0));
+	  free (q);
+	  if (rc != IDNA_SUCCESS)
+	    error (EXIT_FAILURE, 0, _(""idna_to_ascii_4z: %s""),
+		   idna_strerror (rc));
+
+#ifdef WITH_TLD
+	  if (args_info.tld_flag && !args_info.no_tld_flag)
+	    {
+	      size_t errpos;
+
+	      rc = idna_to_unicode_8z4z (p, &q,
+					 (args_info.allow_unassigned_given ?
+					  IDNA_ALLOW_UNASSIGNED : 0) |
+					 (args_info.usestd3asciirules_given ?
+					  IDNA_USE_STD3_ASCII_RULES : 0));
+	      if (rc != IDNA_SUCCESS)
+		error (EXIT_FAILURE, 0, _(""idna_to_unicode_8z4z (TLD): %s""),
+		       idna_strerror (rc));
+
+	      if (args_info.debug_given)
+		{
+		  size_t i;
+		  for (i = 0; q[i]; i++)
+		    fprintf (stderr, ""tld[%lu] = U+%04x\n"",
+			     (unsigned long) i, q[i]);
+		}
+
+	      rc = tld_check_4z (q, &errpos, NULL);
+	      free (q);
+	      if (rc == TLD_INVALID)
+		error (EXIT_FAILURE, 0, _(""tld_check_4z (position %lu): %s""),
+		       (unsigned long) errpos, tld_strerror (rc));
+	      if (rc != TLD_SUCCESS)
+		error (EXIT_FAILURE, 0, _(""tld_check_4z: %s""),
+		       tld_strerror (rc));
+	    }
+#endif
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; p[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, p[i]);
+	    }
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.idna_to_unicode_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	  if (!q)
+	    {
+	      free (p);
+	      error (EXIT_FAILURE, 0,
+		     _(""could not convert from UCS-4 to UTF-8""));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+	  free (q);
+
+	  rc = idna_to_unicode_8z4z (p, &q,
+				     (args_info.allow_unassigned_given ?
+				      IDNA_ALLOW_UNASSIGNED : 0) |
+				     (args_info.usestd3asciirules_given ?
+				      IDNA_USE_STD3_ASCII_RULES : 0));
+	  free (p);
+	  if (rc != IDNA_SUCCESS)
+	    error (EXIT_FAILURE, 0, _(""idna_to_unicode_8z4z: %s""),
+		   idna_strerror (rc));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+#ifdef WITH_TLD
+	  if (args_info.tld_flag)
+	    {
+	      size_t errpos;
+
+	      rc = tld_check_4z (q, &errpos, NULL);
+	      if (rc == TLD_INVALID)
+		{
+		  free (q);
+		  error (EXIT_FAILURE, 0,
+			 _(""tld_check_4z (position %lu): %s""),
+			 (unsigned long) errpos, tld_strerror (rc));
+		}
+	      if (rc != TLD_SUCCESS)
+		{
+		  free (q);
+		  error (EXIT_FAILURE, 0, _(""tld_check_4z: %s""),
+			 tld_strerror (rc));
+		}
+	    }
+#endif
+
+	  r = stringprep_ucs4_to_utf8 (q, -1, NULL, NULL);
+	  free (q);
+	  if (!r)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UTF-8 to UCS-4""));
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.nfkc_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+
+	      q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	      if (!q)
+		{
+		  free (p);
+		  error (EXIT_FAILURE, 0,
+			 _(""could not convert from UTF-8 to UCS-4""));
+		}
+
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+
+	      free (q);
+	    }
+
+	  r = stringprep_utf8_nfkc_normalize (p, -1);
+	  free (p);
+	  if (!r)
+	    error (EXIT_FAILURE, 0, _(""could not do NFKC normalization""));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+
+	      q = stringprep_utf8_to_ucs4 (r, -1, NULL);
+	      if (!q)
+		{
+		  free (r);
+		  error (EXIT_FAILURE, 0,
+			 _(""could not convert from UTF-8 to UCS-4""));
+		}
+
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+
+	      free (q);
+	    }
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      fflush (stdout);
+    }
+  while (!feof (stdin) && !ferror (stdin) && (args_info.inputs_num == 0 ||
+					      cmdn < args_info.inputs_num));
+
+  free (line);
+
+  return EXIT_SUCCESS;
+}","main (int argc, char *argv[])
+{
+  struct gengetopt_args_info args_info;
+  char *line = NULL;
+  size_t linelen = 0;
+  char *p, *r;
+  uint32_t *q;
+  unsigned cmdn = 0;
+  int rc;
+
+  setlocale (LC_ALL, """");
+  set_program_name (argv[0]);
+  bindtextdomain (PACKAGE, LOCALEDIR);
+  textdomain (PACKAGE);
+
+  if (cmdline_parser (argc, argv, &args_info) != 0)
+    return EXIT_FAILURE;
+
+  if (args_info.version_given)
+    {
+      version_etc (stdout, ""idn"", PACKAGE_NAME, VERSION,
+		   ""Simon Josefsson"", (char *) NULL);
+      return EXIT_SUCCESS;
+    }
+
+  if (args_info.help_given)
+    usage (EXIT_SUCCESS);
+
+  /* Backwards compatibility: -n has always been the documented short
+     form for --nfkc but, before v1.10, -k was the implemented short
+     form.  We now accept both to avoid documentation changes.  */
+  if (args_info.hidden_nfkc_given)
+    args_info.nfkc_given = 1;
+
+  if (!args_info.stringprep_given &&
+      !args_info.punycode_encode_given && !args_info.punycode_decode_given &&
+      !args_info.idna_to_ascii_given && !args_info.idna_to_unicode_given &&
+      !args_info.nfkc_given)
+    args_info.idna_to_ascii_given = 1;
+
+  if ((args_info.stringprep_given ? 1 : 0) +
+      (args_info.punycode_encode_given ? 1 : 0) +
+      (args_info.punycode_decode_given ? 1 : 0) +
+      (args_info.idna_to_ascii_given ? 1 : 0) +
+      (args_info.idna_to_unicode_given ? 1 : 0) +
+      (args_info.nfkc_given ? 1 : 0) != 1)
+    {
+      error (0, 0, _(""only one of -s, -e, -d, -a, -u or -n can be specified""));
+      usage (EXIT_FAILURE);
+    }
+
+  if (!args_info.quiet_given
+      && args_info.inputs_num == 0
+      && isatty (fileno (stdin)))
+    fprintf (stderr, ""%s %s\n"" GREETING, PACKAGE, VERSION);
+
+  if (args_info.debug_given)
+    fprintf (stderr, _(""Charset `%s'.\n""), stringprep_locale_charset ());
+
+  if (!args_info.quiet_given
+      && args_info.inputs_num == 0
+      && isatty (fileno (stdin)))
+    fprintf (stderr, _(""Type each input string on a line by itself, ""
+		       ""terminated by a newline character.\n""));
+
+  do
+    {
+      if (cmdn < args_info.inputs_num)
+	line = strdup (args_info.inputs[cmdn++]);
+      else if (getline (&line, &linelen, stdin) == -1)
+	{
+	  if (feof (stdin))
+	    break;
+
+	  error (EXIT_FAILURE, errno, _(""input error""));
+	}
+
+      if (strlen (line) > 0)
+	if (line[strlen (line) - 1] == '\n')
+	  line[strlen (line) - 1] = '\0';
+
+      if (args_info.stringprep_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	  if (!q)
+	    {
+	      free (p);
+	      error (EXIT_FAILURE, 0,
+		     _(""could not convert from UTF-8 to UCS-4""));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+	  free (q);
+
+	  rc = stringprep_profile (p, &r,
+				   args_info.profile_given ?
+				   args_info.profile_arg : ""Nameprep"", 0);
+	  free (p);
+	  if (rc != STRINGPREP_OK)
+	    error (EXIT_FAILURE, 0, _(""stringprep_profile: %s""),
+		   stringprep_strerror (rc));
+
+	  q = stringprep_utf8_to_ucs4 (r, -1, NULL);
+	  if (!q)
+	    {
+	      free (r);
+	      error (EXIT_FAILURE, 0,
+		     _(""could not convert from UTF-8 to UCS-4""));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+	  free (q);
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.punycode_encode_given)
+	{
+	  char encbuf[BUFSIZ];
+	  size_t len, len2;
+
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, &len);
+	  free (p);
+	  if (!q)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UTF-8 to UCS-4""));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; i < len; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+	  len2 = BUFSIZ - 1;
+	  rc = punycode_encode (len, q, NULL, &len2, encbuf);
+	  free (q);
+	  if (rc != PUNYCODE_SUCCESS)
+	    error (EXIT_FAILURE, 0, _(""punycode_encode: %s""),
+		   punycode_strerror (rc));
+
+	  encbuf[len2] = '\0';
+
+	  p = stringprep_utf8_to_locale (encbuf);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.punycode_decode_given)
+	{
+	  size_t len;
+
+	  len = BUFSIZ;
+	  q = (uint32_t *) malloc (len * sizeof (q[0]));
+	  if (!q)
+	    error (EXIT_FAILURE, ENOMEM, N_(""malloc""));
+
+	  rc = punycode_decode (strlen (line), line, &len, q, NULL);
+	  if (rc != PUNYCODE_SUCCESS)
+	    {
+	      free (q);
+	      error (EXIT_FAILURE, 0, _(""punycode_decode: %s""),
+		     punycode_strerror (rc));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; i < len; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+	  q[len] = 0;
+	  r = stringprep_ucs4_to_utf8 (q, -1, NULL, NULL);
+	  free (q);
+	  if (!r)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UCS-4 to UTF-8""));
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!r)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.idna_to_ascii_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	  free (p);
+	  if (!q)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UCS-4 to UTF-8""));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+	  rc = idna_to_ascii_4z (q, &p,
+				 (args_info.allow_unassigned_given ?
+				  IDNA_ALLOW_UNASSIGNED : 0) |
+				 (args_info.usestd3asciirules_given ?
+				  IDNA_USE_STD3_ASCII_RULES : 0));
+	  free (q);
+	  if (rc != IDNA_SUCCESS)
+	    error (EXIT_FAILURE, 0, _(""idna_to_ascii_4z: %s""),
+		   idna_strerror (rc));
+
+#ifdef WITH_TLD
+	  if (args_info.tld_flag && !args_info.no_tld_flag)
+	    {
+	      size_t errpos;
+
+	      rc = idna_to_unicode_8z4z (p, &q,
+					 (args_info.allow_unassigned_given ?
+					  IDNA_ALLOW_UNASSIGNED : 0) |
+					 (args_info.usestd3asciirules_given ?
+					  IDNA_USE_STD3_ASCII_RULES : 0));
+	      if (rc != IDNA_SUCCESS)
+		error (EXIT_FAILURE, 0, _(""idna_to_unicode_8z4z (TLD): %s""),
+		       idna_strerror (rc));
+
+	      if (args_info.debug_given)
+		{
+		  size_t i;
+		  for (i = 0; q[i]; i++)
+		    fprintf (stderr, ""tld[%lu] = U+%04x\n"",
+			     (unsigned long) i, q[i]);
+		}
+
+	      rc = tld_check_4z (q, &errpos, NULL);
+	      free (q);
+	      if (rc == TLD_INVALID)
+		error (EXIT_FAILURE, 0, _(""tld_check_4z (position %lu): %s""),
+		       (unsigned long) errpos, tld_strerror (rc));
+	      if (rc != TLD_SUCCESS)
+		error (EXIT_FAILURE, 0, _(""tld_check_4z: %s""),
+		       tld_strerror (rc));
+	    }
+#endif
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; p[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, p[i]);
+	    }
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.idna_to_unicode_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	  if (!q)
+	    {
+	      free (p);
+	      error (EXIT_FAILURE, 0,
+		     _(""could not convert from UCS-4 to UTF-8""));
+	    }
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+	  free (q);
+
+	  rc = idna_to_unicode_8z4z (p, &q,
+				     (args_info.allow_unassigned_given ?
+				      IDNA_ALLOW_UNASSIGNED : 0) |
+				     (args_info.usestd3asciirules_given ?
+				      IDNA_USE_STD3_ASCII_RULES : 0));
+	  free (p);
+	  if (rc != IDNA_SUCCESS)
+	    error (EXIT_FAILURE, 0, _(""idna_to_unicode_8z4z: %s""),
+		   idna_strerror (rc));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+	    }
+
+#ifdef WITH_TLD
+	  if (args_info.tld_flag)
+	    {
+	      size_t errpos;
+
+	      rc = tld_check_4z (q, &errpos, NULL);
+	      if (rc == TLD_INVALID)
+		{
+		  free (q);
+		  error (EXIT_FAILURE, 0,
+			 _(""tld_check_4z (position %lu): %s""),
+			 (unsigned long) errpos, tld_strerror (rc));
+		}
+	      if (rc != TLD_SUCCESS)
+		{
+		  free (q);
+		  error (EXIT_FAILURE, 0, _(""tld_check_4z: %s""),
+			 tld_strerror (rc));
+		}
+	    }
+#endif
+
+	  r = stringprep_ucs4_to_utf8 (q, -1, NULL, NULL);
+	  free (q);
+	  if (!r)
+	    error (EXIT_FAILURE, 0,
+		   _(""could not convert from UTF-8 to UCS-4""));
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      if (args_info.nfkc_given)
+	{
+	  p = stringprep_locale_to_utf8 (line);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from %s to UTF-8""),
+		   stringprep_locale_charset ());
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+
+	      q = stringprep_utf8_to_ucs4 (p, -1, NULL);
+	      if (!q)
+		{
+		  free (p);
+		  error (EXIT_FAILURE, 0,
+			 _(""could not convert from UTF-8 to UCS-4""));
+		}
+
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""input[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+
+	      free (q);
+	    }
+
+	  r = stringprep_utf8_nfkc_normalize (p, -1);
+	  free (p);
+	  if (!r)
+	    error (EXIT_FAILURE, 0, _(""could not do NFKC normalization""));
+
+	  if (args_info.debug_given)
+	    {
+	      size_t i;
+
+	      q = stringprep_utf8_to_ucs4 (r, -1, NULL);
+	      if (!q)
+		{
+		  free (r);
+		  error (EXIT_FAILURE, 0,
+			 _(""could not convert from UTF-8 to UCS-4""));
+		}
+
+	      for (i = 0; q[i]; i++)
+		fprintf (stderr, ""output[%lu] = U+%04x\n"",
+			 (unsigned long) i, q[i]);
+
+	      free (q);
+	    }
+
+	  p = stringprep_utf8_to_locale (r);
+	  free (r);
+	  if (!p)
+	    error (EXIT_FAILURE, 0, _(""could not convert from UTF-8 to %s""),
+		   stringprep_locale_charset ());
+
+	  fprintf (stdout, ""%s\n"", p);
+
+	  free (p);
+	}
+
+      fflush (stdout);
+    }
+  while (!feof (stdin) && !ferror (stdin) && (args_info.inputs_num == 0 ||
+					      cmdn < args_info.inputs_num));
+
+  free (line);
+
+  return EXIT_SUCCESS;
+}",
+2555,"[""CWE-125""]",libcroco,898e3a8c8c0314d2e6b106809a8e3e93cf9d4394,898e3a8c8c0314d2e6b106809a8e3e93cf9d4394,0,498469,2.7643206829958963e+38,30.0,"input: check end of input before reading a byte
+
+When reading bytes we weren't check that the index wasn't
+out of bound and this could produce an invalid read which
+could deal to a security bug.",other,"cr_input_read_byte (CRInput * a_this, guchar * a_byte)
+{
+        g_return_val_if_fail (a_this && PRIVATE (a_this)
+                              && a_byte, CR_BAD_PARAM_ERROR);
+
+        g_return_val_if_fail (PRIVATE (a_this)->next_byte_index <=
+                              PRIVATE (a_this)->nb_bytes, CR_BAD_PARAM_ERROR);
+
+        if (PRIVATE (a_this)->end_of_input == TRUE)
+                return CR_END_OF_INPUT_ERROR;
+
+        *a_byte = PRIVATE (a_this)->in_buf[PRIVATE (a_this)->next_byte_index];
+
+        if (PRIVATE (a_this)->nb_bytes -
+            PRIVATE (a_this)->next_byte_index < 2) {
+                PRIVATE (a_this)->end_of_input = TRUE;
+        } else {
+                PRIVATE (a_this)->next_byte_index++;
+        }
+
+        return CR_OK;
+}","cr_input_read_byte (CRInput * a_this, guchar * a_byte)
+{
+        gulong nb_bytes_left = 0;
+
+        g_return_val_if_fail (a_this && PRIVATE (a_this)
+                              && a_byte, CR_BAD_PARAM_ERROR);
+
+        g_return_val_if_fail (PRIVATE (a_this)->next_byte_index <=
+                              PRIVATE (a_this)->nb_bytes, CR_BAD_PARAM_ERROR);
+
+        if (PRIVATE (a_this)->end_of_input == TRUE)
+                return CR_END_OF_INPUT_ERROR;
+
+        nb_bytes_left = cr_input_get_nb_bytes_left (a_this);
+
+        if (nb_bytes_left < 1) {
+                return CR_END_OF_INPUT_ERROR;
+        }
+
+        *a_byte = PRIVATE (a_this)->in_buf[PRIVATE (a_this)->next_byte_index];
+
+        if (PRIVATE (a_this)->nb_bytes -
+            PRIVATE (a_this)->next_byte_index < 2) {
+                PRIVATE (a_this)->end_of_input = TRUE;
+        } else {
+                PRIVATE (a_this)->next_byte_index++;
+        }
+
+        return CR_OK;
+}",
+2560,"[""CWE-125""]",GIMP,8ea316667c8a3296bce2832b3986b58d0fdfc077,8ea316667c8a3296bce2832b3986b58d0fdfc077,0,498630,7.345400137213633e+37,208.0,"plug-ins: TGA 16-bit RGB (without alpha bit) is also valid.
+
+According to some spec on the web, 16-bit RGB is also valid. In this
+case, the last bit is simply ignored (at least that's how it is
+implemented right now).",other,"load_image (const gchar  *filename,
+            GError      **error)
+{
+  FILE     *fp;
+  tga_info  info;
+  guchar    header[18];
+  guchar    footer[26];
+  guchar    extension[495];
+  long      offset;
+  gint32    image_ID = -1;
+
+  gimp_progress_init_printf (_(""Opening '%s'""),
+                             gimp_filename_to_utf8 (filename));
+
+  fp = g_fopen (filename, ""rb"");
+
+  if (! fp)
+    {
+      g_set_error (error, G_FILE_ERROR, g_file_error_from_errno (errno),
+                   _(""Could not open '%s' for reading: %s""),
+                   gimp_filename_to_utf8 (filename), g_strerror (errno));
+      return -1;
+    }
+
+  /* Is file big enough for a footer? */
+  if (!fseek (fp, -26L, SEEK_END))
+    {
+      if (fread (footer, sizeof (footer), 1, fp) != 1)
+        {
+          g_message (_(""Cannot read footer from '%s'""),
+                     gimp_filename_to_utf8 (filename));
+          return -1;
+        }
+      else if (memcmp (footer + 8, magic, sizeof (magic)) == 0)
+        {
+          /* Check the signature. */
+
+          offset = (footer[0]          +
+                    footer[1] * 256L   +
+                    footer[2] * 65536L +
+                    footer[3] * 16777216L);
+
+          if (offset != 0)
+            {
+              if (fseek (fp, offset, SEEK_SET) ||
+                  fread (extension, sizeof (extension), 1, fp) != 1)
+                {
+                  g_message (_(""Cannot read extension from '%s'""),
+                             gimp_filename_to_utf8 (filename));
+                  return -1;
+                }
+              /* Eventually actually handle version 2 TGA here */
+            }
+        }
+    }
+
+  if (fseek (fp, 0, SEEK_SET) ||
+      fread (header, sizeof (header), 1, fp) != 1)
+    {
+      g_message (_(""Cannot read header from '%s'""),
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  switch (header[2])
+    {
+    case 1:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 2:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 3:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+
+    case 9:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 10:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 11:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+
+    default:
+      info.imageType = 0;
+    }
+
+  info.idLength     = header[0];
+  info.colorMapType = header[1];
+
+  info.colorMapIndex  = header[3] + header[4] * 256;
+  info.colorMapLength = header[5] + header[6] * 256;
+  info.colorMapSize   = header[7];
+
+  info.xOrigin = header[8]  + header[9] * 256;
+  info.yOrigin = header[10] + header[11] * 256;
+  info.width   = header[12] + header[13] * 256;
+  info.height  = header[14] + header[15] * 256;
+
+  info.bpp       = header[16];
+  info.bytes     = (info.bpp + 7) / 8;
+  info.alphaBits = header[17] & 0x0f; /* Just the low 4 bits */
+  info.flipHoriz = (header[17] & 0x10) ? 1 : 0;
+  info.flipVert  = (header[17] & 0x20) ? 0 : 1;
+
+  /* hack to handle some existing files with incorrect headers, see bug #306675 */
+  if (info.alphaBits == info.bpp)
+    info.alphaBits = 0;
+
+  /* hack to handle yet another flavor of incorrect headers, see bug #540969 */
+  if (info.alphaBits == 0)
+    {
+      if (info.imageType == TGA_TYPE_COLOR && info.bpp == 32)
+        info.alphaBits = 8;
+
+      if (info.imageType == TGA_TYPE_GRAY && info.bpp == 16)
+        info.alphaBits = 8;
+    }
+
+  switch (info.imageType)
+    {
+      case TGA_TYPE_MAPPED:
+        if (info.bpp != 8)
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_COLOR:
+        if ((info.bpp != 15 && info.bpp != 16 &&
+             info.bpp != 24 && info.bpp != 32)      ||
+            ((info.bpp == 15 || info.bpp == 24) &&
+             info.alphaBits != 0)                   ||
+            (info.bpp == 16 && info.alphaBits != 1) ||
+            (info.bpp == 32 && info.alphaBits != 8))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u, alpha = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp, info.alphaBits);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_GRAY:
+        if (info.bpp != 8 &&
+            (info.alphaBits != 8 || (info.bpp != 16 && info.bpp != 15)))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+
+      default:
+        g_message (""Unknown image type %u for '%s'"",
+                   info.imageType, gimp_filename_to_utf8 (filename));
+        return -1;
+    }
+
+  /* Plausible but unhandled formats */
+  if (info.bytes * 8 != info.bpp && info.bpp != 15)
+    {
+      g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                 gimp_filename_to_utf8 (filename),
+                 info.imageType, info.bpp);
+      return -1;
+    }
+
+  /* Check that we have a color map only when we need it. */
+  if (info.imageType == TGA_TYPE_MAPPED && info.colorMapType != 1)
+    {
+      g_message (""Indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+  else if (info.imageType != TGA_TYPE_MAPPED && info.colorMapType != 0)
+    {
+      g_message (""Non-indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+
+  /* Skip the image ID field. */
+  if (info.idLength && fseek (fp, info.idLength, SEEK_CUR))
+    {
+      g_message (""File '%s' is truncated or corrupted"",
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  image_ID = ReadImage (fp, &info, filename);
+
+  fclose (fp);
+
+  return image_ID;
+}","load_image (const gchar  *filename,
+            GError      **error)
+{
+  FILE     *fp;
+  tga_info  info;
+  guchar    header[18];
+  guchar    footer[26];
+  guchar    extension[495];
+  long      offset;
+  gint32    image_ID = -1;
+
+  gimp_progress_init_printf (_(""Opening '%s'""),
+                             gimp_filename_to_utf8 (filename));
+
+  fp = g_fopen (filename, ""rb"");
+
+  if (! fp)
+    {
+      g_set_error (error, G_FILE_ERROR, g_file_error_from_errno (errno),
+                   _(""Could not open '%s' for reading: %s""),
+                   gimp_filename_to_utf8 (filename), g_strerror (errno));
+      return -1;
+    }
+
+  /* Is file big enough for a footer? */
+  if (!fseek (fp, -26L, SEEK_END))
+    {
+      if (fread (footer, sizeof (footer), 1, fp) != 1)
+        {
+          g_message (_(""Cannot read footer from '%s'""),
+                     gimp_filename_to_utf8 (filename));
+          return -1;
+        }
+      else if (memcmp (footer + 8, magic, sizeof (magic)) == 0)
+        {
+          /* Check the signature. */
+
+          offset = (footer[0]          +
+                    footer[1] * 256L   +
+                    footer[2] * 65536L +
+                    footer[3] * 16777216L);
+
+          if (offset != 0)
+            {
+              if (fseek (fp, offset, SEEK_SET) ||
+                  fread (extension, sizeof (extension), 1, fp) != 1)
+                {
+                  g_message (_(""Cannot read extension from '%s'""),
+                             gimp_filename_to_utf8 (filename));
+                  return -1;
+                }
+              /* Eventually actually handle version 2 TGA here */
+            }
+        }
+    }
+
+  if (fseek (fp, 0, SEEK_SET) ||
+      fread (header, sizeof (header), 1, fp) != 1)
+    {
+      g_message (_(""Cannot read header from '%s'""),
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  switch (header[2])
+    {
+    case 1:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 2:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 3:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+
+    case 9:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 10:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 11:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+
+    default:
+      info.imageType = 0;
+    }
+
+  info.idLength     = header[0];
+  info.colorMapType = header[1];
+
+  info.colorMapIndex  = header[3] + header[4] * 256;
+  info.colorMapLength = header[5] + header[6] * 256;
+  info.colorMapSize   = header[7];
+
+  info.xOrigin = header[8]  + header[9] * 256;
+  info.yOrigin = header[10] + header[11] * 256;
+  info.width   = header[12] + header[13] * 256;
+  info.height  = header[14] + header[15] * 256;
+
+  info.bpp       = header[16];
+  info.bytes     = (info.bpp + 7) / 8;
+  info.alphaBits = header[17] & 0x0f; /* Just the low 4 bits */
+  info.flipHoriz = (header[17] & 0x10) ? 1 : 0;
+  info.flipVert  = (header[17] & 0x20) ? 0 : 1;
+
+  /* hack to handle some existing files with incorrect headers, see bug #306675 */
+  if (info.alphaBits == info.bpp)
+    info.alphaBits = 0;
+
+  /* hack to handle yet another flavor of incorrect headers, see bug #540969 */
+  if (info.alphaBits == 0)
+    {
+      if (info.imageType == TGA_TYPE_COLOR && info.bpp == 32)
+        info.alphaBits = 8;
+
+      if (info.imageType == TGA_TYPE_GRAY && info.bpp == 16)
+        info.alphaBits = 8;
+    }
+
+  switch (info.imageType)
+    {
+      case TGA_TYPE_MAPPED:
+        if (info.bpp != 8)
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_COLOR:
+        if ((info.bpp != 15 && info.bpp != 16 &&
+             info.bpp != 24 && info.bpp != 32)      ||
+            ((info.bpp == 15 || info.bpp == 24) &&
+             info.alphaBits != 0)                   ||
+            (info.bpp == 16 && info.alphaBits != 1 &&
+             info.alphaBits != 0)                   ||
+            (info.bpp == 32 && info.alphaBits != 8))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u, alpha = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp, info.alphaBits);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_GRAY:
+        if (info.bpp != 8 &&
+            (info.alphaBits != 8 || (info.bpp != 16 && info.bpp != 15)))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+
+      default:
+        g_message (""Unknown image type %u for '%s'"",
+                   info.imageType, gimp_filename_to_utf8 (filename));
+        return -1;
+    }
+
+  /* Plausible but unhandled formats */
+  if (info.bytes * 8 != info.bpp && info.bpp != 15)
+    {
+      g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                 gimp_filename_to_utf8 (filename),
+                 info.imageType, info.bpp);
+      return -1;
+    }
+
+  /* Check that we have a color map only when we need it. */
+  if (info.imageType == TGA_TYPE_MAPPED && info.colorMapType != 1)
+    {
+      g_message (""Indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+  else if (info.imageType != TGA_TYPE_MAPPED && info.colorMapType != 0)
+    {
+      g_message (""Non-indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+
+  /* Skip the image ID field. */
+  if (info.idLength && fseek (fp, info.idLength, SEEK_CUR))
+    {
+      g_message (""File '%s' is truncated or corrupted"",
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  image_ID = ReadImage (fp, &info, filename);
+
+  fclose (fp);
+
+  return image_ID;
+}",
+2570,"[""CWE-125""]",media_tree,0c4df39e504bf925ab666132ac3c98d6cbbe380b,0c4df39e504bf925ab666132ac3c98d6cbbe380b,0,498980,3.2940637197522174e+38,66.0,"media: technisat-usb2: break out of loop at end of buffer
+
+Ensure we do not access the buffer beyond the end if no 0xff byte
+is encountered.
+
+Reported-by: syzbot+eaaaf38a95427be88f4b@syzkaller.appspotmail.com
+Signed-off-by: Sean Young <sean@mess.org>
+Reviewed-by: Kees Cook <keescook@chromium.org>
+Signed-off-by: Mauro Carvalho Chehab <mchehab+samsung@kernel.org>",other,"static int technisat_usb2_get_ir(struct dvb_usb_device *d)
+{
+	struct technisat_usb2_state *state = d->priv;
+	u8 *buf = state->buf;
+	u8 *b;
+	int ret;
+	struct ir_raw_event ev;
+
+	buf[0] = GET_IR_DATA_VENDOR_REQUEST;
+	buf[1] = 0x08;
+	buf[2] = 0x8f;
+	buf[3] = MINIMUM_IR_BIT_TRANSITION_TICK_COUNT;
+	buf[4] = MAXIMUM_IR_BIT_TIME_TICK_COUNT;
+
+	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
+		return -EAGAIN;
+	ret = usb_control_msg(d->udev, usb_sndctrlpipe(d->udev, 0),
+			GET_IR_DATA_VENDOR_REQUEST,
+			USB_TYPE_VENDOR | USB_DIR_OUT,
+			0, 0,
+			buf, 5, 500);
+	if (ret < 0)
+		goto unlock;
+
+	buf[1] = 0;
+	buf[2] = 0;
+	ret = usb_control_msg(d->udev, usb_rcvctrlpipe(d->udev, 0),
+			GET_IR_DATA_VENDOR_REQUEST,
+			USB_TYPE_VENDOR | USB_DIR_IN,
+			0x8080, 0,
+			buf, 62, 500);
+
+unlock:
+	mutex_unlock(&d->i2c_mutex);
+
+	if (ret < 0)
+		return ret;
+
+	if (ret == 1)
+		return 0; /* no key pressed */
+
+	/* decoding */
+	b = buf+1;
+
+#if 0
+	deb_rc(""RC: %d "", ret);
+	debug_dump(b, ret, deb_rc);
+#endif
+
+	ev.pulse = 0;
+	while (1) {
+		ev.pulse = !ev.pulse;
+		ev.duration = (*b * FIRMWARE_CLOCK_DIVISOR * FIRMWARE_CLOCK_TICK) / 1000;
+		ir_raw_event_store(d->rc_dev, &ev);
+
+		b++;
+		if (*b == 0xff) {
+			ev.pulse = 0;
+			ev.duration = 888888*2;
+			ir_raw_event_store(d->rc_dev, &ev);
+			break;
+		}
+	}
+
+	ir_raw_event_handle(d->rc_dev);
+
+	return 1;
+}","static int technisat_usb2_get_ir(struct dvb_usb_device *d)
+{
+	struct technisat_usb2_state *state = d->priv;
+	struct ir_raw_event ev;
+	u8 *buf = state->buf;
+	int i, ret;
+
+	buf[0] = GET_IR_DATA_VENDOR_REQUEST;
+	buf[1] = 0x08;
+	buf[2] = 0x8f;
+	buf[3] = MINIMUM_IR_BIT_TRANSITION_TICK_COUNT;
+	buf[4] = MAXIMUM_IR_BIT_TIME_TICK_COUNT;
+
+	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
+		return -EAGAIN;
+	ret = usb_control_msg(d->udev, usb_sndctrlpipe(d->udev, 0),
+			GET_IR_DATA_VENDOR_REQUEST,
+			USB_TYPE_VENDOR | USB_DIR_OUT,
+			0, 0,
+			buf, 5, 500);
+	if (ret < 0)
+		goto unlock;
+
+	buf[1] = 0;
+	buf[2] = 0;
+	ret = usb_control_msg(d->udev, usb_rcvctrlpipe(d->udev, 0),
+			GET_IR_DATA_VENDOR_REQUEST,
+			USB_TYPE_VENDOR | USB_DIR_IN,
+			0x8080, 0,
+			buf, 62, 500);
+
+unlock:
+	mutex_unlock(&d->i2c_mutex);
+
+	if (ret < 0)
+		return ret;
+
+	if (ret == 1)
+		return 0; /* no key pressed */
+
+	/* decoding */
+
+#if 0
+	deb_rc(""RC: %d "", ret);
+	debug_dump(buf + 1, ret, deb_rc);
+#endif
+
+	ev.pulse = 0;
+	for (i = 1; i < ARRAY_SIZE(state->buf); i++) {
+		if (buf[i] == 0xff) {
+			ev.pulse = 0;
+			ev.duration = 888888*2;
+			ir_raw_event_store(d->rc_dev, &ev);
+			break;
+		}
+
+		ev.pulse = !ev.pulse;
+		ev.duration = (buf[i] * FIRMWARE_CLOCK_DIVISOR *
+			       FIRMWARE_CLOCK_TICK) / 1000;
+		ir_raw_event_store(d->rc_dev, &ev);
+	}
+
+	ir_raw_event_handle(d->rc_dev);
+
+	return 1;
+}",
+2571,"[""CWE-125""]",libextractor,d2b032452241708bee68d02aa02092cfbfba951a,d2b032452241708bee68d02aa02092cfbfba951a,0,498990,1.1966165703510918e+38,161.0,fix #5846,other,"EXTRACTOR_dvi_extract_method (struct EXTRACTOR_ExtractContext *ec)
+{
+  unsigned int klen;
+  uint32_t pos;
+  uint32_t opos;
+  unsigned int len;
+  unsigned int pageCount;
+  char pages[16];
+  void *buf;
+  unsigned char *data;
+  uint64_t size;
+  uint64_t off;
+  ssize_t iret;
+  
+  if (40 >= (iret = ec->read (ec->cls, &buf, 1024)))
+    return;
+  data = buf;
+  if ( (data[0] != 247) ||
+       (data[1] != 2) )
+    return;                /* cannot be DVI or unsupported version */
+  klen = data[14];
+  size = ec->get_size (ec->cls);
+  if (size > 16 * 1024 * 1024)
+    return; /* too large */
+  if (NULL == (data = malloc ((size_t) size)))
+    return; /* out of memory */
+  memcpy (data, buf, iret);
+  off = iret;
+  while (off < size)
+    {
+      if (0 >= (iret = ec->read (ec->cls, &buf, 16 * 1024)))
+	{
+	  free (data);
+	  return;
+	}
+      memcpy (&data[off], buf, iret);
+      off += iret;
+    }
+  pos = size - 1;
+  while ( (223 == data[pos]) &&
+	  (pos > 0) )
+    pos--;
+  if ( (2 != data[pos]) ||
+       (pos < 40) )
+    goto CLEANUP;
+  pos--;
+  pos -= 4;
+  /* assert pos at 'post_post tag' */
+  if (data[pos] != 249)
+    goto CLEANUP;
+  opos = pos;
+  pos = getIntAt (&data[opos + 1]);
+  if ( (pos + 25 > size) ||
+       (pos + 25 < pos) )
+    goto CLEANUP;
+  /* assert pos at 'post' command */
+  if (data[pos] != 248)
+    goto CLEANUP;
+  pageCount = 0;
+  opos = pos;
+  pos = getIntAt (&data[opos + 1]);
+  while (1)
+    {
+      if (UINT32_MAX == pos)
+        break;
+      if ( (pos + 45 > size) ||
+	   (pos + 45 < pos) )
+	goto CLEANUP;
+      if (data[pos] != 139)     /* expect 'bop' */
+	goto CLEANUP;
+      pageCount++;
+      opos = pos;
+      pos = getIntAt (&data[opos + 41]);
+      if (UINT32_MAX == pos)
+        break;
+      if (pos >= opos)
+	goto CLEANUP;           /* invalid! */
+    }
+  /* ok, now we believe it's a dvi... */
+  snprintf (pages,
+	    sizeof (pages),
+	    ""%u"", 
+	    pageCount);
+  if (0 != ec->proc (ec->cls, 
+		     ""dvi"",
+		     EXTRACTOR_METATYPE_PAGE_COUNT,
+		     EXTRACTOR_METAFORMAT_UTF8,
+		     ""text/plain"",
+		     pages,
+		     strlen (pages) + 1))
+    goto CLEANUP;
+  if (0 != ec->proc (ec->cls, 
+		     ""dvi"",
+		     EXTRACTOR_METATYPE_MIMETYPE,
+		     EXTRACTOR_METAFORMAT_UTF8,
+		     ""text/plain"",
+		     ""application/x-dvi"",
+		     strlen (""application/x-dvi"") + 1))
+    goto CLEANUP;
+  {
+    char comment[klen + 1];
+    
+    comment[klen] = '\0';
+    memcpy (comment, &data[15], klen);
+    if (0 != ec->proc (ec->cls, 
+		       ""dvi"",
+		       EXTRACTOR_METATYPE_COMMENT,
+		       EXTRACTOR_METAFORMAT_C_STRING,
+		       ""text/plain"",
+		       comment,
+		       klen + 1))
+      goto CLEANUP;
+  }
+  /* try to find PDF/ps special */
+  pos = opos;
+  while ( (size >= 100) &&
+	  (pos < size - 100) )
+    {
+      switch (data[pos])
+        {
+        case 139:              /* begin page 'bop', we typically have to skip that one to
+                                   find the zzz's */
+          pos += 45;            /* skip bop */
+          break;
+        case 239:              /* zzz1 */
+          len = data[pos + 1];
+          if (pos + 2 + len < size)
+            if (0 != parseZZZ ((const char *) data, pos + 2, len, ec->proc, ec->cls))
+	      goto CLEANUP;
+          pos += len + 2;
+          break;
+        case 240:              /* zzz2 */
+          len = getShortAt (&data[pos + 1]);
+          if (pos + 3 + len < size)
+            if (0 != parseZZZ ((const char *) data, pos + 3, len, ec->proc, ec->cls))
+	      goto CLEANUP;
+          pos += len + 3;
+          break;
+        case 241:              /* zzz3, who uses that? */
+          len = (getShortAt (&data[pos + 1])) + 65536 * data[pos + 3];
+          if (pos + 4 + len < size)
+            if (0 != parseZZZ ((const char *) data, pos + 4, len, ec->proc, ec->cls))
+	      goto CLEANUP;
+          pos += len + 4;
+          break;
+        case 242:              /* zzz4, hurray! */
+          len = getIntAt (&data[pos + 1]);
+          if (pos + 1 + len < size)
+            if (0 != parseZZZ ((const char *) data, pos + 5, len, ec->proc, ec->cls))
+	      goto CLEANUP;
+          pos += len + 5;
+          break;
+        default:               /* unsupported opcode, abort scan */
+	  goto CLEANUP;
+        }
+    }
+ CLEANUP:
+  free (data);
+}","EXTRACTOR_dvi_extract_method (struct EXTRACTOR_ExtractContext *ec)
+{
+  unsigned int klen;
+  uint32_t pos;
+  uint32_t opos;
+  unsigned int len;
+  unsigned int pageCount;
+  char pages[16];
+  void *buf;
+  unsigned char *data;
+  uint64_t size;
+  uint64_t off;
+  ssize_t iret;
+  
+  if (40 >= (iret = ec->read (ec->cls, &buf, 1024)))
+    return;
+  data = buf;
+  if ( (data[0] != 247) ||
+       (data[1] != 2) )
+    return;                /* cannot be DVI or unsupported version */
+  klen = data[14];
+  size = ec->get_size (ec->cls);
+  if (size > 16 * 1024 * 1024)
+    return; /* too large */
+  if (klen + 15 > size)
+    return; /* malformed klen */
+  if (NULL == (data = malloc ((size_t) size)))
+    return; /* out of memory */
+  memcpy (data, buf, iret);
+  off = iret;
+  while (off < size)
+    {
+      if (0 >= (iret = ec->read (ec->cls, &buf, 16 * 1024)))
+        {
+          free (data);
+          return;
+        }
+      memcpy (&data[off], buf, iret);
+      off += iret;
+    }
+  pos = size - 1;
+  while ( (223 == data[pos]) &&
+          (pos > 0) )
+    pos--;
+  if ( (2 != data[pos]) ||
+       (pos < 40) )
+    goto CLEANUP;
+  pos--;
+  pos -= 4;
+  /* assert pos at 'post_post tag' */
+  if (data[pos] != 249)
+    goto CLEANUP;
+  opos = pos;
+  pos = getIntAt (&data[opos + 1]);
+  if ( (pos + 25 > size) ||
+       (pos + 25 < pos) )
+    goto CLEANUP;
+  /* assert pos at 'post' command */
+  if (data[pos] != 248)
+    goto CLEANUP;
+  pageCount = 0;
+  opos = pos;
+  pos = getIntAt (&data[opos + 1]);
+  while (1)
+    {
+      if (UINT32_MAX == pos)
+        break;
+      if ( (pos + 45 > size) ||
+	   (pos + 45 < pos) )
+        goto CLEANUP;
+      if (data[pos] != 139)     /* expect 'bop' */
+        goto CLEANUP;
+      pageCount++;
+      opos = pos;
+      pos = getIntAt (&data[opos + 41]);
+      if (UINT32_MAX == pos)
+        break;
+      if (pos >= opos)
+	goto CLEANUP;           /* invalid! */
+    }
+  /* ok, now we believe it's a dvi... */
+  snprintf (pages,
+            sizeof (pages),
+            ""%u"", 
+            pageCount);
+  if (0 != ec->proc (ec->cls, 
+                     ""dvi"",
+                     EXTRACTOR_METATYPE_PAGE_COUNT,
+                     EXTRACTOR_METAFORMAT_UTF8,
+                     ""text/plain"",
+                     pages,
+                     strlen (pages) + 1))
+    goto CLEANUP;
+  if (0 != ec->proc (ec->cls, 
+                     ""dvi"",
+                     EXTRACTOR_METATYPE_MIMETYPE,
+                     EXTRACTOR_METAFORMAT_UTF8,
+                     ""text/plain"",
+                     ""application/x-dvi"",
+                     strlen (""application/x-dvi"") + 1))
+    goto CLEANUP;
+  {
+    char comment[klen + 1];
+    
+    comment[klen] = '\0';
+    memcpy (comment, &data[15], klen);
+    if (0 != ec->proc (ec->cls, 
+                       ""dvi"",
+                       EXTRACTOR_METATYPE_COMMENT,
+                       EXTRACTOR_METAFORMAT_C_STRING,
+                       ""text/plain"",
+                       comment,
+                       klen + 1))
+      goto CLEANUP;
+  }
+  /* try to find PDF/ps special */
+  pos = opos;
+  while ( (size >= 100) &&
+          (pos < size - 100) )
+    {
+      switch (data[pos])
+        {
+        case 139:              /* begin page 'bop', we typically have to skip that one to
+                                   find the zzz's */
+          pos += 45;            /* skip bop */
+          break;
+        case 239:              /* zzz1 */
+          len = data[pos + 1];
+          if ( (pos + 2 + len < size) &&
+               (0 != parseZZZ ((const char *) data, pos + 2, len, ec->proc, ec->cls)) )
+              goto CLEANUP;
+          pos += len + 2;
+          break;
+        case 240:              /* zzz2 */
+          len = getShortAt (&data[pos + 1]);
+          if ( (pos + 3 + len < size) &&
+               (0 != parseZZZ ((const char *) data, pos + 3, len, ec->proc, ec->cls)) )
+            goto CLEANUP;
+          pos += len + 3;
+          break;
+        case 241:              /* zzz3, who uses that? */
+          len = (getShortAt (&data[pos + 1])) + 65536 * data[pos + 3];
+          if ( (pos + 4 + len < size) &&
+               (0 != parseZZZ ((const char *) data, pos + 4, len, ec->proc, ec->cls)) )
+              goto CLEANUP;
+          pos += len + 4;
+          break;
+        case 242:              /* zzz4, hurray! */
+          len = getIntAt (&data[pos + 1]);
+          if ( (pos + 1 + len < size) &&
+               (0 != parseZZZ ((const char *) data, pos + 5, len, ec->proc, ec->cls)) )
+            goto CLEANUP;
+          pos += len + 5;
+          break;
+        default:               /* unsupported opcode, abort scan */
+          goto CLEANUP;
+        }
+    }
+ CLEANUP:
+  free (data);
+}",
+2574,"[""CWE-125""]",tar,d9d4435692150fa8ff68e1b1a473d187cc3fd777,d9d4435692150fa8ff68e1b1a473d187cc3fd777,0,499528,2.7235417830205262e+38,194.0,"Fix memory leak in read_header
+
+Bug reported in https://savannah.gnu.org/bugs/?59897
+
+* src/list.c (read_header): Don't return directly from the loop.
+Instead set the status and break.  Return the status.  Free
+next_long_name and next_long_link before returning.",other,"read_header (union block **return_block, struct tar_stat_info *info,
+	     enum read_header_mode mode)
+{
+  union block *header;
+  union block *header_copy;
+  char *bp;
+  union block *data_block;
+  size_t size, written;
+  union block *next_long_name = 0;
+  union block *next_long_link = 0;
+  size_t next_long_name_blocks = 0;
+  size_t next_long_link_blocks = 0;
+
+  while (1)
+    {
+      enum read_header status;
+
+      header = find_next_block ();
+      *return_block = header;
+      if (!header)
+	return HEADER_END_OF_FILE;
+
+      if ((status = tar_checksum (header, false)) != HEADER_SUCCESS)
+	return status;
+
+      /* Good block.  Decode file size and return.  */
+
+      if (header->header.typeflag == LNKTYPE)
+	info->stat.st_size = 0;	/* links 0 size on tape */
+      else
+	{
+	  info->stat.st_size = OFF_FROM_HEADER (header->header.size);
+	  if (info->stat.st_size < 0)
+	    return HEADER_FAILURE;
+	}
+
+      if (header->header.typeflag == GNUTYPE_LONGNAME
+	  || header->header.typeflag == GNUTYPE_LONGLINK
+	  || header->header.typeflag == XHDTYPE
+	  || header->header.typeflag == XGLTYPE
+	  || header->header.typeflag == SOLARIS_XHDTYPE)
+	{
+	  if (mode == read_header_x_raw)
+	    return HEADER_SUCCESS_EXTENDED;
+	  else if (header->header.typeflag == GNUTYPE_LONGNAME
+		   || header->header.typeflag == GNUTYPE_LONGLINK)
+	    {
+	      size_t name_size = info->stat.st_size;
+	      size_t n = name_size % BLOCKSIZE;
+	      size = name_size + BLOCKSIZE;
+	      if (n)
+		size += BLOCKSIZE - n;
+
+	      if (name_size != info->stat.st_size || size < name_size)
+		xalloc_die ();
+
+	      header_copy = xmalloc (size + 1);
+
+	      if (header->header.typeflag == GNUTYPE_LONGNAME)
+		{
+		  free (next_long_name);
+		  next_long_name = header_copy;
+		  next_long_name_blocks = size / BLOCKSIZE;
+		}
+	      else
+		{
+		  free (next_long_link);
+		  next_long_link = header_copy;
+		  next_long_link_blocks = size / BLOCKSIZE;
+		}
+
+	      set_next_block_after (header);
+	      *header_copy = *header;
+	      bp = header_copy->buffer + BLOCKSIZE;
+
+	      for (size -= BLOCKSIZE; size > 0; size -= written)
+		{
+		  data_block = find_next_block ();
+		  if (! data_block)
+		    {
+		      ERROR ((0, 0, _(""Unexpected EOF in archive"")));
+		      break;
+		    }
+		  written = available_space_after (data_block);
+		  if (written > size)
+		    written = size;
+
+		  memcpy (bp, data_block->buffer, written);
+		  bp += written;
+		  set_next_block_after ((union block *)
+					(data_block->buffer + written - 1));
+		}
+
+	      *bp = '\0';
+	    }
+	  else if (header->header.typeflag == XHDTYPE
+		   || header->header.typeflag == SOLARIS_XHDTYPE)
+	    xheader_read (&info->xhdr, header,
+			  OFF_FROM_HEADER (header->header.size));
+	  else if (header->header.typeflag == XGLTYPE)
+	    {
+	      struct xheader xhdr;
+
+	      if (!recent_global_header)
+		recent_global_header = xmalloc (sizeof *recent_global_header);
+	      memcpy (recent_global_header, header,
+		      sizeof *recent_global_header);
+	      memset (&xhdr, 0, sizeof xhdr);
+	      xheader_read (&xhdr, header,
+			    OFF_FROM_HEADER (header->header.size));
+	      xheader_decode_global (&xhdr);
+	      xheader_destroy (&xhdr);
+	      if (mode == read_header_x_global)
+		return HEADER_SUCCESS_EXTENDED;
+	    }
+
+	  /* Loop!  */
+
+	}
+      else
+	{
+	  char const *name;
+	  struct posix_header const *h = &header->header;
+	  char namebuf[sizeof h->prefix + 1 + NAME_FIELD_SIZE + 1];
+
+	  free (recent_long_name);
+
+	  if (next_long_name)
+	    {
+	      name = next_long_name->buffer + BLOCKSIZE;
+	      recent_long_name = next_long_name;
+	      recent_long_name_blocks = next_long_name_blocks;
+	    }
+	  else
+	    {
+	      /* Accept file names as specified by POSIX.1-1996
+                 section 10.1.1.  */
+	      char *np = namebuf;
+
+	      if (h->prefix[0] && strcmp (h->magic, TMAGIC) == 0)
+		{
+		  memcpy (np, h->prefix, sizeof h->prefix);
+		  np[sizeof h->prefix] = '\0';
+		  np += strlen (np);
+		  *np++ = '/';
+		}
+	      memcpy (np, h->name, sizeof h->name);
+	      np[sizeof h->name] = '\0';
+	      name = namebuf;
+	      recent_long_name = 0;
+	      recent_long_name_blocks = 0;
+	    }
+	  assign_string (&info->orig_file_name, name);
+	  assign_string (&info->file_name, name);
+	  info->had_trailing_slash = strip_trailing_slashes (info->file_name);
+
+	  free (recent_long_link);
+
+	  if (next_long_link)
+	    {
+	      name = next_long_link->buffer + BLOCKSIZE;
+	      recent_long_link = next_long_link;
+	      recent_long_link_blocks = next_long_link_blocks;
+	    }
+	  else
+	    {
+	      memcpy (namebuf, h->linkname, sizeof h->linkname);
+	      namebuf[sizeof h->linkname] = '\0';
+	      name = namebuf;
+	      recent_long_link = 0;
+	      recent_long_link_blocks = 0;
+	    }
+	  assign_string (&info->link_name, name);
+
+	  return HEADER_SUCCESS;
+	}
+    }
+}","read_header (union block **return_block, struct tar_stat_info *info,
+	     enum read_header_mode mode)
+{
+  union block *header;
+  char *bp;
+  union block *data_block;
+  size_t size, written;
+  union block *next_long_name = NULL;
+  union block *next_long_link = NULL;
+  size_t next_long_name_blocks = 0;
+  size_t next_long_link_blocks = 0;
+  enum read_header status = HEADER_SUCCESS;
+  
+  while (1)
+    {
+      header = find_next_block ();
+      *return_block = header;
+      if (!header)
+	{
+	  status = HEADER_END_OF_FILE;
+	  break;
+	}
+
+      if ((status = tar_checksum (header, false)) != HEADER_SUCCESS)
+	break;
+
+      /* Good block.  Decode file size and return.  */
+
+      if (header->header.typeflag == LNKTYPE)
+	info->stat.st_size = 0;	/* links 0 size on tape */
+      else
+	{
+	  info->stat.st_size = OFF_FROM_HEADER (header->header.size);
+	  if (info->stat.st_size < 0)
+	    {
+	      status = HEADER_FAILURE;
+	      break;
+	    }
+	}
+
+      if (header->header.typeflag == GNUTYPE_LONGNAME
+	  || header->header.typeflag == GNUTYPE_LONGLINK
+	  || header->header.typeflag == XHDTYPE
+	  || header->header.typeflag == XGLTYPE
+	  || header->header.typeflag == SOLARIS_XHDTYPE)
+	{
+	  if (mode == read_header_x_raw)
+	    {
+	      status = HEADER_SUCCESS_EXTENDED;
+	      break;
+	    }
+	  else if (header->header.typeflag == GNUTYPE_LONGNAME
+		   || header->header.typeflag == GNUTYPE_LONGLINK)
+	    {
+	      union block *header_copy;
+	      size_t name_size = info->stat.st_size;
+	      size_t n = name_size % BLOCKSIZE;
+	      size = name_size + BLOCKSIZE;
+	      if (n)
+		size += BLOCKSIZE - n;
+
+	      if (name_size != info->stat.st_size || size < name_size)
+		xalloc_die ();
+
+	      header_copy = xmalloc (size + 1);
+
+	      if (header->header.typeflag == GNUTYPE_LONGNAME)
+		{
+		  free (next_long_name);
+		  next_long_name = header_copy;
+		  next_long_name_blocks = size / BLOCKSIZE;
+		}
+	      else
+		{
+		  free (next_long_link);
+		  next_long_link = header_copy;
+		  next_long_link_blocks = size / BLOCKSIZE;
+		}
+
+	      set_next_block_after (header);
+	      *header_copy = *header;
+	      bp = header_copy->buffer + BLOCKSIZE;
+
+	      for (size -= BLOCKSIZE; size > 0; size -= written)
+		{
+		  data_block = find_next_block ();
+		  if (! data_block)
+		    {
+		      ERROR ((0, 0, _(""Unexpected EOF in archive"")));
+		      break;
+		    }
+		  written = available_space_after (data_block);
+		  if (written > size)
+		    written = size;
+
+		  memcpy (bp, data_block->buffer, written);
+		  bp += written;
+		  set_next_block_after ((union block *)
+					(data_block->buffer + written - 1));
+		}
+
+	      *bp = '\0';
+	    }
+	  else if (header->header.typeflag == XHDTYPE
+		   || header->header.typeflag == SOLARIS_XHDTYPE)
+	    xheader_read (&info->xhdr, header,
+			  OFF_FROM_HEADER (header->header.size));
+	  else if (header->header.typeflag == XGLTYPE)
+	    {
+	      struct xheader xhdr;
+
+	      if (!recent_global_header)
+		recent_global_header = xmalloc (sizeof *recent_global_header);
+	      memcpy (recent_global_header, header,
+		      sizeof *recent_global_header);
+	      memset (&xhdr, 0, sizeof xhdr);
+	      xheader_read (&xhdr, header,
+			    OFF_FROM_HEADER (header->header.size));
+	      xheader_decode_global (&xhdr);
+	      xheader_destroy (&xhdr);
+	      if (mode == read_header_x_global)
+		{
+		  status = HEADER_SUCCESS_EXTENDED;
+		  break;
+		}
+	    }
+
+	  /* Loop!  */
+
+	}
+      else
+	{
+	  char const *name;
+	  struct posix_header const *h = &header->header;
+	  char namebuf[sizeof h->prefix + 1 + NAME_FIELD_SIZE + 1];
+
+	  free (recent_long_name);
+
+	  if (next_long_name)
+	    {
+	      name = next_long_name->buffer + BLOCKSIZE;
+	      recent_long_name = next_long_name;
+	      recent_long_name_blocks = next_long_name_blocks;
+	      next_long_name = NULL;
+	    }
+	  else
+	    {
+	      /* Accept file names as specified by POSIX.1-1996
+                 section 10.1.1.  */
+	      char *np = namebuf;
+
+	      if (h->prefix[0] && strcmp (h->magic, TMAGIC) == 0)
+		{
+		  memcpy (np, h->prefix, sizeof h->prefix);
+		  np[sizeof h->prefix] = '\0';
+		  np += strlen (np);
+		  *np++ = '/';
+		}
+	      memcpy (np, h->name, sizeof h->name);
+	      np[sizeof h->name] = '\0';
+	      name = namebuf;
+	      recent_long_name = 0;
+	      recent_long_name_blocks = 0;
+	    }
+	  assign_string (&info->orig_file_name, name);
+	  assign_string (&info->file_name, name);
+	  info->had_trailing_slash = strip_trailing_slashes (info->file_name);
+
+	  free (recent_long_link);
+
+	  if (next_long_link)
+	    {
+	      name = next_long_link->buffer + BLOCKSIZE;
+	      recent_long_link = next_long_link;
+	      recent_long_link_blocks = next_long_link_blocks;
+	      next_long_link = NULL;
+	    }
+	  else
+	    {
+	      memcpy (namebuf, h->linkname, sizeof h->linkname);
+	      namebuf[sizeof h->linkname] = '\0';
+	      name = namebuf;
+	      recent_long_link = 0;
+	      recent_long_link_blocks = 0;
+	    }
+	  assign_string (&info->link_name, name);
+
+	  break;
+	}
+    }
+  free (next_long_name);
+  free (next_long_link);
+  return status;
+}",
+2621,"[""CWE-125""]",openssl,8e20499629b6bcf868d0072c7011e590b5c2294d,8e20499629b6bcf868d0072c7011e590b5c2294d,0,504045,2.8678822315753877e+38,62.0,"crypto/evp: harden RC4_MD5 cipher.
+
+Originally a crash in 32-bit build was reported CHACHA20-POLY1305
+cipher. The crash is triggered by truncated packet and is result
+of excessive hashing to the edge of accessible memory (or bogus
+MAC value is produced if x86 MD5 assembly module is involved). Since
+hash operation is read-only it is not considered to be exploitable
+beyond a DoS condition.
+
+Thanks to Robert Święcki for report.
+
+CVE-2017-3731
+
+Reviewed-by: Rich Salz <rsalz@openssl.org>",other,"static int rc4_hmac_md5_ctrl(EVP_CIPHER_CTX *ctx, int type, int arg,
+                             void *ptr)
+{
+    EVP_RC4_HMAC_MD5 *key = data(ctx);
+
+    switch (type) {
+    case EVP_CTRL_AEAD_SET_MAC_KEY:
+        {
+            unsigned int i;
+            unsigned char hmac_key[64];
+
+            memset(hmac_key, 0, sizeof(hmac_key));
+
+            if (arg > (int)sizeof(hmac_key)) {
+                MD5_Init(&key->head);
+                MD5_Update(&key->head, ptr, arg);
+                MD5_Final(hmac_key, &key->head);
+            } else {
+                memcpy(hmac_key, ptr, arg);
+            }
+
+            for (i = 0; i < sizeof(hmac_key); i++)
+                hmac_key[i] ^= 0x36; /* ipad */
+            MD5_Init(&key->head);
+            MD5_Update(&key->head, hmac_key, sizeof(hmac_key));
+
+            for (i = 0; i < sizeof(hmac_key); i++)
+                hmac_key[i] ^= 0x36 ^ 0x5c; /* opad */
+            MD5_Init(&key->tail);
+            MD5_Update(&key->tail, hmac_key, sizeof(hmac_key));
+
+            OPENSSL_cleanse(hmac_key, sizeof(hmac_key));
+
+            return 1;
+        }
+    case EVP_CTRL_AEAD_TLS1_AAD:
+        {
+            unsigned char *p = ptr;
+            unsigned int len;
+
+            if (arg != EVP_AEAD_TLS1_AAD_LEN)
+                return -1;
+
+            len = p[arg - 2] << 8 | p[arg - 1];
+
+            if (!EVP_CIPHER_CTX_encrypting(ctx)) {
+                len -= MD5_DIGEST_LENGTH;
+                p[arg - 2] = len >> 8;
+                p[arg - 1] = len;
+            }
+            key->payload_length = len;
+            key->md = key->head;
+            MD5_Update(&key->md, p, arg);
+
+            return MD5_DIGEST_LENGTH;
+        }
+    default:
+        return -1;
+    }
+}","static int rc4_hmac_md5_ctrl(EVP_CIPHER_CTX *ctx, int type, int arg,
+                             void *ptr)
+{
+    EVP_RC4_HMAC_MD5 *key = data(ctx);
+
+    switch (type) {
+    case EVP_CTRL_AEAD_SET_MAC_KEY:
+        {
+            unsigned int i;
+            unsigned char hmac_key[64];
+
+            memset(hmac_key, 0, sizeof(hmac_key));
+
+            if (arg > (int)sizeof(hmac_key)) {
+                MD5_Init(&key->head);
+                MD5_Update(&key->head, ptr, arg);
+                MD5_Final(hmac_key, &key->head);
+            } else {
+                memcpy(hmac_key, ptr, arg);
+            }
+
+            for (i = 0; i < sizeof(hmac_key); i++)
+                hmac_key[i] ^= 0x36; /* ipad */
+            MD5_Init(&key->head);
+            MD5_Update(&key->head, hmac_key, sizeof(hmac_key));
+
+            for (i = 0; i < sizeof(hmac_key); i++)
+                hmac_key[i] ^= 0x36 ^ 0x5c; /* opad */
+            MD5_Init(&key->tail);
+            MD5_Update(&key->tail, hmac_key, sizeof(hmac_key));
+
+            OPENSSL_cleanse(hmac_key, sizeof(hmac_key));
+
+            return 1;
+        }
+    case EVP_CTRL_AEAD_TLS1_AAD:
+        {
+            unsigned char *p = ptr;
+            unsigned int len;
+
+            if (arg != EVP_AEAD_TLS1_AAD_LEN)
+                return -1;
+
+            len = p[arg - 2] << 8 | p[arg - 1];
+
+            if (!EVP_CIPHER_CTX_encrypting(ctx)) {
+                if (len < MD5_DIGEST_LENGTH)
+                    return -1;
+                len -= MD5_DIGEST_LENGTH;
+                p[arg - 2] = len >> 8;
+                p[arg - 1] = len;
+            }
+            key->payload_length = len;
+            key->md = key->head;
+            MD5_Update(&key->md, p, arg);
+
+            return MD5_DIGEST_LENGTH;
+        }
+    default:
+        return -1;
+    }
+}",
+2662,"[""CWE-125""]",openssl,2d0e5d4a4a5d4332325b5e5cea492fad2be633e1,2d0e5d4a4a5d4332325b5e5cea492fad2be633e1,0,507782,3.0060693937804308e+38,37.0,"Fix NETSCAPE_SPKI_print function to not assume NUL terminated strings
+
+ASN.1 strings may not be NUL terminated. Don't assume they are.
+
+CVE-2021-3712
+
+Reviewed-by: Viktor Dukhovni <viktor@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"int NETSCAPE_SPKI_print(BIO *out, NETSCAPE_SPKI *spki)
+{
+    EVP_PKEY *pkey;
+    ASN1_IA5STRING *chal;
+    ASN1_OBJECT *spkioid;
+    int i, n;
+    char *s;
+    BIO_printf(out, ""Netscape SPKI:\n"");
+    X509_PUBKEY_get0_param(&spkioid, NULL, NULL, NULL, spki->spkac->pubkey);
+    i = OBJ_obj2nid(spkioid);
+    BIO_printf(out, ""  Public Key Algorithm: %s\n"",
+               (i == NID_undef) ? ""UNKNOWN"" : OBJ_nid2ln(i));
+    pkey = X509_PUBKEY_get(spki->spkac->pubkey);
+    if (!pkey)
+        BIO_printf(out, ""  Unable to load public key\n"");
+    else {
+        EVP_PKEY_print_public(out, pkey, 4, NULL);
+        EVP_PKEY_free(pkey);
+    }
+    chal = spki->spkac->challenge;
+    if (chal->length)
+        BIO_printf(out, ""  Challenge String: %s\n"", chal->data);
+    i = OBJ_obj2nid(spki->sig_algor.algorithm);
+    BIO_printf(out, ""  Signature Algorithm: %s"",
+               (i == NID_undef) ? ""UNKNOWN"" : OBJ_nid2ln(i));
+
+    n = spki->signature->length;
+    s = (char *)spki->signature->data;
+    for (i = 0; i < n; i++) {
+        if ((i % 18) == 0)
+            BIO_write(out, ""\n      "", 7);
+        BIO_printf(out, ""%02x%s"", (unsigned char)s[i],
+                   ((i + 1) == n) ? """" : "":"");
+    }
+    BIO_write(out, ""\n"", 1);
+    return 1;
+}","int NETSCAPE_SPKI_print(BIO *out, NETSCAPE_SPKI *spki)
+{
+    EVP_PKEY *pkey;
+    ASN1_IA5STRING *chal;
+    ASN1_OBJECT *spkioid;
+    int i, n;
+    char *s;
+    BIO_printf(out, ""Netscape SPKI:\n"");
+    X509_PUBKEY_get0_param(&spkioid, NULL, NULL, NULL, spki->spkac->pubkey);
+    i = OBJ_obj2nid(spkioid);
+    BIO_printf(out, ""  Public Key Algorithm: %s\n"",
+               (i == NID_undef) ? ""UNKNOWN"" : OBJ_nid2ln(i));
+    pkey = X509_PUBKEY_get(spki->spkac->pubkey);
+    if (!pkey)
+        BIO_printf(out, ""  Unable to load public key\n"");
+    else {
+        EVP_PKEY_print_public(out, pkey, 4, NULL);
+        EVP_PKEY_free(pkey);
+    }
+    chal = spki->spkac->challenge;
+    if (chal->length)
+        BIO_printf(out, ""  Challenge String: %.*s\n"", chal->length, chal->data);
+    i = OBJ_obj2nid(spki->sig_algor.algorithm);
+    BIO_printf(out, ""  Signature Algorithm: %s"",
+               (i == NID_undef) ? ""UNKNOWN"" : OBJ_nid2ln(i));
+
+    n = spki->signature->length;
+    s = (char *)spki->signature->data;
+    for (i = 0; i < n; i++) {
+        if ((i % 18) == 0)
+            BIO_write(out, ""\n      "", 7);
+        BIO_printf(out, ""%02x%s"", (unsigned char)s[i],
+                   ((i + 1) == n) ? """" : "":"");
+    }
+    BIO_write(out, ""\n"", 1);
+    return 1;
+}",
+2663,"[""CWE-125""]",openssl,bb4d2ed4091408404e18b3326e3df67848ef63d0,bb4d2ed4091408404e18b3326e3df67848ef63d0,0,507808,1.1704509805890266e+38,32.0,"Fix append_ia5 function to not assume NUL terminated strings
+
+ASN.1 strings may not be NUL terminated. Don't assume they are.
+
+CVE-2021-3712
+
+Reviewed-by: Viktor Dukhovni <viktor@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"static int append_ia5(STACK_OF(OPENSSL_STRING) **sk, const ASN1_IA5STRING *email)
+{
+    char *emtmp;
+    /* First some sanity checks */
+    if (email->type != V_ASN1_IA5STRING)
+        return 1;
+    if (!email->data || !email->length)
+        return 1;
+    if (*sk == NULL)
+        *sk = sk_OPENSSL_STRING_new(sk_strcmp);
+    if (*sk == NULL)
+        return 0;
+    /* Don't add duplicates */
+    if (sk_OPENSSL_STRING_find(*sk, (char *)email->data) != -1)
+        return 1;
+    emtmp = OPENSSL_strdup((char *)email->data);
+    if (emtmp == NULL || !sk_OPENSSL_STRING_push(*sk, emtmp)) {
+        OPENSSL_free(emtmp);    /* free on push failure */
+        X509_email_free(*sk);
+        *sk = NULL;
+        return 0;
+    }
+    return 1;
+}","static int append_ia5(STACK_OF(OPENSSL_STRING) **sk, const ASN1_IA5STRING *email)
+{
+    char *emtmp;
+    /* First some sanity checks */
+    if (email->type != V_ASN1_IA5STRING)
+        return 1;
+    if (email->data == NULL || email->length == 0)
+        return 1;
+    if (memchr(email->data, 0, email->length) != NULL)
+        return 1;
+    if (*sk == NULL)
+        *sk = sk_OPENSSL_STRING_new(sk_strcmp);
+    if (*sk == NULL)
+        return 0;
+
+    emtmp = OPENSSL_strndup((char *)email->data, email->length);
+    if (emtmp == NULL)
+        return 0;
+
+    /* Don't add duplicates */
+    if (sk_OPENSSL_STRING_find(*sk, emtmp) != -1) {
+        OPENSSL_free(emtmp);
+        return 1;
+    }
+    if (!sk_OPENSSL_STRING_push(*sk, emtmp)) {
+        OPENSSL_free(emtmp); /* free on push failure */
+        X509_email_free(*sk);
+        *sk = NULL;
+        return 0;
+    }
+    return 1;
+}",
+2664,"[""CWE-125""]",openssl,4de66925203ca99189c842136ec4a623137ea447,4de66925203ca99189c842136ec4a623137ea447,0,507832,2.6952664540422283e+38,49.0,"Fix test code to not assume NUL terminated strings
+
+ASN.1 strings may not be NUL terminated. Don't assume they are.
+
+CVE-2021-3712
+
+Reviewed-by: Viktor Dukhovni <viktor@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"static int test_x509_time(int idx)
+{
+    ASN1_TIME *t = NULL;
+    int result, rv = 0;
+
+    if (x509_format_tests[idx].set_string) {
+        /* set-string mode */
+        t = ASN1_TIME_new();
+        if (t == NULL) {
+            TEST_info(""test_x509_time(%d) failed: internal error\n"", idx);
+            return 0;
+        }
+    }
+
+    result = ASN1_TIME_set_string_X509(t, x509_format_tests[idx].data);
+    /* time string parsing result is always checked against what's expected */
+    if (!TEST_int_eq(result, x509_format_tests[idx].expected)) {
+        TEST_info(""test_x509_time(%d) failed: expected %d, got %d\n"",
+                idx, x509_format_tests[idx].expected, result);
+        goto out;
+    }
+
+    /* if t is not NULL but expected_type is ignored(-1), it is an 'OK' case */
+    if (t != NULL && x509_format_tests[idx].expected_type != -1) {
+        if (!TEST_int_eq(t->type, x509_format_tests[idx].expected_type)) {
+            TEST_info(""test_x509_time(%d) failed: expected_type %d, got %d\n"",
+                    idx, x509_format_tests[idx].expected_type, t->type);
+            goto out;
+        }
+    }
+
+    /* if t is not NULL but expected_string is NULL, it is an 'OK' case too */
+    if (t != NULL && x509_format_tests[idx].expected_string) {
+        if (!TEST_str_eq((const char *)t->data,
+                    x509_format_tests[idx].expected_string)) {
+            TEST_info(""test_x509_time(%d) failed: expected_string %s, got %s\n"",
+                    idx, x509_format_tests[idx].expected_string, t->data);
+            goto out;
+        }
+    }
+
+    rv = 1;
+out:
+    if (t != NULL)
+        ASN1_TIME_free(t);
+    return rv;
+}","static int test_x509_time(int idx)
+{
+    ASN1_TIME *t = NULL;
+    int result, rv = 0;
+
+    if (x509_format_tests[idx].set_string) {
+        /* set-string mode */
+        t = ASN1_TIME_new();
+        if (t == NULL) {
+            TEST_info(""test_x509_time(%d) failed: internal error\n"", idx);
+            return 0;
+        }
+    }
+
+    result = ASN1_TIME_set_string_X509(t, x509_format_tests[idx].data);
+    /* time string parsing result is always checked against what's expected */
+    if (!TEST_int_eq(result, x509_format_tests[idx].expected)) {
+        TEST_info(""test_x509_time(%d) failed: expected %d, got %d\n"",
+                idx, x509_format_tests[idx].expected, result);
+        goto out;
+    }
+
+    /* if t is not NULL but expected_type is ignored(-1), it is an 'OK' case */
+    if (t != NULL && x509_format_tests[idx].expected_type != -1) {
+        if (!TEST_int_eq(t->type, x509_format_tests[idx].expected_type)) {
+            TEST_info(""test_x509_time(%d) failed: expected_type %d, got %d\n"",
+                    idx, x509_format_tests[idx].expected_type, t->type);
+            goto out;
+        }
+    }
+
+    /* if t is not NULL but expected_string is NULL, it is an 'OK' case too */
+    if (t != NULL && x509_format_tests[idx].expected_string) {
+        if (!TEST_mem_eq((const char *)t->data, t->length,
+                    x509_format_tests[idx].expected_string,
+                    strlen(x509_format_tests[idx].expected_string))) {
+            TEST_info(""test_x509_time(%d) failed: expected_string %s, got %.*s\n"",
+                    idx, x509_format_tests[idx].expected_string, t->length,
+                    t->data);
+            goto out;
+        }
+    }
+
+    rv = 1;
+out:
+    if (t != NULL)
+        ASN1_TIME_free(t);
+    return rv;
+}",
+2665,"[""CWE-125""]",openssl,23446958685a593d4d9434475734b99138902ed2,23446958685a593d4d9434475734b99138902ed2,0,507853,1.4294012759443708e+37,18.0,"Fix printing of PROXY_CERT_INFO_EXTENSION to not assume NUL terminated strings
+
+ASN.1 strings may not be NUL terminated. Don't assume they are.
+
+CVE-2021-3712
+
+Reviewed-by: Viktor Dukhovni <viktor@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"static int i2r_pci(X509V3_EXT_METHOD *method, PROXY_CERT_INFO_EXTENSION *pci,
+                   BIO *out, int indent)
+{
+    BIO_printf(out, ""%*sPath Length Constraint: "", indent, """");
+    if (pci->pcPathLengthConstraint)
+        i2a_ASN1_INTEGER(out, pci->pcPathLengthConstraint);
+    else
+        BIO_printf(out, ""infinite"");
+    BIO_puts(out, ""\n"");
+    BIO_printf(out, ""%*sPolicy Language: "", indent, """");
+    i2a_ASN1_OBJECT(out, pci->proxyPolicy->policyLanguage);
+    BIO_puts(out, ""\n"");
+    if (pci->proxyPolicy->policy && pci->proxyPolicy->policy->data)
+        BIO_printf(out, ""%*sPolicy Text: %s\n"", indent, """",
+                   pci->proxyPolicy->policy->data);
+    return 1;
+}","static int i2r_pci(X509V3_EXT_METHOD *method, PROXY_CERT_INFO_EXTENSION *pci,
+                   BIO *out, int indent)
+{
+    BIO_printf(out, ""%*sPath Length Constraint: "", indent, """");
+    if (pci->pcPathLengthConstraint)
+        i2a_ASN1_INTEGER(out, pci->pcPathLengthConstraint);
+    else
+        BIO_printf(out, ""infinite"");
+    BIO_puts(out, ""\n"");
+    BIO_printf(out, ""%*sPolicy Language: "", indent, """");
+    i2a_ASN1_OBJECT(out, pci->proxyPolicy->policyLanguage);
+    BIO_puts(out, ""\n"");
+    if (pci->proxyPolicy->policy && pci->proxyPolicy->policy->data)
+        BIO_printf(out, ""%*sPolicy Text: %.*s\n"", indent, """",
+                   pci->proxyPolicy->policy->length,
+                   pci->proxyPolicy->policy->data);
+    return 1;
+}",
+2666,"[""CWE-125""]",openssl,d9d838ddc0ed083fb4c26dd067e71aad7c65ad16,d9d838ddc0ed083fb4c26dd067e71aad7c65ad16,0,507868,2.3281905683949347e+38,53.0,"Fix a read buffer overrun in X509_aux_print().
+
+The ASN1_STRING_get0_data(3) manual explitely cautions the reader
+that the data is not necessarily NUL-terminated, and the function
+X509_alias_set1(3) does not sanitize the data passed into it in any
+way either, so we must assume the return value from X509_alias_get0(3)
+is merely a byte array and not necessarily a string in the sense
+of the C language.
+
+I found this bug while writing manual pages for X509_print_ex(3)
+and related functions.  Theo Buehler <tb@openbsd.org> checked my
+patch to fix the same bug in LibreSSL, see
+
+http://cvsweb.openbsd.org/src/lib/libcrypto/asn1/t_x509a.c#rev1.9
+
+As an aside, note that the function still produces incomplete and
+misleading results when the data contains a NUL byte in the middle
+and that error handling is consistently absent throughout, even
+though the function provides an ""int"" return value obviously intended
+to be 1 for success and 0 for failure, and even though this function
+is called by another function that also wants to return 1 for success
+and 0 for failure and even does so in many of its code paths, though
+not in others.  But let's stay focussed.  Many things would be nice
+to have in the wide wild world, but a buffer overflow must not be
+allowed to remain in our backyard.
+
+CLA: trivial
+
+Reviewed-by: Tim Hudson <tjh@openssl.org>
+Reviewed-by: Paul Dale <pauli@openssl.org>
+Reviewed-by: Tomas Mraz <tomas@openssl.org>
+(Merged from https://github.com/openssl/openssl/pull/16108)
+
+(cherry picked from commit c5dc9ab965f2a69bca964c709e648158f3e4cd67)",other,"int X509_aux_print(BIO *out, X509 *x, int indent)
+{
+    char oidstr[80], first;
+    STACK_OF(ASN1_OBJECT) *trust, *reject;
+    const unsigned char *alias, *keyid;
+    int keyidlen;
+    int i;
+    if (X509_trusted(x) == 0)
+        return 1;
+    trust = X509_get0_trust_objects(x);
+    reject = X509_get0_reject_objects(x);
+    if (trust) {
+        first = 1;
+        BIO_printf(out, ""%*sTrusted Uses:\n%*s"", indent, """", indent + 2, """");
+        for (i = 0; i < sk_ASN1_OBJECT_num(trust); i++) {
+            if (!first)
+                BIO_puts(out, "", "");
+            else
+                first = 0;
+            OBJ_obj2txt(oidstr, sizeof(oidstr),
+                        sk_ASN1_OBJECT_value(trust, i), 0);
+            BIO_puts(out, oidstr);
+        }
+        BIO_puts(out, ""\n"");
+    } else
+        BIO_printf(out, ""%*sNo Trusted Uses.\n"", indent, """");
+    if (reject) {
+        first = 1;
+        BIO_printf(out, ""%*sRejected Uses:\n%*s"", indent, """", indent + 2, """");
+        for (i = 0; i < sk_ASN1_OBJECT_num(reject); i++) {
+            if (!first)
+                BIO_puts(out, "", "");
+            else
+                first = 0;
+            OBJ_obj2txt(oidstr, sizeof(oidstr),
+                        sk_ASN1_OBJECT_value(reject, i), 0);
+            BIO_puts(out, oidstr);
+        }
+        BIO_puts(out, ""\n"");
+    } else
+        BIO_printf(out, ""%*sNo Rejected Uses.\n"", indent, """");
+    alias = X509_alias_get0(x, NULL);
+    if (alias)
+        BIO_printf(out, ""%*sAlias: %s\n"", indent, """", alias);
+    keyid = X509_keyid_get0(x, &keyidlen);
+    if (keyid) {
+        BIO_printf(out, ""%*sKey Id: "", indent, """");
+        for (i = 0; i < keyidlen; i++)
+            BIO_printf(out, ""%s%02X"", i ? "":"" : """", keyid[i]);
+        BIO_write(out, ""\n"", 1);
+    }
+    return 1;
+}","int X509_aux_print(BIO *out, X509 *x, int indent)
+{
+    char oidstr[80], first;
+    STACK_OF(ASN1_OBJECT) *trust, *reject;
+    const unsigned char *alias, *keyid;
+    int keyidlen;
+    int i;
+    if (X509_trusted(x) == 0)
+        return 1;
+    trust = X509_get0_trust_objects(x);
+    reject = X509_get0_reject_objects(x);
+    if (trust) {
+        first = 1;
+        BIO_printf(out, ""%*sTrusted Uses:\n%*s"", indent, """", indent + 2, """");
+        for (i = 0; i < sk_ASN1_OBJECT_num(trust); i++) {
+            if (!first)
+                BIO_puts(out, "", "");
+            else
+                first = 0;
+            OBJ_obj2txt(oidstr, sizeof(oidstr),
+                        sk_ASN1_OBJECT_value(trust, i), 0);
+            BIO_puts(out, oidstr);
+        }
+        BIO_puts(out, ""\n"");
+    } else
+        BIO_printf(out, ""%*sNo Trusted Uses.\n"", indent, """");
+    if (reject) {
+        first = 1;
+        BIO_printf(out, ""%*sRejected Uses:\n%*s"", indent, """", indent + 2, """");
+        for (i = 0; i < sk_ASN1_OBJECT_num(reject); i++) {
+            if (!first)
+                BIO_puts(out, "", "");
+            else
+                first = 0;
+            OBJ_obj2txt(oidstr, sizeof(oidstr),
+                        sk_ASN1_OBJECT_value(reject, i), 0);
+            BIO_puts(out, oidstr);
+        }
+        BIO_puts(out, ""\n"");
+    } else
+        BIO_printf(out, ""%*sNo Rejected Uses.\n"", indent, """");
+    alias = X509_alias_get0(x, &i);
+    if (alias)
+        BIO_printf(out, ""%*sAlias: %.*s\n"", indent, """", i, alias);
+    keyid = X509_keyid_get0(x, &keyidlen);
+    if (keyid) {
+        BIO_printf(out, ""%*sKey Id: "", indent, """");
+        for (i = 0; i < keyidlen; i++)
+            BIO_printf(out, ""%s%02X"", i ? "":"" : """", keyid[i]);
+        BIO_write(out, ""\n"", 1);
+    }
+    return 1;
+}",
+3231,"[""CWE-125""]",GIMP,22e2571c25425f225abdb11a566cc281fca6f366,22e2571c25425f225abdb11a566cc281fca6f366,0,498639,1.1278650950385953e+38,209.0,"plug-ins: TGA 16-bit RGB (without alpha bit) is also valid.
+
+According to some spec on the web, 16-bit RGB is also valid. In this
+case, the last bit is simply ignored (at least that's how it is
+implemented right now).
+
+(cherry picked from commit 8ea316667c8a3296bce2832b3986b58d0fdfc077)",other,"load_image (const gchar  *filename,
+            GError      **error)
+{
+  FILE     *fp;
+  tga_info  info;
+  guchar    header[18];
+  guchar    footer[26];
+  guchar    extension[495];
+  long      offset;
+
+  gint32 image_ID = -1;
+
+  fp = g_fopen (filename, ""rb"");
+
+  if (! fp)
+    {
+      g_set_error (error, G_FILE_ERROR, g_file_error_from_errno (errno),
+                   _(""Could not open '%s' for reading: %s""),
+                   gimp_filename_to_utf8 (filename), g_strerror (errno));
+      return -1;
+    }
+
+  gimp_progress_init_printf (_(""Opening '%s'""),
+                             gimp_filename_to_utf8 (filename));
+
+  /* Is file big enough for a footer? */
+  if (!fseek (fp, -26L, SEEK_END))
+    {
+      if (fread (footer, sizeof (footer), 1, fp) != 1)
+        {
+          g_message (_(""Cannot read footer from '%s'""),
+                     gimp_filename_to_utf8 (filename));
+          return -1;
+        }
+      else if (memcmp (footer + 8, magic, sizeof (magic)) == 0)
+        {
+          /* Check the signature. */
+
+          offset = (footer[0]          +
+                    footer[1] * 256L   +
+                    footer[2] * 65536L +
+                    footer[3] * 16777216L);
+
+          if (offset != 0)
+            {
+              if (fseek (fp, offset, SEEK_SET) ||
+                  fread (extension, sizeof (extension), 1, fp) != 1)
+                {
+                  g_message (_(""Cannot read extension from '%s'""),
+                             gimp_filename_to_utf8 (filename));
+                  return -1;
+                }
+              /* Eventually actually handle version 2 TGA here */
+            }
+        }
+    }
+
+  if (fseek (fp, 0, SEEK_SET) ||
+      fread (header, sizeof (header), 1, fp) != 1)
+    {
+      g_message (_(""Cannot read header from '%s'""),
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  switch (header[2])
+    {
+    case 1:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 2:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 3:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+
+    case 9:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 10:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 11:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+
+    default:
+      info.imageType = 0;
+    }
+
+  info.idLength     = header[0];
+  info.colorMapType = header[1];
+
+  info.colorMapIndex  = header[3] + header[4] * 256;
+  info.colorMapLength = header[5] + header[6] * 256;
+  info.colorMapSize   = header[7];
+
+  info.xOrigin = header[8]  + header[9] * 256;
+  info.yOrigin = header[10] + header[11] * 256;
+  info.width   = header[12] + header[13] * 256;
+  info.height  = header[14] + header[15] * 256;
+
+  info.bpp       = header[16];
+  info.bytes     = (info.bpp + 7) / 8;
+  info.alphaBits = header[17] & 0x0f; /* Just the low 4 bits */
+  info.flipHoriz = (header[17] & 0x10) ? 1 : 0;
+  info.flipVert  = (header[17] & 0x20) ? 0 : 1;
+
+  /* hack to handle some existing files with incorrect headers, see bug #306675 */
+  if (info.alphaBits == info.bpp)
+    info.alphaBits = 0;
+
+  /* hack to handle yet another flavor of incorrect headers, see bug #540969 */
+  if (info.alphaBits == 0)
+    {
+      if (info.imageType == TGA_TYPE_COLOR && info.bpp == 32)
+        info.alphaBits = 8;
+
+      if (info.imageType == TGA_TYPE_GRAY && info.bpp == 16)
+        info.alphaBits = 8;
+    }
+
+  switch (info.imageType)
+    {
+      case TGA_TYPE_MAPPED:
+        if (info.bpp != 8)
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_COLOR:
+        if ((info.bpp != 15 && info.bpp != 16 &&
+             info.bpp != 24 && info.bpp != 32)      ||
+            ((info.bpp == 15 || info.bpp == 24) &&
+             info.alphaBits != 0)                   ||
+            (info.bpp == 16 && info.alphaBits != 1) ||
+            (info.bpp == 32 && info.alphaBits != 8))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u, alpha = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp, info.alphaBits);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_GRAY:
+        if (info.bpp != 8 &&
+            (info.alphaBits != 8 || (info.bpp != 16 && info.bpp != 15)))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+
+      default:
+        g_message (""Unknown image type %u for '%s'"",
+                   info.imageType, gimp_filename_to_utf8 (filename));
+        return -1;
+    }
+
+  /* Plausible but unhandled formats */
+  if (info.bytes * 8 != info.bpp && info.bpp != 15)
+    {
+      g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                 gimp_filename_to_utf8 (filename),
+                 info.imageType, info.bpp);
+      return -1;
+    }
+
+  /* Check that we have a color map only when we need it. */
+  if (info.imageType == TGA_TYPE_MAPPED && info.colorMapType != 1)
+    {
+      g_message (""Indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+  else if (info.imageType != TGA_TYPE_MAPPED && info.colorMapType != 0)
+    {
+      g_message (""Non-indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+
+  /* Skip the image ID field. */
+  if (info.idLength && fseek (fp, info.idLength, SEEK_CUR))
+    {
+      g_message (""File '%s' is truncated or corrupted"",
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  image_ID = ReadImage (fp, &info, filename);
+
+  fclose (fp);
+
+  return image_ID;
+}","load_image (const gchar  *filename,
+            GError      **error)
+{
+  FILE     *fp;
+  tga_info  info;
+  guchar    header[18];
+  guchar    footer[26];
+  guchar    extension[495];
+  long      offset;
+
+  gint32 image_ID = -1;
+
+  fp = g_fopen (filename, ""rb"");
+
+  if (! fp)
+    {
+      g_set_error (error, G_FILE_ERROR, g_file_error_from_errno (errno),
+                   _(""Could not open '%s' for reading: %s""),
+                   gimp_filename_to_utf8 (filename), g_strerror (errno));
+      return -1;
+    }
+
+  gimp_progress_init_printf (_(""Opening '%s'""),
+                             gimp_filename_to_utf8 (filename));
+
+  /* Is file big enough for a footer? */
+  if (!fseek (fp, -26L, SEEK_END))
+    {
+      if (fread (footer, sizeof (footer), 1, fp) != 1)
+        {
+          g_message (_(""Cannot read footer from '%s'""),
+                     gimp_filename_to_utf8 (filename));
+          return -1;
+        }
+      else if (memcmp (footer + 8, magic, sizeof (magic)) == 0)
+        {
+          /* Check the signature. */
+
+          offset = (footer[0]          +
+                    footer[1] * 256L   +
+                    footer[2] * 65536L +
+                    footer[3] * 16777216L);
+
+          if (offset != 0)
+            {
+              if (fseek (fp, offset, SEEK_SET) ||
+                  fread (extension, sizeof (extension), 1, fp) != 1)
+                {
+                  g_message (_(""Cannot read extension from '%s'""),
+                             gimp_filename_to_utf8 (filename));
+                  return -1;
+                }
+              /* Eventually actually handle version 2 TGA here */
+            }
+        }
+    }
+
+  if (fseek (fp, 0, SEEK_SET) ||
+      fread (header, sizeof (header), 1, fp) != 1)
+    {
+      g_message (_(""Cannot read header from '%s'""),
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  switch (header[2])
+    {
+    case 1:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 2:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+    case 3:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_NONE;
+      break;
+
+    case 9:
+      info.imageType        = TGA_TYPE_MAPPED;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 10:
+      info.imageType        = TGA_TYPE_COLOR;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+    case 11:
+      info.imageType        = TGA_TYPE_GRAY;
+      info.imageCompression = TGA_COMP_RLE;
+      break;
+
+    default:
+      info.imageType = 0;
+    }
+
+  info.idLength     = header[0];
+  info.colorMapType = header[1];
+
+  info.colorMapIndex  = header[3] + header[4] * 256;
+  info.colorMapLength = header[5] + header[6] * 256;
+  info.colorMapSize   = header[7];
+
+  info.xOrigin = header[8]  + header[9] * 256;
+  info.yOrigin = header[10] + header[11] * 256;
+  info.width   = header[12] + header[13] * 256;
+  info.height  = header[14] + header[15] * 256;
+
+  info.bpp       = header[16];
+  info.bytes     = (info.bpp + 7) / 8;
+  info.alphaBits = header[17] & 0x0f; /* Just the low 4 bits */
+  info.flipHoriz = (header[17] & 0x10) ? 1 : 0;
+  info.flipVert  = (header[17] & 0x20) ? 0 : 1;
+
+  /* hack to handle some existing files with incorrect headers, see bug #306675 */
+  if (info.alphaBits == info.bpp)
+    info.alphaBits = 0;
+
+  /* hack to handle yet another flavor of incorrect headers, see bug #540969 */
+  if (info.alphaBits == 0)
+    {
+      if (info.imageType == TGA_TYPE_COLOR && info.bpp == 32)
+        info.alphaBits = 8;
+
+      if (info.imageType == TGA_TYPE_GRAY && info.bpp == 16)
+        info.alphaBits = 8;
+    }
+
+  switch (info.imageType)
+    {
+      case TGA_TYPE_MAPPED:
+        if (info.bpp != 8)
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_COLOR:
+        if ((info.bpp != 15 && info.bpp != 16 &&
+             info.bpp != 24 && info.bpp != 32)      ||
+            ((info.bpp == 15 || info.bpp == 24) &&
+             info.alphaBits != 0)                   ||
+            (info.bpp == 16 && info.alphaBits != 1 &&
+             info.alphaBits != 0)                   ||
+            (info.bpp == 32 && info.alphaBits != 8))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u, alpha = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp, info.alphaBits);
+            return -1;
+          }
+        break;
+      case TGA_TYPE_GRAY:
+        if (info.bpp != 8 &&
+            (info.alphaBits != 8 || (info.bpp != 16 && info.bpp != 15)))
+          {
+            g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                       gimp_filename_to_utf8 (filename),
+                       info.imageType, info.bpp);
+            return -1;
+          }
+        break;
+
+      default:
+        g_message (""Unknown image type %u for '%s'"",
+                   info.imageType, gimp_filename_to_utf8 (filename));
+        return -1;
+    }
+
+  /* Plausible but unhandled formats */
+  if (info.bytes * 8 != info.bpp && info.bpp != 15)
+    {
+      g_message (""Unhandled sub-format in '%s' (type = %u, bpp = %u)"",
+                 gimp_filename_to_utf8 (filename),
+                 info.imageType, info.bpp);
+      return -1;
+    }
+
+  /* Check that we have a color map only when we need it. */
+  if (info.imageType == TGA_TYPE_MAPPED && info.colorMapType != 1)
+    {
+      g_message (""Indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+  else if (info.imageType != TGA_TYPE_MAPPED && info.colorMapType != 0)
+    {
+      g_message (""Non-indexed image has invalid color map type %u"",
+                 info.colorMapType);
+      return -1;
+    }
+
+  /* Skip the image ID field. */
+  if (info.idLength && fseek (fp, info.idLength, SEEK_CUR))
+    {
+      g_message (""File '%s' is truncated or corrupted"",
+                 gimp_filename_to_utf8 (filename));
+      return -1;
+    }
+
+  image_ID = ReadImage (fp, &info, filename);
+
+  fclose (fp);
+
+  return image_ID;
+}",
+3245,"[""CWE-125""]",core,fb246611e62ad8c5a95b0ca180a63f17aa34b0d8,fb246611e62ad8c5a95b0ca180a63f17aa34b0d8,0,506421,2.075673833689993e+38,28.0,"lib-ntlm: Check buffer length on responses
+
+Add missing check for buffer length.
+
+If this is not checked, it is possible to send message which
+causes read past buffer bug.
+
+Broken in c7480644202e5451fbed448508ea29a25cffc99c",other,"static bool ntlmssp_check_buffer(const struct ntlmssp_buffer *buffer,
+				 size_t data_size, const char **error)
+{
+	uint32_t offset = read_le32(&buffer->offset);
+	uint16_t length = read_le16(&buffer->length);
+	uint16_t space = read_le16(&buffer->space);
+
+	/* Empty buffer is ok */
+	if (length == 0 && space == 0)
+		return TRUE;
+
+	if (offset >= data_size) {
+		*error = ""buffer offset out of bounds"";
+		return FALSE;
+	}
+
+	if (offset + space > data_size) {
+		*error = ""buffer end out of bounds"";
+		return FALSE;
+	}
+
+	return TRUE;
+}","static bool ntlmssp_check_buffer(const struct ntlmssp_buffer *buffer,
+				 size_t data_size, const char **error)
+{
+	uint32_t offset = read_le32(&buffer->offset);
+	uint16_t length = read_le16(&buffer->length);
+	uint16_t space = read_le16(&buffer->space);
+
+	/* Empty buffer is ok */
+	if (length == 0 && space == 0)
+		return TRUE;
+
+	if (length > data_size) {
+		*error = ""buffer length out of bounds"";
+		return FALSE;
+	}
+
+	if (offset >= data_size) {
+		*error = ""buffer offset out of bounds"";
+		return FALSE;
+	}
+
+	if (offset + space > data_size) {
+		*error = ""buffer end out of bounds"";
+		return FALSE;
+	}
+
+	return TRUE;
+}",

@@ -1,0 +1,46 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2675,"[""CWE-404""]",openssl,64c85430f95200b6b51fe9475bd5203f7c19daf1,64c85430f95200b6b51fe9475bd5203f7c19daf1,0,514705,2.060247858613405e+38,20.0,"Fix bug in OPENSSL_LH_flush
+
+Fixes #18139.
+
+Reviewed-by: Richard Levitte <levitte@openssl.org>
+Reviewed-by: Tomas Mraz <tomas@openssl.org>
+(Merged from https://github.com/openssl/openssl/pull/18141)
+
+(cherry picked from commit e5da68183410c06f7b350a0721bc2bd6057e438e)",other,"void OPENSSL_LH_flush(OPENSSL_LHASH *lh)
+{
+    unsigned int i;
+    OPENSSL_LH_NODE *n, *nn;
+
+    if (lh == NULL)
+        return;
+
+    for (i = 0; i < lh->num_nodes; i++) {
+        n = lh->b[i];
+        while (n != NULL) {
+            nn = n->next;
+            OPENSSL_free(n);
+            n = nn;
+        }
+        lh->b[i] = NULL;
+    }
+}","void OPENSSL_LH_flush(OPENSSL_LHASH *lh)
+{
+    unsigned int i;
+    OPENSSL_LH_NODE *n, *nn;
+
+    if (lh == NULL)
+        return;
+
+    for (i = 0; i < lh->num_nodes; i++) {
+        n = lh->b[i];
+        while (n != NULL) {
+            nn = n->next;
+            OPENSSL_free(n);
+            n = nn;
+        }
+        lh->b[i] = NULL;
+    }
+
+    lh->num_items = 0;
+}",

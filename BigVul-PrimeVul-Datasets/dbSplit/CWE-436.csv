@@ -1,0 +1,1515 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+4776,182512,,Local,Not required,Partial,CVE-2018-6560,https://www.cvedetails.com/cve/CVE-2018-6560/,CWE-436,Low,Partial,Partial,,2018-02-02,4.6,"In dbus-proxy/flatpak-proxy.c in Flatpak before 0.8.9, and 0.9.x and 0.10.x before 0.10.3, crafted D-Bus messages to the host can be used to break out of the sandbox, because whitespace handling in the proxy is not identical to whitespace handling in the daemon.",2019-10-02,,29,https://github.com/flatpak/flatpak/commit/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,"Fix vulnerability in dbus proxy
+
+During the authentication all client data is directly forwarded
+to the dbus daemon as is, until we detect the BEGIN command after
+which we start filtering the binary dbus protocol.
+
+Unfortunately the detection of the BEGIN command in the proxy
+did not exactly match the detection in the dbus daemon. A BEGIN
+followed by a space or tab was considered ok in the daemon but
+not by the proxy. This could be exploited to send arbitrary
+dbus messages to the host, which can be used to break out of
+the sandbox.
+
+This was noticed by Gabriel Campana of The Google Security Team.
+
+This fix makes the detection of the authentication phase end
+match the dbus code. In addition we duplicate the authentication
+line validation from dbus, which includes ensuring all data is
+ASCII, and limiting the size of a line to 16k. In fact, we add
+some extra stringent checks, disallowing ASCII control chars and
+requiring that auth lines start with a capital letter.",31,dbus-proxy/flatpak-proxy.c,"{""sha"": ""ff5fe455d19602ec34fb4d7efa69cf44280cccb3"", ""filename"": ""dbus-proxy/flatpak-proxy.c"", ""status"": ""modified"", ""additions"": 89, ""deletions"": 38, ""changes"": 127, ""blob_url"": ""https://github.com/flatpak/flatpak/blob/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""raw_url"": ""https://github.com/flatpak/flatpak/raw/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""contents_url"": ""https://api.github.com/repos/flatpak/flatpak/contents/dbus-proxy/flatpak-proxy.c?ref=52346bf187b5a7f1c0fe9075b328b7ad6abe78f6"", ""patch"": ""@@ -173,10 +173,11 @@\n \n typedef struct FlatpakProxyClient FlatpakProxyClient;\n \n-/* We start looking ignoring the first cr-lf\n-   since there is no previous line initially */\n-#define AUTH_END_INIT_OFFSET 2\n-#define AUTH_END_STRING \""\\r\\nBEGIN\\r\\n\""\n+#define FIND_AUTH_END_CONTINUE -1\n+#define FIND_AUTH_END_ABORT -2\n+\n+#define AUTH_LINE_SENTINEL \""\\r\\n\""\n+#define AUTH_BEGIN \""BEGIN\""\n \n typedef enum {\n   EXPECTED_REPLY_NONE,\n@@ -258,7 +259,7 @@ struct FlatpakProxyClient\n   FlatpakProxy *proxy;\n \n   gboolean      authenticated;\n-  int           auth_end_offset;\n+  GByteArray   *auth_buffer;\n \n   ProxySide     client_side;\n   ProxySide     bus_side;\n@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)\n   client->proxy->clients = g_list_remove (client->proxy->clients, client);\n   g_clear_object (&client->proxy);\n \n+  g_byte_array_free (client->auth_buffer, TRUE);\n   g_hash_table_destroy (client->rewrite_reply);\n   g_hash_table_destroy (client->get_owner_reply);\n   g_hash_table_destroy (client->unique_id_policy);\n@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)\n   init_side (client, &client->client_side);\n   init_side (client, &client->bus_side);\n \n-  client->auth_end_offset = AUTH_END_INIT_OFFSET;\n+  client->auth_buffer = g_byte_array_new ();\n   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);\n   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);\n   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);\n@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)\n     got_buffer_from_bus (client, side, buffer);\n }\n \n+#define _DBUS_ISASCII(c) ((c) != '\\0' && (((c) & ~0x7f) == 0))\n+\n+static gboolean\n+auth_line_is_valid (guint8 *line, guint8 *line_end)\n+{\n+  guint8 *p;\n+\n+  for (p = line; p < line_end; p++)\n+    {\n+      if (!_DBUS_ISASCII(*p))\n+        return FALSE;\n+\n+      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also\n+         fail if we see any control characters. Such low values will appear in  potential attacks,\n+         but will never happen in real sasl (where all binary data is hex encoded). */\n+      if (*p < ' ')\n+        return FALSE;\n+    }\n+\n+  /* For robustness we require the first char of the line to be an upper case letter.\n+     This is not technically required by the dbus spec, but all commands are upper\n+     case, and there is no provisioning for whitespace before the command, so in practice\n+     this is true, and this means we're not confused by e.g. initial whitespace. */\n+  if (line[0] < 'A' || line[0] > 'Z')\n+    return FALSE;\n+\n+  return TRUE;\n+}\n+\n+static gboolean\n+auth_line_is_begin (guint8 *line)\n+{\n+  guint8 next_char;\n+\n+  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))\n+    return FALSE;\n+\n+  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */\n+  next_char = line[strlen (AUTH_BEGIN)];\n+  return (next_char == 0 ||\n+          next_char == ' ' ||\n+          next_char == '\\t');\n+}\n+\n static gssize\n find_auth_end (FlatpakProxyClient *client, Buffer *buffer)\n {\n-  guchar *match;\n-  int i;\n+  goffset offset = 0;\n+  gsize original_size = client->auth_buffer->len;\n+\n+  /* Add the new data to the remaining data from last iteration */\n+  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);\n \n-  /* First try to match any leftover at the start */\n-  if (client->auth_end_offset > 0)\n+  while (TRUE)\n     {\n-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;\n-      gsize to_match = MIN (left, buffer->pos);\n-      /* Matched at least up to to_match */\n-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)\n+      guint8 *line_start = client->auth_buffer->data + offset;\n+      gsize remaining_data = client->auth_buffer->len - offset;\n+      guint8 *line_end;\n+\n+      line_end = memmem (line_start, remaining_data,\n+                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));\n+      if (line_end) /* Found end of line */\n         {\n-          client->auth_end_offset += to_match;\n+          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);\n \n-          /* Matched all */\n-          if (client->auth_end_offset == strlen (AUTH_END_STRING))\n-            return to_match;\n+          if (!auth_line_is_valid (line_start, line_end))\n+            return FIND_AUTH_END_ABORT;\n \n-          /* Matched to end of buffer */\n-          return -1;\n-        }\n+          *line_end = 0;\n+          if (auth_line_is_begin (line_start))\n+            return offset - original_size;\n \n-      /* Did not actually match at start */\n-      client->auth_end_offset = -1;\n-    }\n+          /* continue with next line */\n+        }\n+      else\n+        {\n+          /* No end-of-line in this buffer */\n+          g_byte_array_remove_range (client->auth_buffer, 0, offset);\n \n-  /* Look for whole match inside buffer */\n-  match = memmem (buffer, buffer->pos,\n-                  AUTH_END_STRING, strlen (AUTH_END_STRING));\n-  if (match != NULL)\n-    return match - buffer->data + strlen (AUTH_END_STRING);\n+          /* Abort if more than 16k before newline, similar to what dbus-daemon does */\n+          if (client->auth_buffer->len >= 16*1024)\n+            return FIND_AUTH_END_ABORT;\n \n-  /* Record longest prefix match at the end */\n-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)\n-    {\n-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)\n-        {\n-          client->auth_end_offset = i;\n-          break;\n+          return FIND_AUTH_END_CONTINUE;\n         }\n     }\n-\n-  return -1;\n }\n \n static gboolean\n@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)\n                       if (extra_data > 0)\n                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);\n                     }\n+                  else if (auth_end == FIND_AUTH_END_ABORT)\n+                    {\n+                      buffer_unref (buffer);\n+                      if (client->proxy->log_messages)\n+                        g_print (\""Invalid AUTH line, aborting\\n\"");\n+                      side_closed (side);\n+                      break;\n+                    }\n                 }\n \n               got_buffer_from_side (side, buffer);""}"," find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+  goffset offset = 0;
+  gsize original_size = client->auth_buffer->len;
+
+  /* Add the new data to the remaining data from last iteration */
+  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+ 
+  while (TRUE)
+     {
+      guint8 *line_start = client->auth_buffer->data + offset;
+      gsize remaining_data = client->auth_buffer->len - offset;
+      guint8 *line_end;
+
+      line_end = memmem (line_start, remaining_data,
+                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
+      if (line_end) /* Found end of line */
+         {
+          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+ 
+          if (!auth_line_is_valid (line_start, line_end))
+            return FIND_AUTH_END_ABORT;
+ 
+          *line_end = 0;
+          if (auth_line_is_begin (line_start))
+            return offset - original_size;
+ 
+          /* continue with next line */
+        }
+      else
+        {
+          /* No end-of-line in this buffer */
+          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+ 
+          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
+          if (client->auth_buffer->len >= 16*1024)
+            return FIND_AUTH_END_ABORT;
+ 
+          return FIND_AUTH_END_CONTINUE;
+         }
+     }
+ }
+"," find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+  guchar *match;
+  int i;
+ 
+  /* First try to match any leftover at the start */
+  if (client->auth_end_offset > 0)
+     {
+      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+      gsize to_match = MIN (left, buffer->pos);
+      /* Matched at least up to to_match */
+      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
+         {
+          client->auth_end_offset += to_match;
+ 
+          /* Matched all */
+          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+            return to_match;
+ 
+          /* Matched to end of buffer */
+          return -1;
+        }
+ 
+      /* Did not actually match at start */
+      client->auth_end_offset = -1;
+    }
+ 
+  /* Look for whole match inside buffer */
+  match = memmem (buffer, buffer->pos,
+                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+  if (match != NULL)
+    return match - buffer->data + strlen (AUTH_END_STRING);
+ 
+  /* Record longest prefix match at the end */
+  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+    {
+      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+        {
+          client->auth_end_offset = i;
+          break;
+         }
+     }
+  return -1;
+ }
+",C,"  goffset offset = 0;
+  gsize original_size = client->auth_buffer->len;
+
+  /* Add the new data to the remaining data from last iteration */
+  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+  while (TRUE)
+      guint8 *line_start = client->auth_buffer->data + offset;
+      gsize remaining_data = client->auth_buffer->len - offset;
+      guint8 *line_end;
+
+      line_end = memmem (line_start, remaining_data,
+                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
+      if (line_end) /* Found end of line */
+          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+          if (!auth_line_is_valid (line_start, line_end))
+            return FIND_AUTH_END_ABORT;
+          *line_end = 0;
+          if (auth_line_is_begin (line_start))
+            return offset - original_size;
+          /* continue with next line */
+        }
+      else
+        {
+          /* No end-of-line in this buffer */
+          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
+          if (client->auth_buffer->len >= 16*1024)
+            return FIND_AUTH_END_ABORT;
+          return FIND_AUTH_END_CONTINUE;
+","  guchar *match;
+  int i;
+  /* First try to match any leftover at the start */
+  if (client->auth_end_offset > 0)
+      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+      gsize to_match = MIN (left, buffer->pos);
+      /* Matched at least up to to_match */
+      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
+          client->auth_end_offset += to_match;
+          /* Matched all */
+          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+            return to_match;
+          /* Matched to end of buffer */
+          return -1;
+        }
+      /* Did not actually match at start */
+      client->auth_end_offset = -1;
+    }
+  /* Look for whole match inside buffer */
+  match = memmem (buffer, buffer->pos,
+                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+  if (match != NULL)
+    return match - buffer->data + strlen (AUTH_END_STRING);
+  /* Record longest prefix match at the end */
+  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+    {
+      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+        {
+          client->auth_end_offset = i;
+          break;
+  return -1;
+",,"@@ -173,10 +173,11 @@
+ 
+ typedef struct FlatpakProxyClient FlatpakProxyClient;
+ 
+-/* We start looking ignoring the first cr-lf
+-   since there is no previous line initially */
+-#define AUTH_END_INIT_OFFSET 2
+-#define AUTH_END_STRING ""\r\nBEGIN\r\n""
++#define FIND_AUTH_END_CONTINUE -1
++#define FIND_AUTH_END_ABORT -2
++
++#define AUTH_LINE_SENTINEL ""\r\n""
++#define AUTH_BEGIN ""BEGIN""
+ 
+ typedef enum {
+   EXPECTED_REPLY_NONE,
+@@ -258,7 +259,7 @@ struct FlatpakProxyClient
+   FlatpakProxy *proxy;
+ 
+   gboolean      authenticated;
+-  int           auth_end_offset;
++  GByteArray   *auth_buffer;
+ 
+   ProxySide     client_side;
+   ProxySide     bus_side;
+@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
++  g_byte_array_free (client->auth_buffer, TRUE);
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+-  client->auth_end_offset = AUTH_END_INIT_OFFSET;
++  client->auth_buffer = g_byte_array_new ();
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)
+     got_buffer_from_bus (client, side, buffer);
+ }
+ 
++#define _DBUS_ISASCII(c) ((c) != '\0' && (((c) & ~0x7f) == 0))
++
++static gboolean
++auth_line_is_valid (guint8 *line, guint8 *line_end)
++{
++  guint8 *p;
++
++  for (p = line; p < line_end; p++)
++    {
++      if (!_DBUS_ISASCII(*p))
++        return FALSE;
++
++      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also
++         fail if we see any control characters. Such low values will appear in  potential attacks,
++         but will never happen in real sasl (where all binary data is hex encoded). */
++      if (*p < ' ')
++        return FALSE;
++    }
++
++  /* For robustness we require the first char of the line to be an upper case letter.
++     This is not technically required by the dbus spec, but all commands are upper
++     case, and there is no provisioning for whitespace before the command, so in practice
++     this is true, and this means we're not confused by e.g. initial whitespace. */
++  if (line[0] < 'A' || line[0] > 'Z')
++    return FALSE;
++
++  return TRUE;
++}
++
++static gboolean
++auth_line_is_begin (guint8 *line)
++{
++  guint8 next_char;
++
++  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))
++    return FALSE;
++
++  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */
++  next_char = line[strlen (AUTH_BEGIN)];
++  return (next_char == 0 ||
++          next_char == ' ' ||
++          next_char == '\t');
++}
++
+ static gssize
+ find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+-  guchar *match;
+-  int i;
++  goffset offset = 0;
++  gsize original_size = client->auth_buffer->len;
++
++  /* Add the new data to the remaining data from last iteration */
++  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+ 
+-  /* First try to match any leftover at the start */
+-  if (client->auth_end_offset > 0)
++  while (TRUE)
+     {
+-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+-      gsize to_match = MIN (left, buffer->pos);
+-      /* Matched at least up to to_match */
+-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
++      guint8 *line_start = client->auth_buffer->data + offset;
++      gsize remaining_data = client->auth_buffer->len - offset;
++      guint8 *line_end;
++
++      line_end = memmem (line_start, remaining_data,
++                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
++      if (line_end) /* Found end of line */
+         {
+-          client->auth_end_offset += to_match;
++          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+ 
+-          /* Matched all */
+-          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+-            return to_match;
++          if (!auth_line_is_valid (line_start, line_end))
++            return FIND_AUTH_END_ABORT;
+ 
+-          /* Matched to end of buffer */
+-          return -1;
+-        }
++          *line_end = 0;
++          if (auth_line_is_begin (line_start))
++            return offset - original_size;
+ 
+-      /* Did not actually match at start */
+-      client->auth_end_offset = -1;
+-    }
++          /* continue with next line */
++        }
++      else
++        {
++          /* No end-of-line in this buffer */
++          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+ 
+-  /* Look for whole match inside buffer */
+-  match = memmem (buffer, buffer->pos,
+-                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+-  if (match != NULL)
+-    return match - buffer->data + strlen (AUTH_END_STRING);
++          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
++          if (client->auth_buffer->len >= 16*1024)
++            return FIND_AUTH_END_ABORT;
+ 
+-  /* Record longest prefix match at the end */
+-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+-    {
+-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+-        {
+-          client->auth_end_offset = i;
+-          break;
++          return FIND_AUTH_END_CONTINUE;
+         }
+     }
+-
+-  return -1;
+ }
+ 
+ static gboolean
+@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
++                  else if (auth_end == FIND_AUTH_END_ABORT)
++                    {
++                      buffer_unref (buffer);
++                      if (client->proxy->log_messages)
++                        g_print (""Invalid AUTH line, aborting\n"");
++                      side_closed (side);
++                      break;
++                    }
+                 }
+ 
+               got_buffer_from_side (side, buffer);",flatpak,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,3c9d3a316ea298c25e8756ab4f256b08879aff36,1," find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+//flaw_line_below:
+  guchar *match;
+//flaw_line_below:
+  int i;
+//fix_flaw_line_below:
+//  goffset offset = 0;
+//fix_flaw_line_below:
+//  gsize original_size = client->auth_buffer->len;
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//  /* Add the new data to the remaining data from last iteration */
+//fix_flaw_line_below:
+//  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+ 
+//flaw_line_below:
+  /* First try to match any leftover at the start */
+//flaw_line_below:
+  if (client->auth_end_offset > 0)
+//fix_flaw_line_below:
+//  while (TRUE)
+     {
+//flaw_line_below:
+      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+//flaw_line_below:
+      gsize to_match = MIN (left, buffer->pos);
+//flaw_line_below:
+      /* Matched at least up to to_match */
+//flaw_line_below:
+      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
+//fix_flaw_line_below:
+//      guint8 *line_start = client->auth_buffer->data + offset;
+//fix_flaw_line_below:
+//      gsize remaining_data = client->auth_buffer->len - offset;
+//fix_flaw_line_below:
+//      guint8 *line_end;
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//      line_end = memmem (line_start, remaining_data,
+//fix_flaw_line_below:
+//                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
+//fix_flaw_line_below:
+//      if (line_end) /* Found end of line */
+         {
+//flaw_line_below:
+          client->auth_end_offset += to_match;
+//fix_flaw_line_below:
+//          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+ 
+//flaw_line_below:
+          /* Matched all */
+//flaw_line_below:
+          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+//flaw_line_below:
+            return to_match;
+//fix_flaw_line_below:
+//          if (!auth_line_is_valid (line_start, line_end))
+//fix_flaw_line_below:
+//            return FIND_AUTH_END_ABORT;
+ 
+//flaw_line_below:
+          /* Matched to end of buffer */
+//flaw_line_below:
+          return -1;
+//flaw_line_below:
+        }
+//fix_flaw_line_below:
+//          *line_end = 0;
+//fix_flaw_line_below:
+//          if (auth_line_is_begin (line_start))
+//fix_flaw_line_below:
+//            return offset - original_size;
+ 
+//flaw_line_below:
+      /* Did not actually match at start */
+//flaw_line_below:
+      client->auth_end_offset = -1;
+//flaw_line_below:
+    }
+//fix_flaw_line_below:
+//          /* continue with next line */
+//fix_flaw_line_below:
+//        }
+//fix_flaw_line_below:
+//      else
+//fix_flaw_line_below:
+//        {
+//fix_flaw_line_below:
+//          /* No end-of-line in this buffer */
+//fix_flaw_line_below:
+//          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+ 
+//flaw_line_below:
+  /* Look for whole match inside buffer */
+//flaw_line_below:
+  match = memmem (buffer, buffer->pos,
+//flaw_line_below:
+                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+//flaw_line_below:
+  if (match != NULL)
+//flaw_line_below:
+    return match - buffer->data + strlen (AUTH_END_STRING);
+//fix_flaw_line_below:
+//          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
+//fix_flaw_line_below:
+//          if (client->auth_buffer->len >= 16*1024)
+//fix_flaw_line_below:
+//            return FIND_AUTH_END_ABORT;
+ 
+//flaw_line_below:
+  /* Record longest prefix match at the end */
+//flaw_line_below:
+  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+//flaw_line_below:
+    {
+//flaw_line_below:
+      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+//flaw_line_below:
+        {
+//flaw_line_below:
+          client->auth_end_offset = i;
+//flaw_line_below:
+          break;
+//fix_flaw_line_below:
+//          return FIND_AUTH_END_CONTINUE;
+         }
+     }
+//flaw_line_below:
+
+//flaw_line_below:
+  return -1;
+ }
+"
+4777,182513,,Local,Not required,Partial,CVE-2018-6560,https://www.cvedetails.com/cve/CVE-2018-6560/,CWE-436,Low,Partial,Partial,,2018-02-02,4.6,"In dbus-proxy/flatpak-proxy.c in Flatpak before 0.8.9, and 0.9.x and 0.10.x before 0.10.3, crafted D-Bus messages to the host can be used to break out of the sandbox, because whitespace handling in the proxy is not identical to whitespace handling in the daemon.",2019-10-02,,1,https://github.com/flatpak/flatpak/commit/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,"Fix vulnerability in dbus proxy
+
+During the authentication all client data is directly forwarded
+to the dbus daemon as is, until we detect the BEGIN command after
+which we start filtering the binary dbus protocol.
+
+Unfortunately the detection of the BEGIN command in the proxy
+did not exactly match the detection in the dbus daemon. A BEGIN
+followed by a space or tab was considered ok in the daemon but
+not by the proxy. This could be exploited to send arbitrary
+dbus messages to the host, which can be used to break out of
+the sandbox.
+
+This was noticed by Gabriel Campana of The Google Security Team.
+
+This fix makes the detection of the authentication phase end
+match the dbus code. In addition we duplicate the authentication
+line validation from dbus, which includes ensuring all data is
+ASCII, and limiting the size of a line to 16k. In fact, we add
+some extra stringent checks, disallowing ASCII control chars and
+requiring that auth lines start with a capital letter.",0,dbus-proxy/flatpak-proxy.c,"{""sha"": ""ff5fe455d19602ec34fb4d7efa69cf44280cccb3"", ""filename"": ""dbus-proxy/flatpak-proxy.c"", ""status"": ""modified"", ""additions"": 89, ""deletions"": 38, ""changes"": 127, ""blob_url"": ""https://github.com/flatpak/flatpak/blob/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""raw_url"": ""https://github.com/flatpak/flatpak/raw/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""contents_url"": ""https://api.github.com/repos/flatpak/flatpak/contents/dbus-proxy/flatpak-proxy.c?ref=52346bf187b5a7f1c0fe9075b328b7ad6abe78f6"", ""patch"": ""@@ -173,10 +173,11 @@\n \n typedef struct FlatpakProxyClient FlatpakProxyClient;\n \n-/* We start looking ignoring the first cr-lf\n-   since there is no previous line initially */\n-#define AUTH_END_INIT_OFFSET 2\n-#define AUTH_END_STRING \""\\r\\nBEGIN\\r\\n\""\n+#define FIND_AUTH_END_CONTINUE -1\n+#define FIND_AUTH_END_ABORT -2\n+\n+#define AUTH_LINE_SENTINEL \""\\r\\n\""\n+#define AUTH_BEGIN \""BEGIN\""\n \n typedef enum {\n   EXPECTED_REPLY_NONE,\n@@ -258,7 +259,7 @@ struct FlatpakProxyClient\n   FlatpakProxy *proxy;\n \n   gboolean      authenticated;\n-  int           auth_end_offset;\n+  GByteArray   *auth_buffer;\n \n   ProxySide     client_side;\n   ProxySide     bus_side;\n@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)\n   client->proxy->clients = g_list_remove (client->proxy->clients, client);\n   g_clear_object (&client->proxy);\n \n+  g_byte_array_free (client->auth_buffer, TRUE);\n   g_hash_table_destroy (client->rewrite_reply);\n   g_hash_table_destroy (client->get_owner_reply);\n   g_hash_table_destroy (client->unique_id_policy);\n@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)\n   init_side (client, &client->client_side);\n   init_side (client, &client->bus_side);\n \n-  client->auth_end_offset = AUTH_END_INIT_OFFSET;\n+  client->auth_buffer = g_byte_array_new ();\n   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);\n   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);\n   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);\n@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)\n     got_buffer_from_bus (client, side, buffer);\n }\n \n+#define _DBUS_ISASCII(c) ((c) != '\\0' && (((c) & ~0x7f) == 0))\n+\n+static gboolean\n+auth_line_is_valid (guint8 *line, guint8 *line_end)\n+{\n+  guint8 *p;\n+\n+  for (p = line; p < line_end; p++)\n+    {\n+      if (!_DBUS_ISASCII(*p))\n+        return FALSE;\n+\n+      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also\n+         fail if we see any control characters. Such low values will appear in  potential attacks,\n+         but will never happen in real sasl (where all binary data is hex encoded). */\n+      if (*p < ' ')\n+        return FALSE;\n+    }\n+\n+  /* For robustness we require the first char of the line to be an upper case letter.\n+     This is not technically required by the dbus spec, but all commands are upper\n+     case, and there is no provisioning for whitespace before the command, so in practice\n+     this is true, and this means we're not confused by e.g. initial whitespace. */\n+  if (line[0] < 'A' || line[0] > 'Z')\n+    return FALSE;\n+\n+  return TRUE;\n+}\n+\n+static gboolean\n+auth_line_is_begin (guint8 *line)\n+{\n+  guint8 next_char;\n+\n+  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))\n+    return FALSE;\n+\n+  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */\n+  next_char = line[strlen (AUTH_BEGIN)];\n+  return (next_char == 0 ||\n+          next_char == ' ' ||\n+          next_char == '\\t');\n+}\n+\n static gssize\n find_auth_end (FlatpakProxyClient *client, Buffer *buffer)\n {\n-  guchar *match;\n-  int i;\n+  goffset offset = 0;\n+  gsize original_size = client->auth_buffer->len;\n+\n+  /* Add the new data to the remaining data from last iteration */\n+  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);\n \n-  /* First try to match any leftover at the start */\n-  if (client->auth_end_offset > 0)\n+  while (TRUE)\n     {\n-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;\n-      gsize to_match = MIN (left, buffer->pos);\n-      /* Matched at least up to to_match */\n-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)\n+      guint8 *line_start = client->auth_buffer->data + offset;\n+      gsize remaining_data = client->auth_buffer->len - offset;\n+      guint8 *line_end;\n+\n+      line_end = memmem (line_start, remaining_data,\n+                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));\n+      if (line_end) /* Found end of line */\n         {\n-          client->auth_end_offset += to_match;\n+          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);\n \n-          /* Matched all */\n-          if (client->auth_end_offset == strlen (AUTH_END_STRING))\n-            return to_match;\n+          if (!auth_line_is_valid (line_start, line_end))\n+            return FIND_AUTH_END_ABORT;\n \n-          /* Matched to end of buffer */\n-          return -1;\n-        }\n+          *line_end = 0;\n+          if (auth_line_is_begin (line_start))\n+            return offset - original_size;\n \n-      /* Did not actually match at start */\n-      client->auth_end_offset = -1;\n-    }\n+          /* continue with next line */\n+        }\n+      else\n+        {\n+          /* No end-of-line in this buffer */\n+          g_byte_array_remove_range (client->auth_buffer, 0, offset);\n \n-  /* Look for whole match inside buffer */\n-  match = memmem (buffer, buffer->pos,\n-                  AUTH_END_STRING, strlen (AUTH_END_STRING));\n-  if (match != NULL)\n-    return match - buffer->data + strlen (AUTH_END_STRING);\n+          /* Abort if more than 16k before newline, similar to what dbus-daemon does */\n+          if (client->auth_buffer->len >= 16*1024)\n+            return FIND_AUTH_END_ABORT;\n \n-  /* Record longest prefix match at the end */\n-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)\n-    {\n-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)\n-        {\n-          client->auth_end_offset = i;\n-          break;\n+          return FIND_AUTH_END_CONTINUE;\n         }\n     }\n-\n-  return -1;\n }\n \n static gboolean\n@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)\n                       if (extra_data > 0)\n                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);\n                     }\n+                  else if (auth_end == FIND_AUTH_END_ABORT)\n+                    {\n+                      buffer_unref (buffer);\n+                      if (client->proxy->log_messages)\n+                        g_print (\""Invalid AUTH line, aborting\\n\"");\n+                      side_closed (side);\n+                      break;\n+                    }\n                 }\n \n               got_buffer_from_side (side, buffer);""}","flatpak_proxy_client_finalize (GObject *object)
+{
+  FlatpakProxyClient *client = FLATPAK_PROXY_CLIENT (object);
+
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
+  g_byte_array_free (client->auth_buffer, TRUE);
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+
+  free_side (&client->client_side);
+  free_side (&client->bus_side);
+
+  G_OBJECT_CLASS (flatpak_proxy_client_parent_class)->finalize (object);
+}
+","flatpak_proxy_client_finalize (GObject *object)
+{
+  FlatpakProxyClient *client = FLATPAK_PROXY_CLIENT (object);
+
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+
+  free_side (&client->client_side);
+  free_side (&client->bus_side);
+
+  G_OBJECT_CLASS (flatpak_proxy_client_parent_class)->finalize (object);
+}
+",C,"  g_byte_array_free (client->auth_buffer, TRUE);
+",,,"@@ -173,10 +173,11 @@
+ 
+ typedef struct FlatpakProxyClient FlatpakProxyClient;
+ 
+-/* We start looking ignoring the first cr-lf
+-   since there is no previous line initially */
+-#define AUTH_END_INIT_OFFSET 2
+-#define AUTH_END_STRING ""\r\nBEGIN\r\n""
++#define FIND_AUTH_END_CONTINUE -1
++#define FIND_AUTH_END_ABORT -2
++
++#define AUTH_LINE_SENTINEL ""\r\n""
++#define AUTH_BEGIN ""BEGIN""
+ 
+ typedef enum {
+   EXPECTED_REPLY_NONE,
+@@ -258,7 +259,7 @@ struct FlatpakProxyClient
+   FlatpakProxy *proxy;
+ 
+   gboolean      authenticated;
+-  int           auth_end_offset;
++  GByteArray   *auth_buffer;
+ 
+   ProxySide     client_side;
+   ProxySide     bus_side;
+@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
++  g_byte_array_free (client->auth_buffer, TRUE);
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+-  client->auth_end_offset = AUTH_END_INIT_OFFSET;
++  client->auth_buffer = g_byte_array_new ();
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)
+     got_buffer_from_bus (client, side, buffer);
+ }
+ 
++#define _DBUS_ISASCII(c) ((c) != '\0' && (((c) & ~0x7f) == 0))
++
++static gboolean
++auth_line_is_valid (guint8 *line, guint8 *line_end)
++{
++  guint8 *p;
++
++  for (p = line; p < line_end; p++)
++    {
++      if (!_DBUS_ISASCII(*p))
++        return FALSE;
++
++      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also
++         fail if we see any control characters. Such low values will appear in  potential attacks,
++         but will never happen in real sasl (where all binary data is hex encoded). */
++      if (*p < ' ')
++        return FALSE;
++    }
++
++  /* For robustness we require the first char of the line to be an upper case letter.
++     This is not technically required by the dbus spec, but all commands are upper
++     case, and there is no provisioning for whitespace before the command, so in practice
++     this is true, and this means we're not confused by e.g. initial whitespace. */
++  if (line[0] < 'A' || line[0] > 'Z')
++    return FALSE;
++
++  return TRUE;
++}
++
++static gboolean
++auth_line_is_begin (guint8 *line)
++{
++  guint8 next_char;
++
++  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))
++    return FALSE;
++
++  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */
++  next_char = line[strlen (AUTH_BEGIN)];
++  return (next_char == 0 ||
++          next_char == ' ' ||
++          next_char == '\t');
++}
++
+ static gssize
+ find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+-  guchar *match;
+-  int i;
++  goffset offset = 0;
++  gsize original_size = client->auth_buffer->len;
++
++  /* Add the new data to the remaining data from last iteration */
++  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+ 
+-  /* First try to match any leftover at the start */
+-  if (client->auth_end_offset > 0)
++  while (TRUE)
+     {
+-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+-      gsize to_match = MIN (left, buffer->pos);
+-      /* Matched at least up to to_match */
+-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
++      guint8 *line_start = client->auth_buffer->data + offset;
++      gsize remaining_data = client->auth_buffer->len - offset;
++      guint8 *line_end;
++
++      line_end = memmem (line_start, remaining_data,
++                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
++      if (line_end) /* Found end of line */
+         {
+-          client->auth_end_offset += to_match;
++          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+ 
+-          /* Matched all */
+-          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+-            return to_match;
++          if (!auth_line_is_valid (line_start, line_end))
++            return FIND_AUTH_END_ABORT;
+ 
+-          /* Matched to end of buffer */
+-          return -1;
+-        }
++          *line_end = 0;
++          if (auth_line_is_begin (line_start))
++            return offset - original_size;
+ 
+-      /* Did not actually match at start */
+-      client->auth_end_offset = -1;
+-    }
++          /* continue with next line */
++        }
++      else
++        {
++          /* No end-of-line in this buffer */
++          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+ 
+-  /* Look for whole match inside buffer */
+-  match = memmem (buffer, buffer->pos,
+-                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+-  if (match != NULL)
+-    return match - buffer->data + strlen (AUTH_END_STRING);
++          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
++          if (client->auth_buffer->len >= 16*1024)
++            return FIND_AUTH_END_ABORT;
+ 
+-  /* Record longest prefix match at the end */
+-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+-    {
+-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+-        {
+-          client->auth_end_offset = i;
+-          break;
++          return FIND_AUTH_END_CONTINUE;
+         }
+     }
+-
+-  return -1;
+ }
+ 
+ static gboolean
+@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
++                  else if (auth_end == FIND_AUTH_END_ABORT)
++                    {
++                      buffer_unref (buffer);
++                      if (client->proxy->log_messages)
++                        g_print (""Invalid AUTH line, aborting\n"");
++                      side_closed (side);
++                      break;
++                    }
+                 }
+ 
+               got_buffer_from_side (side, buffer);",flatpak,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,3c9d3a316ea298c25e8756ab4f256b08879aff36,1,"flatpak_proxy_client_finalize (GObject *object)
+{
+  FlatpakProxyClient *client = FLATPAK_PROXY_CLIENT (object);
+
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
+//fix_flaw_line_below:
+//  g_byte_array_free (client->auth_buffer, TRUE);
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+
+  free_side (&client->client_side);
+  free_side (&client->bus_side);
+
+  G_OBJECT_CLASS (flatpak_proxy_client_parent_class)->finalize (object);
+}
+"
+4778,182514,,Local,Not required,Partial,CVE-2018-6560,https://www.cvedetails.com/cve/CVE-2018-6560/,CWE-436,Low,Partial,Partial,,2018-02-02,4.6,"In dbus-proxy/flatpak-proxy.c in Flatpak before 0.8.9, and 0.9.x and 0.10.x before 0.10.3, crafted D-Bus messages to the host can be used to break out of the sandbox, because whitespace handling in the proxy is not identical to whitespace handling in the daemon.",2019-10-02,,1,https://github.com/flatpak/flatpak/commit/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,"Fix vulnerability in dbus proxy
+
+During the authentication all client data is directly forwarded
+to the dbus daemon as is, until we detect the BEGIN command after
+which we start filtering the binary dbus protocol.
+
+Unfortunately the detection of the BEGIN command in the proxy
+did not exactly match the detection in the dbus daemon. A BEGIN
+followed by a space or tab was considered ok in the daemon but
+not by the proxy. This could be exploited to send arbitrary
+dbus messages to the host, which can be used to break out of
+the sandbox.
+
+This was noticed by Gabriel Campana of The Google Security Team.
+
+This fix makes the detection of the authentication phase end
+match the dbus code. In addition we duplicate the authentication
+line validation from dbus, which includes ensuring all data is
+ASCII, and limiting the size of a line to 16k. In fact, we add
+some extra stringent checks, disallowing ASCII control chars and
+requiring that auth lines start with a capital letter.",1,dbus-proxy/flatpak-proxy.c,"{""sha"": ""ff5fe455d19602ec34fb4d7efa69cf44280cccb3"", ""filename"": ""dbus-proxy/flatpak-proxy.c"", ""status"": ""modified"", ""additions"": 89, ""deletions"": 38, ""changes"": 127, ""blob_url"": ""https://github.com/flatpak/flatpak/blob/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""raw_url"": ""https://github.com/flatpak/flatpak/raw/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""contents_url"": ""https://api.github.com/repos/flatpak/flatpak/contents/dbus-proxy/flatpak-proxy.c?ref=52346bf187b5a7f1c0fe9075b328b7ad6abe78f6"", ""patch"": ""@@ -173,10 +173,11 @@\n \n typedef struct FlatpakProxyClient FlatpakProxyClient;\n \n-/* We start looking ignoring the first cr-lf\n-   since there is no previous line initially */\n-#define AUTH_END_INIT_OFFSET 2\n-#define AUTH_END_STRING \""\\r\\nBEGIN\\r\\n\""\n+#define FIND_AUTH_END_CONTINUE -1\n+#define FIND_AUTH_END_ABORT -2\n+\n+#define AUTH_LINE_SENTINEL \""\\r\\n\""\n+#define AUTH_BEGIN \""BEGIN\""\n \n typedef enum {\n   EXPECTED_REPLY_NONE,\n@@ -258,7 +259,7 @@ struct FlatpakProxyClient\n   FlatpakProxy *proxy;\n \n   gboolean      authenticated;\n-  int           auth_end_offset;\n+  GByteArray   *auth_buffer;\n \n   ProxySide     client_side;\n   ProxySide     bus_side;\n@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)\n   client->proxy->clients = g_list_remove (client->proxy->clients, client);\n   g_clear_object (&client->proxy);\n \n+  g_byte_array_free (client->auth_buffer, TRUE);\n   g_hash_table_destroy (client->rewrite_reply);\n   g_hash_table_destroy (client->get_owner_reply);\n   g_hash_table_destroy (client->unique_id_policy);\n@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)\n   init_side (client, &client->client_side);\n   init_side (client, &client->bus_side);\n \n-  client->auth_end_offset = AUTH_END_INIT_OFFSET;\n+  client->auth_buffer = g_byte_array_new ();\n   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);\n   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);\n   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);\n@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)\n     got_buffer_from_bus (client, side, buffer);\n }\n \n+#define _DBUS_ISASCII(c) ((c) != '\\0' && (((c) & ~0x7f) == 0))\n+\n+static gboolean\n+auth_line_is_valid (guint8 *line, guint8 *line_end)\n+{\n+  guint8 *p;\n+\n+  for (p = line; p < line_end; p++)\n+    {\n+      if (!_DBUS_ISASCII(*p))\n+        return FALSE;\n+\n+      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also\n+         fail if we see any control characters. Such low values will appear in  potential attacks,\n+         but will never happen in real sasl (where all binary data is hex encoded). */\n+      if (*p < ' ')\n+        return FALSE;\n+    }\n+\n+  /* For robustness we require the first char of the line to be an upper case letter.\n+     This is not technically required by the dbus spec, but all commands are upper\n+     case, and there is no provisioning for whitespace before the command, so in practice\n+     this is true, and this means we're not confused by e.g. initial whitespace. */\n+  if (line[0] < 'A' || line[0] > 'Z')\n+    return FALSE;\n+\n+  return TRUE;\n+}\n+\n+static gboolean\n+auth_line_is_begin (guint8 *line)\n+{\n+  guint8 next_char;\n+\n+  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))\n+    return FALSE;\n+\n+  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */\n+  next_char = line[strlen (AUTH_BEGIN)];\n+  return (next_char == 0 ||\n+          next_char == ' ' ||\n+          next_char == '\\t');\n+}\n+\n static gssize\n find_auth_end (FlatpakProxyClient *client, Buffer *buffer)\n {\n-  guchar *match;\n-  int i;\n+  goffset offset = 0;\n+  gsize original_size = client->auth_buffer->len;\n+\n+  /* Add the new data to the remaining data from last iteration */\n+  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);\n \n-  /* First try to match any leftover at the start */\n-  if (client->auth_end_offset > 0)\n+  while (TRUE)\n     {\n-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;\n-      gsize to_match = MIN (left, buffer->pos);\n-      /* Matched at least up to to_match */\n-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)\n+      guint8 *line_start = client->auth_buffer->data + offset;\n+      gsize remaining_data = client->auth_buffer->len - offset;\n+      guint8 *line_end;\n+\n+      line_end = memmem (line_start, remaining_data,\n+                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));\n+      if (line_end) /* Found end of line */\n         {\n-          client->auth_end_offset += to_match;\n+          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);\n \n-          /* Matched all */\n-          if (client->auth_end_offset == strlen (AUTH_END_STRING))\n-            return to_match;\n+          if (!auth_line_is_valid (line_start, line_end))\n+            return FIND_AUTH_END_ABORT;\n \n-          /* Matched to end of buffer */\n-          return -1;\n-        }\n+          *line_end = 0;\n+          if (auth_line_is_begin (line_start))\n+            return offset - original_size;\n \n-      /* Did not actually match at start */\n-      client->auth_end_offset = -1;\n-    }\n+          /* continue with next line */\n+        }\n+      else\n+        {\n+          /* No end-of-line in this buffer */\n+          g_byte_array_remove_range (client->auth_buffer, 0, offset);\n \n-  /* Look for whole match inside buffer */\n-  match = memmem (buffer, buffer->pos,\n-                  AUTH_END_STRING, strlen (AUTH_END_STRING));\n-  if (match != NULL)\n-    return match - buffer->data + strlen (AUTH_END_STRING);\n+          /* Abort if more than 16k before newline, similar to what dbus-daemon does */\n+          if (client->auth_buffer->len >= 16*1024)\n+            return FIND_AUTH_END_ABORT;\n \n-  /* Record longest prefix match at the end */\n-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)\n-    {\n-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)\n-        {\n-          client->auth_end_offset = i;\n-          break;\n+          return FIND_AUTH_END_CONTINUE;\n         }\n     }\n-\n-  return -1;\n }\n \n static gboolean\n@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)\n                       if (extra_data > 0)\n                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);\n                     }\n+                  else if (auth_end == FIND_AUTH_END_ABORT)\n+                    {\n+                      buffer_unref (buffer);\n+                      if (client->proxy->log_messages)\n+                        g_print (\""Invalid AUTH line, aborting\\n\"");\n+                      side_closed (side);\n+                      break;\n+                    }\n                 }\n \n               got_buffer_from_side (side, buffer);""}","flatpak_proxy_client_init (FlatpakProxyClient *client)
+{
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+  client->auth_buffer = g_byte_array_new ();
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+}
+","flatpak_proxy_client_init (FlatpakProxyClient *client)
+{
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+  client->auth_end_offset = AUTH_END_INIT_OFFSET;
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+}
+",C,"  client->auth_buffer = g_byte_array_new ();
+","  client->auth_end_offset = AUTH_END_INIT_OFFSET;
+",,"@@ -173,10 +173,11 @@
+ 
+ typedef struct FlatpakProxyClient FlatpakProxyClient;
+ 
+-/* We start looking ignoring the first cr-lf
+-   since there is no previous line initially */
+-#define AUTH_END_INIT_OFFSET 2
+-#define AUTH_END_STRING ""\r\nBEGIN\r\n""
++#define FIND_AUTH_END_CONTINUE -1
++#define FIND_AUTH_END_ABORT -2
++
++#define AUTH_LINE_SENTINEL ""\r\n""
++#define AUTH_BEGIN ""BEGIN""
+ 
+ typedef enum {
+   EXPECTED_REPLY_NONE,
+@@ -258,7 +259,7 @@ struct FlatpakProxyClient
+   FlatpakProxy *proxy;
+ 
+   gboolean      authenticated;
+-  int           auth_end_offset;
++  GByteArray   *auth_buffer;
+ 
+   ProxySide     client_side;
+   ProxySide     bus_side;
+@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
++  g_byte_array_free (client->auth_buffer, TRUE);
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+-  client->auth_end_offset = AUTH_END_INIT_OFFSET;
++  client->auth_buffer = g_byte_array_new ();
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)
+     got_buffer_from_bus (client, side, buffer);
+ }
+ 
++#define _DBUS_ISASCII(c) ((c) != '\0' && (((c) & ~0x7f) == 0))
++
++static gboolean
++auth_line_is_valid (guint8 *line, guint8 *line_end)
++{
++  guint8 *p;
++
++  for (p = line; p < line_end; p++)
++    {
++      if (!_DBUS_ISASCII(*p))
++        return FALSE;
++
++      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also
++         fail if we see any control characters. Such low values will appear in  potential attacks,
++         but will never happen in real sasl (where all binary data is hex encoded). */
++      if (*p < ' ')
++        return FALSE;
++    }
++
++  /* For robustness we require the first char of the line to be an upper case letter.
++     This is not technically required by the dbus spec, but all commands are upper
++     case, and there is no provisioning for whitespace before the command, so in practice
++     this is true, and this means we're not confused by e.g. initial whitespace. */
++  if (line[0] < 'A' || line[0] > 'Z')
++    return FALSE;
++
++  return TRUE;
++}
++
++static gboolean
++auth_line_is_begin (guint8 *line)
++{
++  guint8 next_char;
++
++  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))
++    return FALSE;
++
++  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */
++  next_char = line[strlen (AUTH_BEGIN)];
++  return (next_char == 0 ||
++          next_char == ' ' ||
++          next_char == '\t');
++}
++
+ static gssize
+ find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+-  guchar *match;
+-  int i;
++  goffset offset = 0;
++  gsize original_size = client->auth_buffer->len;
++
++  /* Add the new data to the remaining data from last iteration */
++  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+ 
+-  /* First try to match any leftover at the start */
+-  if (client->auth_end_offset > 0)
++  while (TRUE)
+     {
+-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+-      gsize to_match = MIN (left, buffer->pos);
+-      /* Matched at least up to to_match */
+-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
++      guint8 *line_start = client->auth_buffer->data + offset;
++      gsize remaining_data = client->auth_buffer->len - offset;
++      guint8 *line_end;
++
++      line_end = memmem (line_start, remaining_data,
++                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
++      if (line_end) /* Found end of line */
+         {
+-          client->auth_end_offset += to_match;
++          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+ 
+-          /* Matched all */
+-          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+-            return to_match;
++          if (!auth_line_is_valid (line_start, line_end))
++            return FIND_AUTH_END_ABORT;
+ 
+-          /* Matched to end of buffer */
+-          return -1;
+-        }
++          *line_end = 0;
++          if (auth_line_is_begin (line_start))
++            return offset - original_size;
+ 
+-      /* Did not actually match at start */
+-      client->auth_end_offset = -1;
+-    }
++          /* continue with next line */
++        }
++      else
++        {
++          /* No end-of-line in this buffer */
++          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+ 
+-  /* Look for whole match inside buffer */
+-  match = memmem (buffer, buffer->pos,
+-                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+-  if (match != NULL)
+-    return match - buffer->data + strlen (AUTH_END_STRING);
++          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
++          if (client->auth_buffer->len >= 16*1024)
++            return FIND_AUTH_END_ABORT;
+ 
+-  /* Record longest prefix match at the end */
+-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+-    {
+-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+-        {
+-          client->auth_end_offset = i;
+-          break;
++          return FIND_AUTH_END_CONTINUE;
+         }
+     }
+-
+-  return -1;
+ }
+ 
+ static gboolean
+@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
++                  else if (auth_end == FIND_AUTH_END_ABORT)
++                    {
++                      buffer_unref (buffer);
++                      if (client->proxy->log_messages)
++                        g_print (""Invalid AUTH line, aborting\n"");
++                      side_closed (side);
++                      break;
++                    }
+                 }
+ 
+               got_buffer_from_side (side, buffer);",flatpak,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,3c9d3a316ea298c25e8756ab4f256b08879aff36,1,"flatpak_proxy_client_init (FlatpakProxyClient *client)
+{
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+//flaw_line_below:
+  client->auth_end_offset = AUTH_END_INIT_OFFSET;
+//fix_flaw_line_below:
+//  client->auth_buffer = g_byte_array_new ();
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+}
+"
+4779,182515,,Local,Not required,Partial,CVE-2018-6560,https://www.cvedetails.com/cve/CVE-2018-6560/,CWE-436,Low,Partial,Partial,,2018-02-02,4.6,"In dbus-proxy/flatpak-proxy.c in Flatpak before 0.8.9, and 0.9.x and 0.10.x before 0.10.3, crafted D-Bus messages to the host can be used to break out of the sandbox, because whitespace handling in the proxy is not identical to whitespace handling in the daemon.",2019-10-02,,8,https://github.com/flatpak/flatpak/commit/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,"Fix vulnerability in dbus proxy
+
+During the authentication all client data is directly forwarded
+to the dbus daemon as is, until we detect the BEGIN command after
+which we start filtering the binary dbus protocol.
+
+Unfortunately the detection of the BEGIN command in the proxy
+did not exactly match the detection in the dbus daemon. A BEGIN
+followed by a space or tab was considered ok in the daemon but
+not by the proxy. This could be exploited to send arbitrary
+dbus messages to the host, which can be used to break out of
+the sandbox.
+
+This was noticed by Gabriel Campana of The Google Security Team.
+
+This fix makes the detection of the authentication phase end
+match the dbus code. In addition we duplicate the authentication
+line validation from dbus, which includes ensuring all data is
+ASCII, and limiting the size of a line to 16k. In fact, we add
+some extra stringent checks, disallowing ASCII control chars and
+requiring that auth lines start with a capital letter.",0,dbus-proxy/flatpak-proxy.c,"{""sha"": ""ff5fe455d19602ec34fb4d7efa69cf44280cccb3"", ""filename"": ""dbus-proxy/flatpak-proxy.c"", ""status"": ""modified"", ""additions"": 89, ""deletions"": 38, ""changes"": 127, ""blob_url"": ""https://github.com/flatpak/flatpak/blob/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""raw_url"": ""https://github.com/flatpak/flatpak/raw/52346bf187b5a7f1c0fe9075b328b7ad6abe78f6/dbus-proxy/flatpak-proxy.c"", ""contents_url"": ""https://api.github.com/repos/flatpak/flatpak/contents/dbus-proxy/flatpak-proxy.c?ref=52346bf187b5a7f1c0fe9075b328b7ad6abe78f6"", ""patch"": ""@@ -173,10 +173,11 @@\n \n typedef struct FlatpakProxyClient FlatpakProxyClient;\n \n-/* We start looking ignoring the first cr-lf\n-   since there is no previous line initially */\n-#define AUTH_END_INIT_OFFSET 2\n-#define AUTH_END_STRING \""\\r\\nBEGIN\\r\\n\""\n+#define FIND_AUTH_END_CONTINUE -1\n+#define FIND_AUTH_END_ABORT -2\n+\n+#define AUTH_LINE_SENTINEL \""\\r\\n\""\n+#define AUTH_BEGIN \""BEGIN\""\n \n typedef enum {\n   EXPECTED_REPLY_NONE,\n@@ -258,7 +259,7 @@ struct FlatpakProxyClient\n   FlatpakProxy *proxy;\n \n   gboolean      authenticated;\n-  int           auth_end_offset;\n+  GByteArray   *auth_buffer;\n \n   ProxySide     client_side;\n   ProxySide     bus_side;\n@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)\n   client->proxy->clients = g_list_remove (client->proxy->clients, client);\n   g_clear_object (&client->proxy);\n \n+  g_byte_array_free (client->auth_buffer, TRUE);\n   g_hash_table_destroy (client->rewrite_reply);\n   g_hash_table_destroy (client->get_owner_reply);\n   g_hash_table_destroy (client->unique_id_policy);\n@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)\n   init_side (client, &client->client_side);\n   init_side (client, &client->bus_side);\n \n-  client->auth_end_offset = AUTH_END_INIT_OFFSET;\n+  client->auth_buffer = g_byte_array_new ();\n   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);\n   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);\n   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);\n@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)\n     got_buffer_from_bus (client, side, buffer);\n }\n \n+#define _DBUS_ISASCII(c) ((c) != '\\0' && (((c) & ~0x7f) == 0))\n+\n+static gboolean\n+auth_line_is_valid (guint8 *line, guint8 *line_end)\n+{\n+  guint8 *p;\n+\n+  for (p = line; p < line_end; p++)\n+    {\n+      if (!_DBUS_ISASCII(*p))\n+        return FALSE;\n+\n+      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also\n+         fail if we see any control characters. Such low values will appear in  potential attacks,\n+         but will never happen in real sasl (where all binary data is hex encoded). */\n+      if (*p < ' ')\n+        return FALSE;\n+    }\n+\n+  /* For robustness we require the first char of the line to be an upper case letter.\n+     This is not technically required by the dbus spec, but all commands are upper\n+     case, and there is no provisioning for whitespace before the command, so in practice\n+     this is true, and this means we're not confused by e.g. initial whitespace. */\n+  if (line[0] < 'A' || line[0] > 'Z')\n+    return FALSE;\n+\n+  return TRUE;\n+}\n+\n+static gboolean\n+auth_line_is_begin (guint8 *line)\n+{\n+  guint8 next_char;\n+\n+  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))\n+    return FALSE;\n+\n+  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */\n+  next_char = line[strlen (AUTH_BEGIN)];\n+  return (next_char == 0 ||\n+          next_char == ' ' ||\n+          next_char == '\\t');\n+}\n+\n static gssize\n find_auth_end (FlatpakProxyClient *client, Buffer *buffer)\n {\n-  guchar *match;\n-  int i;\n+  goffset offset = 0;\n+  gsize original_size = client->auth_buffer->len;\n+\n+  /* Add the new data to the remaining data from last iteration */\n+  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);\n \n-  /* First try to match any leftover at the start */\n-  if (client->auth_end_offset > 0)\n+  while (TRUE)\n     {\n-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;\n-      gsize to_match = MIN (left, buffer->pos);\n-      /* Matched at least up to to_match */\n-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)\n+      guint8 *line_start = client->auth_buffer->data + offset;\n+      gsize remaining_data = client->auth_buffer->len - offset;\n+      guint8 *line_end;\n+\n+      line_end = memmem (line_start, remaining_data,\n+                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));\n+      if (line_end) /* Found end of line */\n         {\n-          client->auth_end_offset += to_match;\n+          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);\n \n-          /* Matched all */\n-          if (client->auth_end_offset == strlen (AUTH_END_STRING))\n-            return to_match;\n+          if (!auth_line_is_valid (line_start, line_end))\n+            return FIND_AUTH_END_ABORT;\n \n-          /* Matched to end of buffer */\n-          return -1;\n-        }\n+          *line_end = 0;\n+          if (auth_line_is_begin (line_start))\n+            return offset - original_size;\n \n-      /* Did not actually match at start */\n-      client->auth_end_offset = -1;\n-    }\n+          /* continue with next line */\n+        }\n+      else\n+        {\n+          /* No end-of-line in this buffer */\n+          g_byte_array_remove_range (client->auth_buffer, 0, offset);\n \n-  /* Look for whole match inside buffer */\n-  match = memmem (buffer, buffer->pos,\n-                  AUTH_END_STRING, strlen (AUTH_END_STRING));\n-  if (match != NULL)\n-    return match - buffer->data + strlen (AUTH_END_STRING);\n+          /* Abort if more than 16k before newline, similar to what dbus-daemon does */\n+          if (client->auth_buffer->len >= 16*1024)\n+            return FIND_AUTH_END_ABORT;\n \n-  /* Record longest prefix match at the end */\n-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)\n-    {\n-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)\n-        {\n-          client->auth_end_offset = i;\n-          break;\n+          return FIND_AUTH_END_CONTINUE;\n         }\n     }\n-\n-  return -1;\n }\n \n static gboolean\n@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)\n                       if (extra_data > 0)\n                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);\n                     }\n+                  else if (auth_end == FIND_AUTH_END_ABORT)\n+                    {\n+                      buffer_unref (buffer);\n+                      if (client->proxy->log_messages)\n+                        g_print (\""Invalid AUTH line, aborting\\n\"");\n+                      side_closed (side);\n+                      break;\n+                    }\n                 }\n \n               got_buffer_from_side (side, buffer);""}","side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+{
+  ProxySide *side = user_data;
+  FlatpakProxyClient *client = side->client;
+  GError *error = NULL;
+  Buffer *buffer;
+  gboolean retval = G_SOURCE_CONTINUE;
+
+  g_object_ref (client);
+
+  while (!side->closed)
+    {
+      if (!side->got_first_byte)
+        buffer = buffer_new (1, NULL);
+      else if (!client->authenticated)
+        buffer = buffer_new (64, NULL);
+      else
+        buffer = side->current_read_buffer;
+
+      if (!buffer_read (side, buffer, socket))
+        {
+          if (buffer != side->current_read_buffer)
+              buffer_unref (buffer);
+          break;
+        }
+
+      if (!client->authenticated)
+        {
+          if (buffer->pos > 0)
+            {
+              gboolean found_auth_end = FALSE;
+              gsize extra_data;
+
+              buffer->size = buffer->pos;
+              if (!side->got_first_byte)
+                {
+                  buffer->send_credentials = TRUE;
+                  side->got_first_byte = TRUE;
+                }
+              /* Look for end of authentication mechanism */
+              else if (side == &client->client_side)
+                {
+                  gssize auth_end = find_auth_end (client, buffer);
+
+                  if (auth_end >= 0)
+                    {
+                      found_auth_end = TRUE;
+                      buffer->size = auth_end;
+                      extra_data = buffer->pos - buffer->size;
+
+                      /* We may have gotten some extra data which is not part of
+                         the auth handshake, keep it for the next iteration. */
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
+                  else if (auth_end == FIND_AUTH_END_ABORT)
+                    {
+                      buffer_unref (buffer);
+                      if (client->proxy->log_messages)
+                        g_print (""Invalid AUTH line, aborting\n"");
+                      side_closed (side);
+                      break;
+                    }
+                 }
+ 
+               got_buffer_from_side (side, buffer);
+
+              if (found_auth_end)
+                client->authenticated = TRUE;
+            }
+          else
+            {
+              buffer_unref (buffer);
+            }
+        }
+      else if (buffer->pos == buffer->size)
+        {
+          if (buffer == &side->header_buffer)
+            {
+              gssize required;
+              required = g_dbus_message_bytes_needed (buffer->data, buffer->size, &error);
+              if (required < 0)
+                {
+                  g_warning (""Invalid message header read"");
+                  side_closed (side);
+                }
+              else
+                {
+                  side->current_read_buffer = buffer_new (required, buffer);
+                }
+            }
+          else
+            {
+              got_buffer_from_side (side, buffer);
+              side->header_buffer.pos = 0;
+              side->current_read_buffer = &side->header_buffer;
+            }
+        }
+    }
+
+  if (side->closed)
+    {
+      side->in_source = NULL;
+      retval = G_SOURCE_REMOVE;
+    }
+
+  g_object_unref (client);
+
+  return retval;
+}
+","side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+{
+  ProxySide *side = user_data;
+  FlatpakProxyClient *client = side->client;
+  GError *error = NULL;
+  Buffer *buffer;
+  gboolean retval = G_SOURCE_CONTINUE;
+
+  g_object_ref (client);
+
+  while (!side->closed)
+    {
+      if (!side->got_first_byte)
+        buffer = buffer_new (1, NULL);
+      else if (!client->authenticated)
+        buffer = buffer_new (64, NULL);
+      else
+        buffer = side->current_read_buffer;
+
+      if (!buffer_read (side, buffer, socket))
+        {
+          if (buffer != side->current_read_buffer)
+              buffer_unref (buffer);
+          break;
+        }
+
+      if (!client->authenticated)
+        {
+          if (buffer->pos > 0)
+            {
+              gboolean found_auth_end = FALSE;
+              gsize extra_data;
+
+              buffer->size = buffer->pos;
+              if (!side->got_first_byte)
+                {
+                  buffer->send_credentials = TRUE;
+                  side->got_first_byte = TRUE;
+                }
+              /* Look for end of authentication mechanism */
+              else if (side == &client->client_side)
+                {
+                  gssize auth_end = find_auth_end (client, buffer);
+
+                  if (auth_end >= 0)
+                    {
+                      found_auth_end = TRUE;
+                      buffer->size = auth_end;
+                      extra_data = buffer->pos - buffer->size;
+
+                      /* We may have gotten some extra data which is not part of
+                         the auth handshake, keep it for the next iteration. */
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
+                 }
+ 
+               got_buffer_from_side (side, buffer);
+
+              if (found_auth_end)
+                client->authenticated = TRUE;
+            }
+          else
+            {
+              buffer_unref (buffer);
+            }
+        }
+      else if (buffer->pos == buffer->size)
+        {
+          if (buffer == &side->header_buffer)
+            {
+              gssize required;
+              required = g_dbus_message_bytes_needed (buffer->data, buffer->size, &error);
+              if (required < 0)
+                {
+                  g_warning (""Invalid message header read"");
+                  side_closed (side);
+                }
+              else
+                {
+                  side->current_read_buffer = buffer_new (required, buffer);
+                }
+            }
+          else
+            {
+              got_buffer_from_side (side, buffer);
+              side->header_buffer.pos = 0;
+              side->current_read_buffer = &side->header_buffer;
+            }
+        }
+    }
+
+  if (side->closed)
+    {
+      side->in_source = NULL;
+      retval = G_SOURCE_REMOVE;
+    }
+
+  g_object_unref (client);
+
+  return retval;
+}
+",C,"                  else if (auth_end == FIND_AUTH_END_ABORT)
+                    {
+                      buffer_unref (buffer);
+                      if (client->proxy->log_messages)
+                        g_print (""Invalid AUTH line, aborting\n"");
+                      side_closed (side);
+                      break;
+                    }
+",,,"@@ -173,10 +173,11 @@
+ 
+ typedef struct FlatpakProxyClient FlatpakProxyClient;
+ 
+-/* We start looking ignoring the first cr-lf
+-   since there is no previous line initially */
+-#define AUTH_END_INIT_OFFSET 2
+-#define AUTH_END_STRING ""\r\nBEGIN\r\n""
++#define FIND_AUTH_END_CONTINUE -1
++#define FIND_AUTH_END_ABORT -2
++
++#define AUTH_LINE_SENTINEL ""\r\n""
++#define AUTH_BEGIN ""BEGIN""
+ 
+ typedef enum {
+   EXPECTED_REPLY_NONE,
+@@ -258,7 +259,7 @@ struct FlatpakProxyClient
+   FlatpakProxy *proxy;
+ 
+   gboolean      authenticated;
+-  int           auth_end_offset;
++  GByteArray   *auth_buffer;
+ 
+   ProxySide     client_side;
+   ProxySide     bus_side;
+@@ -372,6 +373,7 @@ flatpak_proxy_client_finalize (GObject *object)
+   client->proxy->clients = g_list_remove (client->proxy->clients, client);
+   g_clear_object (&client->proxy);
+ 
++  g_byte_array_free (client->auth_buffer, TRUE);
+   g_hash_table_destroy (client->rewrite_reply);
+   g_hash_table_destroy (client->get_owner_reply);
+   g_hash_table_destroy (client->unique_id_policy);
+@@ -407,7 +409,7 @@ flatpak_proxy_client_init (FlatpakProxyClient *client)
+   init_side (client, &client->client_side);
+   init_side (client, &client->bus_side);
+ 
+-  client->auth_end_offset = AUTH_END_INIT_OFFSET;
++  client->auth_buffer = g_byte_array_new ();
+   client->rewrite_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_object_unref);
+   client->get_owner_reply = g_hash_table_new_full (g_direct_hash, g_direct_equal, NULL, g_free);
+   client->unique_id_policy = g_hash_table_new_full (g_str_hash, g_str_equal, g_free, NULL);
+@@ -2315,51 +2317,92 @@ got_buffer_from_side (ProxySide *side, Buffer *buffer)
+     got_buffer_from_bus (client, side, buffer);
+ }
+ 
++#define _DBUS_ISASCII(c) ((c) != '\0' && (((c) & ~0x7f) == 0))
++
++static gboolean
++auth_line_is_valid (guint8 *line, guint8 *line_end)
++{
++  guint8 *p;
++
++  for (p = line; p < line_end; p++)
++    {
++      if (!_DBUS_ISASCII(*p))
++        return FALSE;
++
++      /* Technically, the dbus spec allows all ASCII characters, but for robustness we also
++         fail if we see any control characters. Such low values will appear in  potential attacks,
++         but will never happen in real sasl (where all binary data is hex encoded). */
++      if (*p < ' ')
++        return FALSE;
++    }
++
++  /* For robustness we require the first char of the line to be an upper case letter.
++     This is not technically required by the dbus spec, but all commands are upper
++     case, and there is no provisioning for whitespace before the command, so in practice
++     this is true, and this means we're not confused by e.g. initial whitespace. */
++  if (line[0] < 'A' || line[0] > 'Z')
++    return FALSE;
++
++  return TRUE;
++}
++
++static gboolean
++auth_line_is_begin (guint8 *line)
++{
++  guint8 next_char;
++
++  if (!g_str_has_prefix ((char *)line, AUTH_BEGIN))
++    return FALSE;
++
++  /* dbus-daemon accepts either nothing, or a whitespace followed by anything as end of auth */
++  next_char = line[strlen (AUTH_BEGIN)];
++  return (next_char == 0 ||
++          next_char == ' ' ||
++          next_char == '\t');
++}
++
+ static gssize
+ find_auth_end (FlatpakProxyClient *client, Buffer *buffer)
+ {
+-  guchar *match;
+-  int i;
++  goffset offset = 0;
++  gsize original_size = client->auth_buffer->len;
++
++  /* Add the new data to the remaining data from last iteration */
++  g_byte_array_append (client->auth_buffer, buffer->data, buffer->pos);
+ 
+-  /* First try to match any leftover at the start */
+-  if (client->auth_end_offset > 0)
++  while (TRUE)
+     {
+-      gsize left = strlen (AUTH_END_STRING) - client->auth_end_offset;
+-      gsize to_match = MIN (left, buffer->pos);
+-      /* Matched at least up to to_match */
+-      if (memcmp (buffer->data, &AUTH_END_STRING[client->auth_end_offset], to_match) == 0)
++      guint8 *line_start = client->auth_buffer->data + offset;
++      gsize remaining_data = client->auth_buffer->len - offset;
++      guint8 *line_end;
++
++      line_end = memmem (line_start, remaining_data,
++                         AUTH_LINE_SENTINEL, strlen (AUTH_LINE_SENTINEL));
++      if (line_end) /* Found end of line */
+         {
+-          client->auth_end_offset += to_match;
++          offset = (line_end + strlen (AUTH_LINE_SENTINEL) - line_start);
+ 
+-          /* Matched all */
+-          if (client->auth_end_offset == strlen (AUTH_END_STRING))
+-            return to_match;
++          if (!auth_line_is_valid (line_start, line_end))
++            return FIND_AUTH_END_ABORT;
+ 
+-          /* Matched to end of buffer */
+-          return -1;
+-        }
++          *line_end = 0;
++          if (auth_line_is_begin (line_start))
++            return offset - original_size;
+ 
+-      /* Did not actually match at start */
+-      client->auth_end_offset = -1;
+-    }
++          /* continue with next line */
++        }
++      else
++        {
++          /* No end-of-line in this buffer */
++          g_byte_array_remove_range (client->auth_buffer, 0, offset);
+ 
+-  /* Look for whole match inside buffer */
+-  match = memmem (buffer, buffer->pos,
+-                  AUTH_END_STRING, strlen (AUTH_END_STRING));
+-  if (match != NULL)
+-    return match - buffer->data + strlen (AUTH_END_STRING);
++          /* Abort if more than 16k before newline, similar to what dbus-daemon does */
++          if (client->auth_buffer->len >= 16*1024)
++            return FIND_AUTH_END_ABORT;
+ 
+-  /* Record longest prefix match at the end */
+-  for (i = MIN (strlen (AUTH_END_STRING) - 1, buffer->pos); i > 0; i--)
+-    {
+-      if (memcmp (buffer->data + buffer->pos - i, AUTH_END_STRING, i) == 0)
+-        {
+-          client->auth_end_offset = i;
+-          break;
++          return FIND_AUTH_END_CONTINUE;
+         }
+     }
+-
+-  return -1;
+ }
+ 
+ static gboolean
+@@ -2418,6 +2461,14 @@ side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
++                  else if (auth_end == FIND_AUTH_END_ABORT)
++                    {
++                      buffer_unref (buffer);
++                      if (client->proxy->log_messages)
++                        g_print (""Invalid AUTH line, aborting\n"");
++                      side_closed (side);
++                      break;
++                    }
+                 }
+ 
+               got_buffer_from_side (side, buffer);",flatpak,52346bf187b5a7f1c0fe9075b328b7ad6abe78f6,3c9d3a316ea298c25e8756ab4f256b08879aff36,1,"side_in_cb (GSocket *socket, GIOCondition condition, gpointer user_data)
+{
+  ProxySide *side = user_data;
+  FlatpakProxyClient *client = side->client;
+  GError *error = NULL;
+  Buffer *buffer;
+  gboolean retval = G_SOURCE_CONTINUE;
+
+  g_object_ref (client);
+
+  while (!side->closed)
+    {
+      if (!side->got_first_byte)
+        buffer = buffer_new (1, NULL);
+      else if (!client->authenticated)
+        buffer = buffer_new (64, NULL);
+      else
+        buffer = side->current_read_buffer;
+
+      if (!buffer_read (side, buffer, socket))
+        {
+          if (buffer != side->current_read_buffer)
+              buffer_unref (buffer);
+          break;
+        }
+
+      if (!client->authenticated)
+        {
+          if (buffer->pos > 0)
+            {
+              gboolean found_auth_end = FALSE;
+              gsize extra_data;
+
+              buffer->size = buffer->pos;
+              if (!side->got_first_byte)
+                {
+                  buffer->send_credentials = TRUE;
+                  side->got_first_byte = TRUE;
+                }
+              /* Look for end of authentication mechanism */
+              else if (side == &client->client_side)
+                {
+                  gssize auth_end = find_auth_end (client, buffer);
+
+                  if (auth_end >= 0)
+                    {
+                      found_auth_end = TRUE;
+                      buffer->size = auth_end;
+                      extra_data = buffer->pos - buffer->size;
+
+                      /* We may have gotten some extra data which is not part of
+                         the auth handshake, keep it for the next iteration. */
+                       if (extra_data > 0)
+                         side->extra_input_data = g_bytes_new (buffer->data + buffer->size, extra_data);
+                     }
+//fix_flaw_line_below:
+//                  else if (auth_end == FIND_AUTH_END_ABORT)
+//fix_flaw_line_below:
+//                    {
+//fix_flaw_line_below:
+//                      buffer_unref (buffer);
+//fix_flaw_line_below:
+//                      if (client->proxy->log_messages)
+//fix_flaw_line_below:
+//                        g_print (""Invalid AUTH line, aborting\n"");
+//fix_flaw_line_below:
+//                      side_closed (side);
+//fix_flaw_line_below:
+//                      break;
+//fix_flaw_line_below:
+//                    }
+                 }
+ 
+               got_buffer_from_side (side, buffer);
+
+              if (found_auth_end)
+                client->authenticated = TRUE;
+            }
+          else
+            {
+              buffer_unref (buffer);
+            }
+        }
+      else if (buffer->pos == buffer->size)
+        {
+          if (buffer == &side->header_buffer)
+            {
+              gssize required;
+              required = g_dbus_message_bytes_needed (buffer->data, buffer->size, &error);
+              if (required < 0)
+                {
+                  g_warning (""Invalid message header read"");
+                  side_closed (side);
+                }
+              else
+                {
+                  side->current_read_buffer = buffer_new (required, buffer);
+                }
+            }
+          else
+            {
+              got_buffer_from_side (side, buffer);
+              side->header_buffer.pos = 0;
+              side->current_read_buffer = &side->header_buffer;
+            }
+        }
+    }
+
+  if (side->closed)
+    {
+      side->in_source = NULL;
+      retval = G_SOURCE_REMOVE;
+    }
+
+  g_object_unref (client);
+
+  return retval;
+}
+"

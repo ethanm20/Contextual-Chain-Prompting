@@ -1,0 +1,918 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2516,"[""CWE-190""]",linux-2.6,db048b69037e7fa6a7d9e95a1271a50dc08ae233,db048b69037e7fa6a7d9e95a1271a50dc08ae233,0,492503,1.554730771781138e+38,45.0,"ethtool: Fix potential kernel buffer overflow in ETHTOOL_GRXCLSRLALL
+
+On a 32-bit machine, info.rule_cnt >= 0x40000000 leads to integer
+overflow and the buffer may be smaller than needed.  Since
+ETHTOOL_GRXCLSRLALL is unprivileged, this can presumably be used for at
+least denial of service.
+
+Signed-off-by: Ben Hutchings <bhutchings@solarflare.com>
+Cc: stable@kernel.org
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static noinline_for_stack int ethtool_get_rxnfc(struct net_device *dev,
+						void __user *useraddr)
+{
+	struct ethtool_rxnfc info;
+	const struct ethtool_ops *ops = dev->ethtool_ops;
+	int ret;
+	void *rule_buf = NULL;
+
+	if (!ops->get_rxnfc)
+		return -EOPNOTSUPP;
+
+	if (copy_from_user(&info, useraddr, sizeof(info)))
+		return -EFAULT;
+
+	if (info.cmd == ETHTOOL_GRXCLSRLALL) {
+		if (info.rule_cnt > 0) {
+			rule_buf = kmalloc(info.rule_cnt * sizeof(u32),
+					   GFP_USER);
+			if (!rule_buf)
+				return -ENOMEM;
+		}
+	}
+
+	ret = ops->get_rxnfc(dev, &info, rule_buf);
+	if (ret < 0)
+		goto err_out;
+
+	ret = -EFAULT;
+	if (copy_to_user(useraddr, &info, sizeof(info)))
+		goto err_out;
+
+	if (rule_buf) {
+		useraddr += offsetof(struct ethtool_rxnfc, rule_locs);
+		if (copy_to_user(useraddr, rule_buf,
+				 info.rule_cnt * sizeof(u32)))
+			goto err_out;
+	}
+	ret = 0;
+
+err_out:
+	kfree(rule_buf);
+
+	return ret;
+}","static noinline_for_stack int ethtool_get_rxnfc(struct net_device *dev,
+						void __user *useraddr)
+{
+	struct ethtool_rxnfc info;
+	const struct ethtool_ops *ops = dev->ethtool_ops;
+	int ret;
+	void *rule_buf = NULL;
+
+	if (!ops->get_rxnfc)
+		return -EOPNOTSUPP;
+
+	if (copy_from_user(&info, useraddr, sizeof(info)))
+		return -EFAULT;
+
+	if (info.cmd == ETHTOOL_GRXCLSRLALL) {
+		if (info.rule_cnt > 0) {
+			if (info.rule_cnt <= KMALLOC_MAX_SIZE / sizeof(u32))
+				rule_buf = kmalloc(info.rule_cnt * sizeof(u32),
+						   GFP_USER);
+			if (!rule_buf)
+				return -ENOMEM;
+		}
+	}
+
+	ret = ops->get_rxnfc(dev, &info, rule_buf);
+	if (ret < 0)
+		goto err_out;
+
+	ret = -EFAULT;
+	if (copy_to_user(useraddr, &info, sizeof(info)))
+		goto err_out;
+
+	if (rule_buf) {
+		useraddr += offsetof(struct ethtool_rxnfc, rule_locs);
+		if (copy_to_user(useraddr, rule_buf,
+				 info.rule_cnt * sizeof(u32)))
+			goto err_out;
+	}
+	ret = 0;
+
+err_out:
+	kfree(rule_buf);
+
+	return ret;
+}",
+2518,"[""CWE-190""]",linux-2.6,75e1c70fc31490ef8a373ea2a4bea2524099b478,75e1c70fc31490ef8a373ea2a4bea2524099b478,0,492820,1.320426583218512e+37,50.0,"aio: check for multiplication overflow in do_io_submit
+
+Tavis Ormandy pointed out that do_io_submit does not do proper bounds
+checking on the passed-in iocb array:
+
+       if (unlikely(nr < 0))
+               return -EINVAL;
+
+       if (unlikely(!access_ok(VERIFY_READ, iocbpp, (nr*sizeof(iocbpp)))))
+               return -EFAULT;                      ^^^^^^^^^^^^^^^^^^
+
+The attached patch checks for overflow, and if it is detected, the
+number of iocbs submitted is scaled down to a number that will fit in
+the long.  This is an ok thing to do, as sys_io_submit is documented as
+returning the number of iocbs submitted, so callers should handle a
+return value of less than the 'nr' argument passed in.
+
+Reported-by: Tavis Ormandy <taviso@cmpxchg8b.com>
+Signed-off-by: Jeff Moyer <jmoyer@redhat.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"long do_io_submit(aio_context_t ctx_id, long nr,
+		  struct iocb __user *__user *iocbpp, bool compat)
+{
+	struct kioctx *ctx;
+	long ret = 0;
+	int i;
+	struct hlist_head batch_hash[AIO_BATCH_HASH_SIZE] = { { 0, }, };
+
+	if (unlikely(nr < 0))
+		return -EINVAL;
+
+	if (unlikely(!access_ok(VERIFY_READ, iocbpp, (nr*sizeof(*iocbpp)))))
+		return -EFAULT;
+
+	ctx = lookup_ioctx(ctx_id);
+	if (unlikely(!ctx)) {
+		pr_debug(""EINVAL: io_submit: invalid context id\n"");
+		return -EINVAL;
+	}
+
+	/*
+	 * AKPM: should this return a partial result if some of the IOs were
+	 * successfully submitted?
+	 */
+	for (i=0; i<nr; i++) {
+		struct iocb __user *user_iocb;
+		struct iocb tmp;
+
+		if (unlikely(__get_user(user_iocb, iocbpp + i))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		if (unlikely(copy_from_user(&tmp, user_iocb, sizeof(tmp)))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		ret = io_submit_one(ctx, user_iocb, &tmp, batch_hash, compat);
+		if (ret)
+			break;
+	}
+	aio_batch_free(batch_hash);
+
+	put_ioctx(ctx);
+	return i ? i : ret;
+}","long do_io_submit(aio_context_t ctx_id, long nr,
+		  struct iocb __user *__user *iocbpp, bool compat)
+{
+	struct kioctx *ctx;
+	long ret = 0;
+	int i;
+	struct hlist_head batch_hash[AIO_BATCH_HASH_SIZE] = { { 0, }, };
+
+	if (unlikely(nr < 0))
+		return -EINVAL;
+
+	if (unlikely(nr > LONG_MAX/sizeof(*iocbpp)))
+		nr = LONG_MAX/sizeof(*iocbpp);
+
+	if (unlikely(!access_ok(VERIFY_READ, iocbpp, (nr*sizeof(*iocbpp)))))
+		return -EFAULT;
+
+	ctx = lookup_ioctx(ctx_id);
+	if (unlikely(!ctx)) {
+		pr_debug(""EINVAL: io_submit: invalid context id\n"");
+		return -EINVAL;
+	}
+
+	/*
+	 * AKPM: should this return a partial result if some of the IOs were
+	 * successfully submitted?
+	 */
+	for (i=0; i<nr; i++) {
+		struct iocb __user *user_iocb;
+		struct iocb tmp;
+
+		if (unlikely(__get_user(user_iocb, iocbpp + i))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		if (unlikely(copy_from_user(&tmp, user_iocb, sizeof(tmp)))) {
+			ret = -EFAULT;
+			break;
+		}
+
+		ret = io_submit_one(ctx, user_iocb, &tmp, batch_hash, compat);
+		if (ret)
+			break;
+	}
+	aio_batch_free(batch_hash);
+
+	put_ioctx(ctx);
+	return i ? i : ret;
+}",
+2528,"[""CWE-190""]",linux-2.6,194b3da873fd334ef183806db751473512af29ce,194b3da873fd334ef183806db751473512af29ce,0,493459,1.2862808982239147e+38,80.0,"agp: fix arbitrary kernel memory writes
+
+pg_start is copied from userspace on AGPIOC_BIND and AGPIOC_UNBIND ioctl
+cmds of agp_ioctl() and passed to agpioc_bind_wrap().  As said in the
+comment, (pg_start + mem->page_count) may wrap in case of AGPIOC_BIND,
+and it is not checked at all in case of AGPIOC_UNBIND.  As a result, user
+with sufficient privileges (usually ""video"" group) may generate either
+local DoS or privilege escalation.
+
+Signed-off-by: Vasiliy Kulikov <segoon@openwall.com>
+Signed-off-by: Dave Airlie <airlied@redhat.com>",other,"int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
+{
+	int num_entries;
+	size_t i;
+	off_t j;
+	void *temp;
+	struct agp_bridge_data *bridge;
+	int mask_type;
+
+	bridge = mem->bridge;
+	if (!bridge)
+		return -EINVAL;
+
+	if (mem->page_count == 0)
+		return 0;
+
+	temp = bridge->current_size;
+
+	switch (bridge->driver->size_type) {
+	case U8_APER_SIZE:
+		num_entries = A_SIZE_8(temp)->num_entries;
+		break;
+	case U16_APER_SIZE:
+		num_entries = A_SIZE_16(temp)->num_entries;
+		break;
+	case U32_APER_SIZE:
+		num_entries = A_SIZE_32(temp)->num_entries;
+		break;
+	case FIXED_APER_SIZE:
+		num_entries = A_SIZE_FIX(temp)->num_entries;
+		break;
+	case LVL2_APER_SIZE:
+		/* The generic routines can't deal with 2 level gatt's */
+		return -EINVAL;
+		break;
+	default:
+		num_entries = 0;
+		break;
+	}
+
+	num_entries -= agp_memory_reserved/PAGE_SIZE;
+	if (num_entries < 0) num_entries = 0;
+
+	if (type != mem->type)
+		return -EINVAL;
+
+	mask_type = bridge->driver->agp_type_to_mask_type(bridge, type);
+	if (mask_type != 0) {
+		/* The generic routines know nothing of memory types */
+		return -EINVAL;
+	}
+
+	/* AK: could wrap */
+	if ((pg_start + mem->page_count) > num_entries)
+		return -EINVAL;
+
+	j = pg_start;
+
+	while (j < (pg_start + mem->page_count)) {
+		if (!PGE_EMPTY(bridge, readl(bridge->gatt_table+j)))
+			return -EBUSY;
+		j++;
+	}
+
+	if (!mem->is_flushed) {
+		bridge->driver->cache_flush();
+		mem->is_flushed = true;
+	}
+
+	for (i = 0, j = pg_start; i < mem->page_count; i++, j++) {
+		writel(bridge->driver->mask_memory(bridge,
+						   page_to_phys(mem->pages[i]),
+						   mask_type),
+		       bridge->gatt_table+j);
+	}
+	readl(bridge->gatt_table+j-1);	/* PCI Posting. */
+
+	bridge->driver->tlb_flush(mem);
+	return 0;
+}","int agp_generic_insert_memory(struct agp_memory * mem, off_t pg_start, int type)
+{
+	int num_entries;
+	size_t i;
+	off_t j;
+	void *temp;
+	struct agp_bridge_data *bridge;
+	int mask_type;
+
+	bridge = mem->bridge;
+	if (!bridge)
+		return -EINVAL;
+
+	if (mem->page_count == 0)
+		return 0;
+
+	temp = bridge->current_size;
+
+	switch (bridge->driver->size_type) {
+	case U8_APER_SIZE:
+		num_entries = A_SIZE_8(temp)->num_entries;
+		break;
+	case U16_APER_SIZE:
+		num_entries = A_SIZE_16(temp)->num_entries;
+		break;
+	case U32_APER_SIZE:
+		num_entries = A_SIZE_32(temp)->num_entries;
+		break;
+	case FIXED_APER_SIZE:
+		num_entries = A_SIZE_FIX(temp)->num_entries;
+		break;
+	case LVL2_APER_SIZE:
+		/* The generic routines can't deal with 2 level gatt's */
+		return -EINVAL;
+		break;
+	default:
+		num_entries = 0;
+		break;
+	}
+
+	num_entries -= agp_memory_reserved/PAGE_SIZE;
+	if (num_entries < 0) num_entries = 0;
+
+	if (type != mem->type)
+		return -EINVAL;
+
+	mask_type = bridge->driver->agp_type_to_mask_type(bridge, type);
+	if (mask_type != 0) {
+		/* The generic routines know nothing of memory types */
+		return -EINVAL;
+	}
+
+	if (((pg_start + mem->page_count) > num_entries) ||
+	    ((pg_start + mem->page_count) < pg_start))
+		return -EINVAL;
+
+	j = pg_start;
+
+	while (j < (pg_start + mem->page_count)) {
+		if (!PGE_EMPTY(bridge, readl(bridge->gatt_table+j)))
+			return -EBUSY;
+		j++;
+	}
+
+	if (!mem->is_flushed) {
+		bridge->driver->cache_flush();
+		mem->is_flushed = true;
+	}
+
+	for (i = 0, j = pg_start; i < mem->page_count; i++, j++) {
+		writel(bridge->driver->mask_memory(bridge,
+						   page_to_phys(mem->pages[i]),
+						   mask_type),
+		       bridge->gatt_table+j);
+	}
+	readl(bridge->gatt_table+j-1);	/* PCI Posting. */
+
+	bridge->driver->tlb_flush(mem);
+	return 0;
+}",
+2552,"[""CWE-190""]",icoutils,4fbe9222fd79ee31b7ec031b0be070a9a400d1d3,4fbe9222fd79ee31b7ec031b0be070a9a400d1d3,0,498399,2.6937210134931975e+38,17.0,wrestool: Make check_offset more stringent,other,"check_offset(char *memory, int total_size, char *name, void *offset, int size)
+{
+	ptrdiff_t need_size = (char *) offset - memory + size;
+
+	/*debug(""check_offset: size=%x vs %x offset=%x size=%x\n"",
+		need_size, total_size, (char *) offset - memory, size);*/
+
+	if (need_size < 0 || need_size > total_size) {
+		warn(_(""%s: premature end""), name);
+		return false;
+	}
+
+	return true;
+}","check_offset(char *memory, int total_size, char *name, void *offset, int size)
+{
+	char* memory_end = memory + total_size;
+	char* block = (char*)offset;
+	char* block_end = offset + size;
+
+	/*debug(""check_offset: size=%x vs %x offset=%x size=%x\n"",
+		need_size, total_size, (char *) offset - memory, size);*/
+
+	if (((memory <= memory_end) && (block <= block_end))
+		&& ((block < memory) || (block >= memory_end) || (block_end > memory_end))) {
+		warn(_(""%s: premature end""), name);
+		return false;
+	}
+
+	return true;
+}",
+2553,"[""CWE-190""]",icoutils,1a108713ac26215c7568353f6e02e727e6d4b24a,1a108713ac26215c7568353f6e02e727e6d4b24a,0,498401,4.038604825060238e+37,133.0,"wrestool: Fix an index, additional check",other,"extract_group_icon_cursor_resource(WinLibrary *fi, WinResource *wr, char *lang,
+                                   int *ressize, bool is_icon)
+{
+	Win32CursorIconDir *icondir;
+	Win32CursorIconFileDir *fileicondir;
+	char *memory;
+	int c, size, offset, skipped;
+
+	/* get resource data and size */
+	icondir = (Win32CursorIconDir *) get_resource_entry(fi, wr, &size);
+	if (icondir == NULL) {
+		/* get_resource_entry will print error */
+		return NULL;
+	}
+
+	/* calculate total size of output file */
+	RETURN_IF_BAD_POINTER(NULL, icondir->count);
+	skipped = 0;
+	for (c = 0 ; c < icondir->count ; c++) {
+		int level;
+	    	int iconsize;
+		char name[14];
+		WinResource *fwr;
+
+		RETURN_IF_BAD_POINTER(NULL, icondir->entries[c]);
+		/*printf(""%d. bytes_in_res=%d width=%d height=%d planes=%d bit_count=%d\n"", c,
+			icondir->entries[c].bytes_in_res,
+			(is_icon ? icondir->entries[c].res_info.icon.width : icondir->entries[c].res_info.cursor.width),
+			(is_icon ? icondir->entries[c].res_info.icon.height : icondir->entries[c].res_info.cursor.height),
+			icondir->entries[c].plane_count,
+			icondir->entries[c].bit_count);*/
+
+		/* find the corresponding icon resource */
+		snprintf(name, sizeof(name)/sizeof(char), ""-%d"", icondir->entries[c].res_id);
+		fwr = find_resource(fi, (is_icon ? ""-3"" : ""-1""), name, lang, &level);
+		if (fwr == NULL) {
+			warn(_(""%s: could not find `%s' in `%s' resource.""),
+			 	fi->name, &name[1], (is_icon ? ""group_icon"" : ""group_cursor""));
+			return NULL;
+		}
+
+		if (get_resource_entry(fi, fwr, &iconsize) != NULL) {
+		    if (iconsize == 0) {
+			warn(_(""%s: icon resource `%s' is empty, skipping""), fi->name, name);
+			skipped++;
+			continue;
+		    }
+		    if (iconsize != icondir->entries[c].bytes_in_res) {
+			warn(_(""%s: mismatch of size in icon resource `%s' and group (%d vs %d)""), fi->name, name, iconsize, icondir->entries[c].bytes_in_res);
+		    }
+		    size += iconsize < icondir->entries[c].bytes_in_res ? icondir->entries[c].bytes_in_res : iconsize;
+
+		    /* cursor resources have two additional WORDs that contain
+		     * hotspot info */
+		    if (!is_icon)
+			size -= sizeof(uint16_t)*2;
+		}
+	}
+	offset = sizeof(Win32CursorIconFileDir) + (icondir->count-skipped) * sizeof(Win32CursorIconFileDirEntry);
+	size += offset;
+	*ressize = size;
+
+	/* allocate that much memory */
+	memory = xmalloc(size);
+	fileicondir = (Win32CursorIconFileDir *) memory;
+
+	/* transfer Win32CursorIconDir structure members */
+	fileicondir->reserved = icondir->reserved;
+	fileicondir->type = icondir->type;
+	fileicondir->count = icondir->count - skipped;
+
+	/* transfer each cursor/icon: Win32CursorIconDirEntry and data */
+	skipped = 0;
+	for (c = 0 ; c < icondir->count ; c++) {
+		int level;
+		char name[14];
+		WinResource *fwr;
+		char *data;
+	
+		/* find the corresponding icon resource */
+		snprintf(name, sizeof(name)/sizeof(char), ""-%d"", icondir->entries[c].res_id);
+		fwr = find_resource(fi, (is_icon ? ""-3"" : ""-1""), name, lang, &level);
+		if (fwr == NULL) {
+			warn(_(""%s: could not find `%s' in `%s' resource.""),
+			 	fi->name, &name[1], (is_icon ? ""group_icon"" : ""group_cursor""));
+			return NULL;
+		}
+
+		/* get data and size of that resource */
+		data = get_resource_entry(fi, fwr, &size);
+		if (data == NULL) {
+			/* get_resource_entry has printed error */
+			return NULL;
+		}
+    	    	if (size == 0) {
+		    skipped++;
+		    continue;
+		}
+
+		/* copy ICONDIRENTRY (not including last dwImageOffset) */
+		memcpy(&fileicondir->entries[c-skipped], &icondir->entries[c],
+			sizeof(Win32CursorIconFileDirEntry)-sizeof(uint32_t));
+
+		/* special treatment for cursors */
+		if (!is_icon) {
+			fileicondir->entries[c-skipped].width = icondir->entries[c].res_info.cursor.width;
+			fileicondir->entries[c-skipped].height = icondir->entries[c].res_info.cursor.height / 2;
+			fileicondir->entries[c-skipped].color_count = 0;
+			fileicondir->entries[c-skipped].reserved = 0;
+		}
+
+		/* set image offset and increase it */
+		fileicondir->entries[c-skipped].dib_offset = offset;
+
+		/* transfer resource into file memory */
+		if (size > icondir->entries[c].bytes_in_res)
+			size = icondir->entries[c].bytes_in_res;
+		if (is_icon) {
+			memcpy(&memory[offset], data, size);
+		} else {
+			fileicondir->entries[c-skipped].hotspot_x = ((uint16_t *) data)[0];
+			fileicondir->entries[c-skipped].hotspot_y = ((uint16_t *) data)[1];
+			memcpy(&memory[offset], data+sizeof(uint16_t)*2,
+				   size-sizeof(uint16_t)*2);
+			offset -= sizeof(uint16_t)*2;
+		}
+
+		/* increase the offset pointer */
+		offset += icondir->entries[c].bytes_in_res;
+	}
+
+	return (void *) memory;
+}","extract_group_icon_cursor_resource(WinLibrary *fi, WinResource *wr, char *lang,
+                                   int *ressize, bool is_icon)
+{
+	Win32CursorIconDir *icondir;
+	Win32CursorIconFileDir *fileicondir;
+	char *memory;
+	int c, size, offset, skipped;
+
+	/* get resource data and size */
+	icondir = (Win32CursorIconDir *) get_resource_entry(fi, wr, &size);
+	if (icondir == NULL) {
+		/* get_resource_entry will print error */
+		return NULL;
+	}
+
+	/* calculate total size of output file */
+	RETURN_IF_BAD_POINTER(NULL, icondir->count);
+	skipped = 0;
+	for (c = 0 ; c < icondir->count ; c++) {
+		int level;
+	    	int iconsize;
+		char name[14];
+		WinResource *fwr;
+
+		RETURN_IF_BAD_POINTER(NULL, icondir->entries[c]);
+		/*printf(""%d. bytes_in_res=%d width=%d height=%d planes=%d bit_count=%d\n"", c,
+			icondir->entries[c].bytes_in_res,
+			(is_icon ? icondir->entries[c].res_info.icon.width : icondir->entries[c].res_info.cursor.width),
+			(is_icon ? icondir->entries[c].res_info.icon.height : icondir->entries[c].res_info.cursor.height),
+			icondir->entries[c].plane_count,
+			icondir->entries[c].bit_count);*/
+
+		/* find the corresponding icon resource */
+		snprintf(name, sizeof(name)/sizeof(char), ""-%d"", icondir->entries[c].res_id);
+		fwr = find_resource(fi, (is_icon ? ""-3"" : ""-1""), name, lang, &level);
+		if (fwr == NULL) {
+			warn(_(""%s: could not find `%s' in `%s' resource.""),
+			 	fi->name, &name[1], (is_icon ? ""group_icon"" : ""group_cursor""));
+			return NULL;
+		}
+
+		if (get_resource_entry(fi, fwr, &iconsize) != NULL) {
+		    if (iconsize == 0) {
+			warn(_(""%s: icon resource `%s' is empty, skipping""), fi->name, name);
+			skipped++;
+			continue;
+		    }
+		    if (iconsize != icondir->entries[c].bytes_in_res) {
+			warn(_(""%s: mismatch of size in icon resource `%s' and group (%d vs %d)""), fi->name, name, iconsize, icondir->entries[c].bytes_in_res);
+		    }
+		    size += iconsize < icondir->entries[c].bytes_in_res ? icondir->entries[c].bytes_in_res : iconsize;
+
+		    /* cursor resources have two additional WORDs that contain
+		     * hotspot info */
+		    if (!is_icon)
+			size -= sizeof(uint16_t)*2;
+		}
+	}
+	offset = sizeof(Win32CursorIconFileDir) + (icondir->count-skipped) * sizeof(Win32CursorIconFileDirEntry);
+	size += offset;
+	*ressize = size;
+
+	/* allocate that much memory */
+	memory = xmalloc(size);
+	fileicondir = (Win32CursorIconFileDir *) memory;
+
+	/* transfer Win32CursorIconDir structure members */
+	fileicondir->reserved = icondir->reserved;
+	fileicondir->type = icondir->type;
+	fileicondir->count = icondir->count - skipped;
+
+	/* transfer each cursor/icon: Win32CursorIconDirEntry and data */
+	skipped = 0;
+	for (c = 0 ; c < icondir->count ; c++) {
+		int level;
+		char name[14];
+		WinResource *fwr;
+		char *data;
+	
+		/* find the corresponding icon resource */
+		snprintf(name, sizeof(name)/sizeof(char), ""-%d"", icondir->entries[c].res_id);
+		fwr = find_resource(fi, (is_icon ? ""-3"" : ""-1""), name, lang, &level);
+		if (fwr == NULL) {
+			warn(_(""%s: could not find `%s' in `%s' resource.""),
+			 	fi->name, &name[1], (is_icon ? ""group_icon"" : ""group_cursor""));
+			return NULL;
+		}
+
+		/* get data and size of that resource */
+		data = get_resource_entry(fi, fwr, &size);
+		if (data == NULL) {
+			/* get_resource_entry has printed error */
+			return NULL;
+		}
+    	    	if (size == 0) {
+		    skipped++;
+		    continue;
+		}
+
+		/* copy ICONDIRENTRY (not including last dwImageOffset) */
+		memcpy(&fileicondir->entries[c-skipped], &icondir->entries[c],
+			sizeof(Win32CursorIconFileDirEntry)-sizeof(uint32_t));
+
+		/* special treatment for cursors */
+		if (!is_icon) {
+			fileicondir->entries[c-skipped].width = icondir->entries[c].res_info.cursor.width;
+			fileicondir->entries[c-skipped].height = icondir->entries[c].res_info.cursor.height / 2;
+			fileicondir->entries[c-skipped].color_count = 0;
+			fileicondir->entries[c-skipped].reserved = 0;
+		}
+
+		/* set image offset and increase it */
+		fileicondir->entries[c-skipped].dib_offset = offset;
+
+		/* transfer resource into file memory */
+		if (size > icondir->entries[c-skipped].bytes_in_res)
+			size = icondir->entries[c-skipped].bytes_in_res;
+		if (is_icon) {
+			memcpy(&memory[offset], data, size);
+		} else if (size >= sizeof(uint16_t)*2) {
+			fileicondir->entries[c-skipped].hotspot_x = ((uint16_t *) data)[0];
+			fileicondir->entries[c-skipped].hotspot_y = ((uint16_t *) data)[1];
+			memcpy(&memory[offset], data+sizeof(uint16_t)*2,
+				   size-sizeof(uint16_t)*2);
+			offset -= sizeof(uint16_t)*2;
+		}
+
+		/* increase the offset pointer */
+		offset += icondir->entries[c].bytes_in_res;
+	}
+
+	return (void *) memory;
+}",
+2656,"[""CWE-190""]",openssl,6a51b9e1d0cf0bf8515f7201b68fb0a3482b3dc1,6a51b9e1d0cf0bf8515f7201b68fb0a3482b3dc1,0,507234,1.1959005201803886e+37,93.0,"Don't overflow the output length in EVP_CipherUpdate calls
+
+CVE-2021-23840
+
+Reviewed-by: Paul Dale <pauli@openssl.org>",other,"int EVP_DecryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl,
+                      const unsigned char *in, int inl)
+{
+    int fix_len, cmpl = inl;
+    unsigned int b;
+
+    /* Prevent accidental use of encryption context when decrypting */
+    if (ctx->encrypt) {
+        EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_INVALID_OPERATION);
+        return 0;
+    }
+
+    b = ctx->cipher->block_size;
+
+    if (EVP_CIPHER_CTX_test_flags(ctx, EVP_CIPH_FLAG_LENGTH_BITS))
+        cmpl = (cmpl + 7) / 8;
+
+    /*
+     * CCM mode needs to know about the case where inl == 0 - it means the
+     * plaintext/ciphertext length is 0
+     */
+    if (inl < 0
+            || (inl == 0
+                && EVP_CIPHER_mode(ctx->cipher) != EVP_CIPH_CCM_MODE)) {
+        *outl = 0;
+        return inl == 0;
+    }
+
+    if (ctx->cipher->flags & EVP_CIPH_FLAG_CUSTOM_CIPHER) {
+        if (b == 1 && is_partially_overlapping(out, in, cmpl)) {
+            EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_PARTIALLY_OVERLAPPING);
+            return 0;
+        }
+
+        fix_len = ctx->cipher->do_cipher(ctx, out, in, inl);
+        if (fix_len < 0) {
+            *outl = 0;
+            return 0;
+        } else
+            *outl = fix_len;
+        return 1;
+    }
+
+    if (ctx->flags & EVP_CIPH_NO_PADDING)
+        return evp_EncryptDecryptUpdate(ctx, out, outl, in, inl);
+
+    OPENSSL_assert(b <= sizeof(ctx->final));
+
+    if (ctx->final_used) {
+        /* see comment about PTRDIFF_T comparison above */
+        if (((PTRDIFF_T)out == (PTRDIFF_T)in)
+            || is_partially_overlapping(out, in, b)) {
+            EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_PARTIALLY_OVERLAPPING);
+            return 0;
+        }
+        memcpy(out, ctx->final, b);
+        out += b;
+        fix_len = 1;
+    } else
+        fix_len = 0;
+
+    if (!evp_EncryptDecryptUpdate(ctx, out, outl, in, inl))
+        return 0;
+
+    /*
+     * if we have 'decrypted' a multiple of block size, make sure we have a
+     * copy of this last block
+     */
+    if (b > 1 && !ctx->buf_len) {
+        *outl -= b;
+        ctx->final_used = 1;
+        memcpy(ctx->final, &out[*outl], b);
+    } else
+        ctx->final_used = 0;
+
+    if (fix_len)
+        *outl += b;
+
+    return 1;
+}","int EVP_DecryptUpdate(EVP_CIPHER_CTX *ctx, unsigned char *out, int *outl,
+                      const unsigned char *in, int inl)
+{
+    int fix_len, cmpl = inl;
+    unsigned int b;
+
+    /* Prevent accidental use of encryption context when decrypting */
+    if (ctx->encrypt) {
+        EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_INVALID_OPERATION);
+        return 0;
+    }
+
+    b = ctx->cipher->block_size;
+
+    if (EVP_CIPHER_CTX_test_flags(ctx, EVP_CIPH_FLAG_LENGTH_BITS))
+        cmpl = (cmpl + 7) / 8;
+
+    /*
+     * CCM mode needs to know about the case where inl == 0 - it means the
+     * plaintext/ciphertext length is 0
+     */
+    if (inl < 0
+            || (inl == 0
+                && EVP_CIPHER_mode(ctx->cipher) != EVP_CIPH_CCM_MODE)) {
+        *outl = 0;
+        return inl == 0;
+    }
+
+    if (ctx->cipher->flags & EVP_CIPH_FLAG_CUSTOM_CIPHER) {
+        if (b == 1 && is_partially_overlapping(out, in, cmpl)) {
+            EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_PARTIALLY_OVERLAPPING);
+            return 0;
+        }
+
+        fix_len = ctx->cipher->do_cipher(ctx, out, in, inl);
+        if (fix_len < 0) {
+            *outl = 0;
+            return 0;
+        } else
+            *outl = fix_len;
+        return 1;
+    }
+
+    if (ctx->flags & EVP_CIPH_NO_PADDING)
+        return evp_EncryptDecryptUpdate(ctx, out, outl, in, inl);
+
+    OPENSSL_assert(b <= sizeof(ctx->final));
+
+    if (ctx->final_used) {
+        /* see comment about PTRDIFF_T comparison above */
+        if (((PTRDIFF_T)out == (PTRDIFF_T)in)
+            || is_partially_overlapping(out, in, b)) {
+            EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_PARTIALLY_OVERLAPPING);
+            return 0;
+        }
+        /*
+         * final_used is only ever set if buf_len is 0. Therefore the maximum
+         * length output we will ever see from evp_EncryptDecryptUpdate is
+         * the maximum multiple of the block length that is <= inl, or just:
+         * inl & ~(b - 1)
+         * Since final_used has been set then the final output length is:
+         * (inl & ~(b - 1)) + b
+         * This must never exceed INT_MAX
+         */
+        if ((inl & ~(b - 1)) > INT_MAX - b) {
+            EVPerr(EVP_F_EVP_DECRYPTUPDATE, EVP_R_OUTPUT_WOULD_OVERFLOW);
+            return 0;
+        }
+        memcpy(out, ctx->final, b);
+        out += b;
+        fix_len = 1;
+    } else
+        fix_len = 0;
+
+    if (!evp_EncryptDecryptUpdate(ctx, out, outl, in, inl))
+        return 0;
+
+    /*
+     * if we have 'decrypted' a multiple of block size, make sure we have a
+     * copy of this last block
+     */
+    if (b > 1 && !ctx->buf_len) {
+        *outl -= b;
+        ctx->final_used = 1;
+        memcpy(ctx->final, &out[*outl], b);
+    } else
+        ctx->final_used = 0;
+
+    if (fix_len)
+        *outl += b;
+
+    return 1;
+}",
+3234,"[""CWE-190""]",cpio,dd96882877721703e19272fe25034560b794061b,dd96882877721703e19272fe25034560b794061b,0,499640,3.8898591507161365e+37,21.0,"Rewrite dynamic string support.
+
+* src/dstring.c (ds_init): Take a single argument.
+(ds_free): New function.
+(ds_resize): Take a single argument.  Use x2nrealloc to expand
+the storage.
+(ds_reset,ds_append,ds_concat,ds_endswith): New function.
+(ds_fgetstr): Rewrite.  In particular, this fixes integer overflow.
+* src/dstring.h (dynamic_string): Keep both the allocated length
+(ds_size) and index of the next free byte in the string (ds_idx).
+(ds_init,ds_resize): Change signature.
+(ds_len): New macro.
+(ds_free,ds_reset,ds_append,ds_concat,ds_endswith): New protos.
+* src/copyin.c: Use new ds_ functions.
+* src/copyout.c: Likewise.
+* src/copypass.c: Likewise.
+* src/util.c: Likewise.",other,"ds_fgetstr (FILE *f, dynamic_string *s, char eos)
+{
+  int insize;			/* Amount needed for line.  */
+  int strsize;			/* Amount allocated for S.  */
+  int next_ch;
+
+  /* Initialize.  */
+  insize = 0;
+  strsize = s->ds_length;
+
+  /* Read the input string.  */
+  next_ch = getc (f);
+  while (next_ch != eos && next_ch != EOF)
+    {
+      if (insize >= strsize - 1)
+	{
+	  ds_resize (s, strsize * 2 + 2);
+	  strsize = s->ds_length;
+	}
+      s->ds_string[insize++] = next_ch;
+      next_ch = getc (f);
+    }
+  s->ds_string[insize++] = '\0';
+
+  if (insize == 1 && next_ch == EOF)
+    return NULL;
+  else
+    return s->ds_string;
+}","ds_fgetstr (FILE *f, dynamic_string *s, char eos)
+{
+  int next_ch;
+
+  /* Initialize.  */
+  s->ds_idx = 0;
+
+  /* Read the input string.  */
+  while ((next_ch = getc (f)) != eos && next_ch != EOF)
+    {
+      ds_resize (s);
+      s->ds_string[s->ds_idx++] = next_ch;
+    }
+  ds_resize (s);
+  s->ds_string[s->ds_idx] = '\0';
+
+  if (s->ds_idx == 0 && next_ch == EOF)
+    return NULL;
+  else
+    return s->ds_string;
+}",

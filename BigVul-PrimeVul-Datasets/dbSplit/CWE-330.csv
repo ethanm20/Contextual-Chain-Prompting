@@ -1,0 +1,397 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+578,178314,,Remote,Not required,,CVE-2019-1549,https://www.cvedetails.com/cve/CVE-2019-1549/,CWE-330,Low,Partial,,,2019-09-10,5.0,OpenSSL 1.1.1 introduced a rewritten random number generator (RNG). This was intended to include protection in the event of a fork() system call in order to ensure that the parent and child processes did not share the same RNG state. However this protection was not being used in the default case. A partial mitigation for this issue is that the output from a high precision timer is mixed into the RNG state so the likelihood of a parent and child process sharing state is significantly reduced. If an application already calls OPENSSL_init_crypto() explicitly using OPENSSL_INIT_ATFORK then this problem does not occur at all. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c).,2019-09-19,,0,https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,,1,,," void OPENSSL_fork_child(void)
+ {
+ }
+"," void OPENSSL_fork_child(void)
+ {
+    rand_fork();
+ }
+",C,,"    rand_fork();
+",73a683b742b344072e36aab173493f5101992c30,"@@ -847,6 +847,5 @@ void OPENSSL_fork_parent(void)
+ 
+ void OPENSSL_fork_child(void)
+ {
+-    rand_fork();
+ }
+ #endif",openssl,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/init.c;h=9fc0e8ef68aadbbcac562541e4f51b7dee98bb4a;hb=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/init.c;h=46839e768fd22fc4d3e5cada98223fe5c299248f,1," void OPENSSL_fork_child(void)
+ {
+//flaw_line_below:
+    rand_fork();
+ }
+"
+579,178315,,Remote,Not required,,CVE-2019-1549,https://www.cvedetails.com/cve/CVE-2019-1549/,CWE-330,Low,Partial,,,2019-09-10,5.0,OpenSSL 1.1.1 introduced a rewritten random number generator (RNG). This was intended to include protection in the event of a fork() system call in order to ensure that the parent and child processes did not share the same RNG state. However this protection was not being used in the default case. A partial mitigation for this issue is that the output from a high precision timer is mixed into the RNG state so the likelihood of a parent and child process sharing state is significantly reduced. If an application already calls OPENSSL_init_crypto() explicitly using OPENSSL_INIT_ATFORK then this problem does not occur at all. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c).,2019-09-19,,5,https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,,2,,,"int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+                        int prediction_resistance,
+                        const unsigned char *adin, size_t adinlen)
+ {
+    int fork_id;
+     int reseed_required = 0;
+ 
+     if (drbg->state != DRBG_READY) {
+        rand_drbg_restart(drbg, NULL, 0, 0);
+
+        if (drbg->state == DRBG_ERROR) {
+            RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_IN_ERROR_STATE);
+            return 0;
+        }
+        if (drbg->state == DRBG_UNINITIALISED) {
+            RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_NOT_INSTANTIATED);
+            return 0;
+        }
+    }
+
+    if (outlen > drbg->max_request) {
+        RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_REQUEST_TOO_LARGE_FOR_DRBG);
+        return 0;
+    }
+    if (adinlen > drbg->max_adinlen) {
+        RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_ADDITIONAL_INPUT_TOO_LONG);
+        return 0;
+         return 0;
+     }
+ 
+    fork_id = openssl_get_fork_id();
+
+    if (drbg->fork_id != fork_id) {
+        drbg->fork_id = fork_id;
+         reseed_required = 1;
+     }
+    }
+","int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+                        int prediction_resistance,
+                        const unsigned char *adin, size_t adinlen)
+ {
+     int reseed_required = 0;
+ 
+     if (drbg->state != DRBG_READY) {
+        rand_drbg_restart(drbg, NULL, 0, 0);
+
+        if (drbg->state == DRBG_ERROR) {
+            RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_IN_ERROR_STATE);
+            return 0;
+        }
+        if (drbg->state == DRBG_UNINITIALISED) {
+            RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_NOT_INSTANTIATED);
+            return 0;
+        }
+    }
+
+    if (outlen > drbg->max_request) {
+        RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_REQUEST_TOO_LARGE_FOR_DRBG);
+        return 0;
+    }
+    if (adinlen > drbg->max_adinlen) {
+        RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_ADDITIONAL_INPUT_TOO_LONG);
+        return 0;
+         return 0;
+     }
+ 
+    if (drbg->fork_count != rand_fork_count) {
+        drbg->fork_count = rand_fork_count;
+         reseed_required = 1;
+     }
+    }
+",C,"    int fork_id;
+    fork_id = openssl_get_fork_id();
+
+    if (drbg->fork_id != fork_id) {
+        drbg->fork_id = fork_id;
+","    if (drbg->fork_count != rand_fork_count) {
+        drbg->fork_count = rand_fork_count;
+",73a683b742b344072e36aab173493f5101992c30,"@@ -197,7 +197,7 @@ static RAND_DRBG *rand_drbg_new(int secure,
+     }
+ 
+     drbg->secure = secure && CRYPTO_secure_allocated(drbg);
+-    drbg->fork_count = rand_fork_count;
++    drbg->fork_id = openssl_get_fork_id();
+     drbg->parent = parent;
+ 
+     if (parent == NULL) {
+@@ -578,6 +578,7 @@ int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+                        int prediction_resistance,
+                        const unsigned char *adin, size_t adinlen)
+ {
++    int fork_id;
+     int reseed_required = 0;
+ 
+     if (drbg->state != DRBG_READY) {
+@@ -603,8 +604,10 @@ int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+         return 0;
+     }
+ 
+-    if (drbg->fork_count != rand_fork_count) {
+-        drbg->fork_count = rand_fork_count;
++    fork_id = openssl_get_fork_id();
++
++    if (drbg->fork_id != fork_id) {
++        drbg->fork_id = fork_id;
+         reseed_required = 1;
+     }",openssl,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rand/drbg_lib.c;h=12bb627a04efab8e85f5de2c8f14104af4f5c7c1;hb=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rand/drbg_lib.c;h=7d0c8027fd99635d243797cd153c3b4db08d0168,1,"int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+                        int prediction_resistance,
+                        const unsigned char *adin, size_t adinlen)
+ {
+//fix_flaw_line_below:
+//    int fork_id;
+     int reseed_required = 0;
+ 
+     if (drbg->state != DRBG_READY) {
+        rand_drbg_restart(drbg, NULL, 0, 0);
+
+        if (drbg->state == DRBG_ERROR) {
+            RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_IN_ERROR_STATE);
+            return 0;
+        }
+        if (drbg->state == DRBG_UNINITIALISED) {
+            RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_NOT_INSTANTIATED);
+            return 0;
+        }
+    }
+
+    if (outlen > drbg->max_request) {
+        RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_REQUEST_TOO_LARGE_FOR_DRBG);
+        return 0;
+    }
+    if (adinlen > drbg->max_adinlen) {
+        RANDerr(RAND_F_RAND_DRBG_GENERATE, RAND_R_ADDITIONAL_INPUT_TOO_LONG);
+        return 0;
+         return 0;
+     }
+ 
+//flaw_line_below:
+    if (drbg->fork_count != rand_fork_count) {
+//flaw_line_below:
+        drbg->fork_count = rand_fork_count;
+//fix_flaw_line_below:
+//    fork_id = openssl_get_fork_id();
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//    if (drbg->fork_id != fork_id) {
+//fix_flaw_line_below:
+//        drbg->fork_id = fork_id;
+         reseed_required = 1;
+     }
+    }
+"
+580,178316,,Remote,Not required,,CVE-2019-1549,https://www.cvedetails.com/cve/CVE-2019-1549/,CWE-330,Low,Partial,,,2019-09-10,5.0,OpenSSL 1.1.1 introduced a rewritten random number generator (RNG). This was intended to include protection in the event of a fork() system call in order to ensure that the parent and child processes did not share the same RNG state. However this protection was not being used in the default case. A partial mitigation for this issue is that the output from a high precision timer is mixed into the RNG state so the likelihood of a parent and child process sharing state is significantly reduced. If an application already calls OPENSSL_init_crypto() explicitly using OPENSSL_INIT_ATFORK then this problem does not occur at all. Fixed in OpenSSL 1.1.1d (Affected 1.1.1-1.1.1c).,2019-09-19,,1,https://git.openssl.org/gitweb/?p=openssl.git;a=commitdiff;h=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,,1,,,"static RAND_DRBG *rand_drbg_new(int secure,
+                                int type,
+                                unsigned int flags,
+                                RAND_DRBG *parent)
+{
+    RAND_DRBG *drbg = secure ? OPENSSL_secure_zalloc(sizeof(*drbg))
+                             : OPENSSL_zalloc(sizeof(*drbg));
+
+    if (drbg == NULL) {
+        RANDerr(RAND_F_RAND_DRBG_NEW, ERR_R_MALLOC_FAILURE);
+        return NULL;
+     }
+ 
+     drbg->secure = secure && CRYPTO_secure_allocated(drbg);
+    drbg->fork_id = openssl_get_fork_id();
+     drbg->parent = parent;
+ 
+     if (parent == NULL) {
+        drbg->get_entropy = rand_drbg_get_entropy;
+        drbg->cleanup_entropy = rand_drbg_cleanup_entropy;
+#ifndef RAND_DRBG_GET_RANDOM_NONCE
+        drbg->get_nonce = rand_drbg_get_nonce;
+        drbg->cleanup_nonce = rand_drbg_cleanup_nonce;
+#endif
+
+        drbg->reseed_interval = master_reseed_interval;
+        drbg->reseed_time_interval = master_reseed_time_interval;
+    } else {
+        drbg->get_entropy = rand_drbg_get_entropy;
+        drbg->cleanup_entropy = rand_drbg_cleanup_entropy;
+        /*
+         * Do not provide nonce callbacks, the child DRBGs will
+         * obtain their nonce using random bits from the parent.
+         */
+
+        drbg->reseed_interval = slave_reseed_interval;
+        drbg->reseed_time_interval = slave_reseed_time_interval;
+    }
+
+    if (RAND_DRBG_set(drbg, type, flags) == 0)
+        goto err;
+
+    if (parent != NULL) {
+        rand_drbg_lock(parent);
+        if (drbg->strength > parent->strength) {
+            /*
+             * We currently don't support the algorithm from NIST SP 800-90C
+             * 10.1.2 to use a weaker DRBG as source
+             */
+            rand_drbg_unlock(parent);
+            RANDerr(RAND_F_RAND_DRBG_NEW, RAND_R_PARENT_STRENGTH_TOO_WEAK);
+            goto err;
+        }
+        rand_drbg_unlock(parent);
+    }
+
+    return drbg;
+
+ err:
+    RAND_DRBG_free(drbg);
+
+    return NULL;
+}
+","static RAND_DRBG *rand_drbg_new(int secure,
+                                int type,
+                                unsigned int flags,
+                                RAND_DRBG *parent)
+{
+    RAND_DRBG *drbg = secure ? OPENSSL_secure_zalloc(sizeof(*drbg))
+                             : OPENSSL_zalloc(sizeof(*drbg));
+
+    if (drbg == NULL) {
+        RANDerr(RAND_F_RAND_DRBG_NEW, ERR_R_MALLOC_FAILURE);
+        return NULL;
+     }
+ 
+     drbg->secure = secure && CRYPTO_secure_allocated(drbg);
+    drbg->fork_count = rand_fork_count;
+     drbg->parent = parent;
+ 
+     if (parent == NULL) {
+        drbg->get_entropy = rand_drbg_get_entropy;
+        drbg->cleanup_entropy = rand_drbg_cleanup_entropy;
+#ifndef RAND_DRBG_GET_RANDOM_NONCE
+        drbg->get_nonce = rand_drbg_get_nonce;
+        drbg->cleanup_nonce = rand_drbg_cleanup_nonce;
+#endif
+
+        drbg->reseed_interval = master_reseed_interval;
+        drbg->reseed_time_interval = master_reseed_time_interval;
+    } else {
+        drbg->get_entropy = rand_drbg_get_entropy;
+        drbg->cleanup_entropy = rand_drbg_cleanup_entropy;
+        /*
+         * Do not provide nonce callbacks, the child DRBGs will
+         * obtain their nonce using random bits from the parent.
+         */
+
+        drbg->reseed_interval = slave_reseed_interval;
+        drbg->reseed_time_interval = slave_reseed_time_interval;
+    }
+
+    if (RAND_DRBG_set(drbg, type, flags) == 0)
+        goto err;
+
+    if (parent != NULL) {
+        rand_drbg_lock(parent);
+        if (drbg->strength > parent->strength) {
+            /*
+             * We currently don't support the algorithm from NIST SP 800-90C
+             * 10.1.2 to use a weaker DRBG as source
+             */
+            rand_drbg_unlock(parent);
+            RANDerr(RAND_F_RAND_DRBG_NEW, RAND_R_PARENT_STRENGTH_TOO_WEAK);
+            goto err;
+        }
+        rand_drbg_unlock(parent);
+    }
+
+    return drbg;
+
+ err:
+    RAND_DRBG_free(drbg);
+
+    return NULL;
+}
+",C,"    drbg->fork_id = openssl_get_fork_id();
+","    drbg->fork_count = rand_fork_count;
+",73a683b742b344072e36aab173493f5101992c30,"@@ -197,7 +197,7 @@ static RAND_DRBG *rand_drbg_new(int secure,
+     }
+ 
+     drbg->secure = secure && CRYPTO_secure_allocated(drbg);
+-    drbg->fork_count = rand_fork_count;
++    drbg->fork_id = openssl_get_fork_id();
+     drbg->parent = parent;
+ 
+     if (parent == NULL) {
+@@ -578,6 +578,7 @@ int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+                        int prediction_resistance,
+                        const unsigned char *adin, size_t adinlen)
+ {
++    int fork_id;
+     int reseed_required = 0;
+ 
+     if (drbg->state != DRBG_READY) {
+@@ -603,8 +604,10 @@ int RAND_DRBG_generate(RAND_DRBG *drbg, unsigned char *out, size_t outlen,
+         return 0;
+     }
+ 
+-    if (drbg->fork_count != rand_fork_count) {
+-        drbg->fork_count = rand_fork_count;
++    fork_id = openssl_get_fork_id();
++
++    if (drbg->fork_id != fork_id) {
++        drbg->fork_id = fork_id;
+         reseed_required = 1;
+     }",openssl,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rand/drbg_lib.c;h=12bb627a04efab8e85f5de2c8f14104af4f5c7c1;hb=1b0fe00e2704b5e20334a16d3c9099d1ba2ef1be,https://git.openssl.org/gitweb/?p=openssl.git;a=blob;f=crypto/rand/drbg_lib.c;h=7d0c8027fd99635d243797cd153c3b4db08d0168,1,"static RAND_DRBG *rand_drbg_new(int secure,
+                                int type,
+                                unsigned int flags,
+                                RAND_DRBG *parent)
+{
+    RAND_DRBG *drbg = secure ? OPENSSL_secure_zalloc(sizeof(*drbg))
+                             : OPENSSL_zalloc(sizeof(*drbg));
+
+    if (drbg == NULL) {
+        RANDerr(RAND_F_RAND_DRBG_NEW, ERR_R_MALLOC_FAILURE);
+        return NULL;
+     }
+ 
+     drbg->secure = secure && CRYPTO_secure_allocated(drbg);
+//flaw_line_below:
+    drbg->fork_count = rand_fork_count;
+//fix_flaw_line_below:
+//    drbg->fork_id = openssl_get_fork_id();
+     drbg->parent = parent;
+ 
+     if (parent == NULL) {
+        drbg->get_entropy = rand_drbg_get_entropy;
+        drbg->cleanup_entropy = rand_drbg_cleanup_entropy;
+#ifndef RAND_DRBG_GET_RANDOM_NONCE
+        drbg->get_nonce = rand_drbg_get_nonce;
+        drbg->cleanup_nonce = rand_drbg_cleanup_nonce;
+#endif
+
+        drbg->reseed_interval = master_reseed_interval;
+        drbg->reseed_time_interval = master_reseed_time_interval;
+    } else {
+        drbg->get_entropy = rand_drbg_get_entropy;
+        drbg->cleanup_entropy = rand_drbg_cleanup_entropy;
+        /*
+         * Do not provide nonce callbacks, the child DRBGs will
+         * obtain their nonce using random bits from the parent.
+         */
+
+        drbg->reseed_interval = slave_reseed_interval;
+        drbg->reseed_time_interval = slave_reseed_time_interval;
+    }
+
+    if (RAND_DRBG_set(drbg, type, flags) == 0)
+        goto err;
+
+    if (parent != NULL) {
+        rand_drbg_lock(parent);
+        if (drbg->strength > parent->strength) {
+            /*
+             * We currently don't support the algorithm from NIST SP 800-90C
+             * 10.1.2 to use a weaker DRBG as source
+             */
+            rand_drbg_unlock(parent);
+            RANDerr(RAND_F_RAND_DRBG_NEW, RAND_R_PARENT_STRENGTH_TOO_WEAK);
+            goto err;
+        }
+        rand_drbg_unlock(parent);
+    }
+
+    return drbg;
+
+ err:
+    RAND_DRBG_free(drbg);
+
+    return NULL;
+}
+"

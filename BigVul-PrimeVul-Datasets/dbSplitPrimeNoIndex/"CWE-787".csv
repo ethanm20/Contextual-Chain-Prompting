@@ -1,0 +1,547 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2695,"""CWE-787""",pam_radius,01173ec2426627dbb1e0d96c06c3ffa0b14d36d0,01173ec2426627dbb1e0d96c06c3ffa0b14d36d0,0,517189,1.6794196083544678e+38,,,other,"static void add_password(AUTH_HDR *request, unsigned char type, CONST char *password, char *secret)
+{
+	MD5_CTX md5_secret, my_md5;
+	unsigned char misc[AUTH_VECTOR_LEN];
+	int i;
+	int length = strlen(password);
+	unsigned char hashed[256 + AUTH_PASS_LEN];	/* can't be longer than this */
+	unsigned char *vector;
+	attribute_t *attr;
+
+	if (length > MAXPASS) {				/* shorten the password for now */
+		length = MAXPASS;
+	}
+
+	if (length == 0) {
+		length = AUTH_PASS_LEN;			/* 0 maps to 16 */
+	} if ((length & (AUTH_PASS_LEN - 1)) != 0) {
+		length += (AUTH_PASS_LEN - 1);		/* round it up */
+		length &= ~(AUTH_PASS_LEN - 1);		/* chop it off */
+	}						/* 16*N maps to itself */
+
+	memset(hashed, 0, length);
+	memcpy(hashed, password, strlen(password));
+
+	attr = find_attribute(request, PW_PASSWORD);
+
+	if (type == PW_PASSWORD) {
+		vector = request->vector;
+	} else {
+		vector = attr->data;			/* attr CANNOT be NULL here. */
+	}
+
+	/* ************************************************************ */
+	/* encrypt the password */
+	/* password : e[0] = p[0] ^ MD5(secret + vector) */
+	MD5Init(&md5_secret);
+	MD5Update(&md5_secret, (unsigned char *) secret, strlen(secret));
+	my_md5 = md5_secret;				/* so we won't re-do the hash later */
+	MD5Update(&my_md5, vector, AUTH_VECTOR_LEN);
+	MD5Final(misc, &my_md5);			/* set the final vector */
+	xor(hashed, misc, AUTH_PASS_LEN);
+
+	/* For each step through, e[i] = p[i] ^ MD5(secret + e[i-1]) */
+	for (i = 1; i < (length >> 4); i++) {
+		my_md5 = md5_secret;			/* grab old value of the hash */
+		MD5Update(&my_md5, &hashed[(i-1) * AUTH_PASS_LEN], AUTH_PASS_LEN);
+		MD5Final(misc, &my_md5);			/* set the final vector */
+		xor(&hashed[i * AUTH_PASS_LEN], misc, AUTH_PASS_LEN);
+	}
+
+	if (type == PW_OLD_PASSWORD) {
+		attr = find_attribute(request, PW_OLD_PASSWORD);
+	}
+
+	if (!attr) {
+		add_attribute(request, type, hashed, length);
+	} else {
+		memcpy(attr->data, hashed, length); /* overwrite the packet */
+	}
+}","static void add_password(AUTH_HDR *request, unsigned char type, CONST char *password, char *secret)
+{
+	MD5_CTX md5_secret, my_md5;
+	unsigned char misc[AUTH_VECTOR_LEN];
+	int i;
+	int length = strlen(password);
+	unsigned char hashed[256 + AUTH_PASS_LEN];	/* can't be longer than this */
+	unsigned char *vector;
+	attribute_t *attr;
+
+	if (length > MAXPASS) {				/* shorten the password for now */
+		length = MAXPASS;
+	}
+
+	if (length == 0) {
+		length = AUTH_PASS_LEN;			/* 0 maps to 16 */
+	} if ((length & (AUTH_PASS_LEN - 1)) != 0) {
+		length += (AUTH_PASS_LEN - 1);		/* round it up */
+		length &= ~(AUTH_PASS_LEN - 1);		/* chop it off */
+	}						/* 16*N maps to itself */
+
+	memset(hashed, 0, length);
+	memcpy(hashed, password, length);
+
+	attr = find_attribute(request, PW_PASSWORD);
+
+	if (type == PW_PASSWORD) {
+		vector = request->vector;
+	} else {
+		vector = attr->data;			/* attr CANNOT be NULL here. */
+	}
+
+	/* ************************************************************ */
+	/* encrypt the password */
+	/* password : e[0] = p[0] ^ MD5(secret + vector) */
+	MD5Init(&md5_secret);
+	MD5Update(&md5_secret, (unsigned char *) secret, strlen(secret));
+	my_md5 = md5_secret;				/* so we won't re-do the hash later */
+	MD5Update(&my_md5, vector, AUTH_VECTOR_LEN);
+	MD5Final(misc, &my_md5);			/* set the final vector */
+	xor(hashed, misc, AUTH_PASS_LEN);
+
+	/* For each step through, e[i] = p[i] ^ MD5(secret + e[i-1]) */
+	for (i = 1; i < (length >> 4); i++) {
+		my_md5 = md5_secret;			/* grab old value of the hash */
+		MD5Update(&my_md5, &hashed[(i-1) * AUTH_PASS_LEN], AUTH_PASS_LEN);
+		MD5Final(misc, &my_md5);			/* set the final vector */
+		xor(&hashed[i * AUTH_PASS_LEN], misc, AUTH_PASS_LEN);
+	}
+
+	if (type == PW_OLD_PASSWORD) {
+		attr = find_attribute(request, PW_OLD_PASSWORD);
+	}
+
+	if (!attr) {
+		add_attribute(request, type, hashed, length);
+	} else {
+		memcpy(attr->data, hashed, length); /* overwrite the packet */
+	}
+}",
+2707,"""CWE-787""",naviserver,a5c3079f1d8996d5f34c9384a440acf3519ca3bb,a5c3079f1d8996d5f34c9384a440acf3519ca3bb,0,519503,4.63775513448425e+37,,,other,"ChunkedDecode(Request *reqPtr, bool update)
+{
+    const Tcl_DString *bufPtr;
+    const char        *end, *chunkStart;
+    bool              success = NS_TRUE;
+
+    NS_NONNULL_ASSERT(reqPtr != NULL);
+
+    bufPtr = &reqPtr->buffer;
+    end = bufPtr->string + bufPtr->length;
+    chunkStart = bufPtr->string + reqPtr->chunkStartOff;
+
+    while (reqPtr->chunkStartOff <  (size_t)bufPtr->length) {
+        char   *p = strstr(chunkStart, ""\r\n"");
+        size_t  chunk_length;
+
+        if (p == NULL) {
+            Ns_Log(DriverDebug, ""ChunkedDecode: chunk did not find end-of-line"");
+            success = NS_FALSE;
+            break;
+        }
+
+        *p = '\0';
+        chunk_length = (size_t)strtol(chunkStart, NULL, 16);
+        *p = '\r';
+
+        if (p + 2 + chunk_length > end) {
+            Ns_Log(DriverDebug, ""ChunkedDecode: chunk length past end of buffer"");
+            success = NS_FALSE;
+            break;
+        }
+        if (update) {
+            char *writeBuffer = bufPtr->string + reqPtr->chunkWriteOff;
+
+            memmove(writeBuffer, p + 2, chunk_length);
+            reqPtr->chunkWriteOff += chunk_length;
+            *(writeBuffer + chunk_length) = '\0';
+        }
+        reqPtr->chunkStartOff += (size_t)(p - chunkStart) + 4u + chunk_length;
+        chunkStart = bufPtr->string + reqPtr->chunkStartOff;
+    }
+
+    return success;
+}","ChunkedDecode(Request *reqPtr, bool update)
+{
+    const Tcl_DString *bufPtr;
+    const char        *end, *chunkStart;
+    SockState         result = SOCK_READY;
+
+    NS_NONNULL_ASSERT(reqPtr != NULL);
+
+    bufPtr = &reqPtr->buffer;
+    end = bufPtr->string + bufPtr->length;
+    chunkStart = bufPtr->string + reqPtr->chunkStartOff;
+
+    while (reqPtr->chunkStartOff <  (size_t)bufPtr->length) {
+        char   *p = strstr(chunkStart, ""\r\n"");
+        long    chunkLength;
+
+        if (p == NULL) {
+            Ns_Log(DriverDebug, ""ChunkedDecode: chunk did not find end-of-line"");
+            result = SOCK_MORE;
+            break;
+        }
+
+        *p = '\0';
+        chunkLength = strtol(chunkStart, NULL, 16);
+        *p = '\r';
+        if (chunkLength < 0) {
+            Ns_Log(Warning, ""ChunkedDecode: negative chunk length"");
+            result = SOCK_BADREQUEST;
+            break;
+        }
+        *p = '\r';
+
+        if (p + 2 + chunkLength > end) {
+            Ns_Log(DriverDebug, ""ChunkedDecode: chunk length past end of buffer"");
+            result = SOCK_MORE;
+            break;
+        }
+        if (update) {
+            char *writeBuffer = bufPtr->string + reqPtr->chunkWriteOff;
+
+            memmove(writeBuffer, p + 2, (size_t)chunkLength);
+            reqPtr->chunkWriteOff += (size_t)chunkLength;
+            *(writeBuffer + chunkLength) = '\0';
+        }
+        reqPtr->chunkStartOff += (size_t)(p - chunkStart) + 4u + (size_t)chunkLength;
+        chunkStart = bufPtr->string + reqPtr->chunkStartOff;
+    }
+
+    return result;
+}",
+2712,"""CWE-787""",retdec,517298bafaaff0a8e3dd60dd055a67c41b545807,517298bafaaff0a8e3dd60dd055a67c41b545807,0,520976,2.3330220195662516e+38,,,other,"bool Decoder::canSplitFunctionOn(
+		utils::Address addr,
+		llvm::BasicBlock* splitBb,
+		std::set<llvm::BasicBlock*>& newFncStarts)
+{
+	newFncStarts.insert(splitBb);
+
+	auto* f = splitBb->getParent();
+	auto fAddr = getFunctionAddress(f);
+
+	auto fSzIt = _fnc2sz.find(f);
+	if (fSzIt != _fnc2sz.end())
+	{
+		if (fAddr <= addr && addr < (fAddr+fSzIt->second))
+		{
+			LOG << ""\t\t\t\t\t"" << ""!CAN S: addr cond @ "" << addr << std::endl;
+			return false;
+		}
+	}
+
+	std::set<Address> fncStarts;
+	fncStarts.insert(fAddr);
+	fncStarts.insert(addr);
+
+	LOG << ""\t\t\t\t\t"" << ""CAN S: split @ "" << fAddr << std::endl;
+	LOG << ""\t\t\t\t\t"" << ""CAN S: split @ "" << addr << std::endl;
+
+	bool changed = true;
+	while (changed)
+	{
+		changed = false;
+		for (BasicBlock& b : *f)
+		{
+//			Address bAddr = getBasicBlockAddress(&b);
+			Address bAddr;
+			// TODO: shitty
+			BasicBlock* bPrev = &b;
+			while (bAddr.isUndefined() && bPrev)
+			{
+				bAddr = getBasicBlockAddress(bPrev);
+				bPrev = bPrev->getPrevNode();
+			}
+			if (bAddr.isUndefined())
+			{
+				continue;
+			}
+			auto up = fncStarts.upper_bound(bAddr);
+			--up;
+			Address bFnc = *up;
+
+			for (auto* p : predecessors(&b))
+			{
+//				Address pAddr = getBasicBlockAddress(p);
+				Address pAddr;
+				// TODO: shitty
+				BasicBlock* pPrev = p;
+				while (pAddr.isUndefined() && pPrev)
+				{
+					pAddr = getBasicBlockAddress(pPrev);
+					pPrev = pPrev->getPrevNode();
+				}
+				if (pAddr.isUndefined())
+				{
+					continue;
+				}
+				auto up = fncStarts.upper_bound(pAddr);
+				--up;
+				Address pFnc = *up;
+
+				if (bFnc != pFnc)
+				{
+					if (!canSplitFunctionOn(&b))
+					{
+						return false;
+					}
+
+					changed |= newFncStarts.insert(&b).second;
+					changed |= fncStarts.insert(bAddr).second;
+
+					LOG << ""\t\t\t\t\t"" << ""CAN S: split @ "" << bAddr << std::endl;
+				}
+			}
+		}
+	}
+
+	return true;
+}","bool Decoder::canSplitFunctionOn(
+		utils::Address addr,
+		llvm::BasicBlock* splitBb,
+		std::set<llvm::BasicBlock*>& newFncStarts)
+{
+	newFncStarts.insert(splitBb);
+
+	auto* f = splitBb->getParent();
+	auto fAddr = getFunctionAddress(f);
+
+	auto fSzIt = _fnc2sz.find(f);
+	if (fSzIt != _fnc2sz.end())
+	{
+		if (fAddr <= addr && addr < (fAddr+fSzIt->second))
+		{
+			LOG << ""\t\t\t\t\t"" << ""!CAN S: addr cond @ "" << addr << std::endl;
+			return false;
+		}
+	}
+
+	std::set<Address> fncStarts;
+	fncStarts.insert(fAddr);
+	fncStarts.insert(addr);
+
+	LOG << ""\t\t\t\t\t"" << ""CAN S: split @ "" << fAddr << std::endl;
+	LOG << ""\t\t\t\t\t"" << ""CAN S: split @ "" << addr << std::endl;
+
+	bool changed = true;
+	while (changed)
+	{
+		changed = false;
+		for (BasicBlock& b : *f)
+		{
+//			Address bAddr = getBasicBlockAddress(&b);
+			Address bAddr;
+			// TODO: shitty
+			BasicBlock* bPrev = &b;
+			while (bAddr.isUndefined() && bPrev)
+			{
+				bAddr = getBasicBlockAddress(bPrev);
+				bPrev = bPrev->getPrevNode();
+			}
+			if (bAddr.isUndefined())
+			{
+				continue;
+			}
+			auto up = fncStarts.upper_bound(bAddr);
+			if (up == fncStarts.begin()) {
+				return false;
+			}	
+			--up;
+			Address bFnc = *up;
+
+			for (auto* p : predecessors(&b))
+			{
+//				Address pAddr = getBasicBlockAddress(p);
+				Address pAddr;
+				// TODO: shitty
+				BasicBlock* pPrev = p;
+				while (pAddr.isUndefined() && pPrev)
+				{
+					pAddr = getBasicBlockAddress(pPrev);
+					pPrev = pPrev->getPrevNode();
+				}
+				if (pAddr.isUndefined())
+				{
+					continue;
+				}
+				auto up = fncStarts.upper_bound(pAddr);
+				if (up == fncStarts.begin()) {
+					return false;
+				}
+				--up;
+				Address pFnc = *up;
+
+				if (bFnc != pFnc)
+				{
+					if (!canSplitFunctionOn(&b))
+					{
+						return false;
+					}
+
+					changed |= newFncStarts.insert(&b).second;
+					changed |= fncStarts.insert(bAddr).second;
+
+					LOG << ""\t\t\t\t\t"" << ""CAN S: split @ "" << bAddr << std::endl;
+				}
+			}
+		}
+	}
+
+	return true;
+}",
+3254,"""CWE-787""",opaque,5ddda15d89f5ac82f4416208c5319ace4aecdc36,5ddda15d89f5ac82f4416208c5319ace4aecdc36,0,519071,1.3068523006874925e+38,,,other,"void ocall_malloc(size_t size, uint8_t **ret) {
+  *ret = static_cast<uint8_t *>(malloc(size));
+}","void unsafe_ocall_malloc(size_t size, uint8_t **ret) {
+  *ret = static_cast<uint8_t *>(malloc(size));
+}",
+3263,"""CWE-787""",bsdiff4,49a4cee2feef7deaf9d89e5e793a8824930284d7,49a4cee2feef7deaf9d89e5e793a8824930284d7,0,519593,2.8471137080724427e+37,,,other,"static PyObject* patch(PyObject* self, PyObject* args)
+{
+    char *origData, *newData, *diffBlock, *extraBlock, *diffPtr, *extraPtr;
+    Py_ssize_t origDataLength, newDataLength, diffBlockLength, extraBlockLength;
+    PyObject *controlTuples, *tuple, *results;
+    off_t oldpos, newpos, x, y, z;
+    int i, j, numTuples;
+
+    if (!PyArg_ParseTuple(args, ""s#nO!s#s#"",
+                          &origData, &origDataLength, &newDataLength,
+                          &PyList_Type, &controlTuples,
+                          &diffBlock, &diffBlockLength,
+                          &extraBlock, &extraBlockLength))
+        return NULL;
+
+    /* allocate the memory for the new data */
+    newData = PyMem_Malloc(newDataLength + 1);
+    if (!newData)
+        return PyErr_NoMemory();
+
+    oldpos = 0;
+    newpos = 0;
+    diffPtr = diffBlock;
+    extraPtr = extraBlock;
+    numTuples = PyList_GET_SIZE(controlTuples);
+    for (i = 0; i < numTuples; i++) {
+        tuple = PyList_GET_ITEM(controlTuples, i);
+        if (!PyTuple_Check(tuple)) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_TypeError, ""expecting tuple"");
+            return NULL;
+        }
+        if (PyTuple_GET_SIZE(tuple) != 3) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_TypeError, ""expecting tuple of size 3"");
+            return NULL;
+        }
+        x = PyLong_AsLong(PyTuple_GET_ITEM(tuple, 0));
+        y = PyLong_AsLong(PyTuple_GET_ITEM(tuple, 1));
+        z = PyLong_AsLong(PyTuple_GET_ITEM(tuple, 2));
+        if (newpos + x > newDataLength ||
+                diffPtr + x > diffBlock + diffBlockLength ||
+                extraPtr + y > extraBlock + extraBlockLength) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_ValueError, ""corrupt patch (overflow)"");
+            return NULL;
+        }
+        memcpy(newData + newpos, diffPtr, x);
+        diffPtr += x;
+        for (j = 0; j < x; j++)
+            if ((oldpos + j >= 0) && (oldpos + j < origDataLength))
+                newData[newpos + j] += origData[oldpos + j];
+        newpos += x;
+        oldpos += x;
+        memcpy(newData + newpos, extraPtr, y);
+        extraPtr += y;
+        newpos += y;
+        oldpos += z;
+    }
+
+    /* confirm that a valid patch was applied */
+    if (newpos != newDataLength ||
+            diffPtr != diffBlock + diffBlockLength ||
+            extraPtr != extraBlock + extraBlockLength) {
+        PyMem_Free(newData);
+        PyErr_SetString(PyExc_ValueError, ""corrupt patch (underflow)"");
+        return NULL;
+    }
+
+    results = PyBytes_FromStringAndSize(newData, newDataLength);
+    PyMem_Free(newData);
+    return results;
+}","static PyObject* patch(PyObject* self, PyObject* args)
+{
+    char *origData, *newData, *diffBlock, *extraBlock, *diffPtr, *extraPtr;
+    Py_ssize_t origDataLength, newDataLength, diffBlockLength, extraBlockLength;
+    PyObject *controlTuples, *tuple, *results;
+    off_t oldpos, newpos, x, y, z;
+    int i, j, numTuples;
+
+    if (!PyArg_ParseTuple(args, ""s#nO!s#s#"",
+                          &origData, &origDataLength, &newDataLength,
+                          &PyList_Type, &controlTuples,
+                          &diffBlock, &diffBlockLength,
+                          &extraBlock, &extraBlockLength))
+        return NULL;
+
+    /* allocate the memory for the new data */
+    newData = PyMem_Malloc(newDataLength + 1);
+    if (!newData)
+        return PyErr_NoMemory();
+
+    oldpos = 0;
+    newpos = 0;
+    diffPtr = diffBlock;
+    extraPtr = extraBlock;
+    numTuples = PyList_GET_SIZE(controlTuples);
+    for (i = 0; i < numTuples; i++) {
+        tuple = PyList_GET_ITEM(controlTuples, i);
+        if (!PyTuple_Check(tuple)) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_TypeError, ""expecting tuple"");
+            return NULL;
+        }
+        if (PyTuple_GET_SIZE(tuple) != 3) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_TypeError, ""expecting tuple of size 3"");
+            return NULL;
+        }
+        x = PyLong_AsLong(PyTuple_GET_ITEM(tuple, 0));
+        y = PyLong_AsLong(PyTuple_GET_ITEM(tuple, 1));
+        z = PyLong_AsLong(PyTuple_GET_ITEM(tuple, 2));
+        if (newpos + x > newDataLength ||
+                diffPtr + x > diffBlock + diffBlockLength) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_ValueError, ""corrupt patch (overflow)"");
+            return NULL;
+        }
+        memcpy(newData + newpos, diffPtr, x);
+        diffPtr += x;
+        for (j = 0; j < x; j++)
+            if ((oldpos + j >= 0) && (oldpos + j < origDataLength))
+                newData[newpos + j] += origData[oldpos + j];
+        newpos += x;
+        oldpos += x;
+        if (newpos + y > newDataLength ||
+                extraPtr + y > extraBlock + extraBlockLength) {
+            PyMem_Free(newData);
+            PyErr_SetString(PyExc_ValueError, ""corrupt patch (overflow)"");
+            return NULL;
+        }
+        memcpy(newData + newpos, extraPtr, y);
+        extraPtr += y;
+        newpos += y;
+        oldpos += z;
+    }
+
+    /* confirm that a valid patch was applied */
+    if (newpos != newDataLength ||
+            diffPtr != diffBlock + diffBlockLength ||
+            extraPtr != extraBlock + extraBlockLength) {
+        PyMem_Free(newData);
+        PyErr_SetString(PyExc_ValueError, ""corrupt patch (underflow)"");
+        return NULL;
+    }
+
+    results = PyBytes_FromStringAndSize(newData, newDataLength);
+    PyMem_Free(newData);
+    return results;
+}",

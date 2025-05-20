@@ -1,0 +1,160 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2687,"""CWE-189""",platform_bionic,7f5aa4f35e23fd37425b3a5041737cdf58f87385,7f5aa4f35e23fd37425b3a5041737cdf58f87385,0,515997,1.77799214670584e+38,,,other,"void* leak_malloc(size_t bytes)
+{
+    // allocate enough space infront of the allocation to store the pointer for
+    // the alloc structure. This will making free'ing the structer really fast!
+
+    // 1. allocate enough memory and include our header
+    // 2. set the base pointer to be right after our header
+
+    void* base = dlmalloc(bytes + sizeof(AllocationEntry));
+    if (base != NULL) {
+        pthread_mutex_lock(&gAllocationsMutex);
+
+            intptr_t backtrace[BACKTRACE_SIZE];
+            size_t numEntries = get_backtrace(backtrace, BACKTRACE_SIZE);
+
+            AllocationEntry* header = (AllocationEntry*)base;
+            header->entry = record_backtrace(backtrace, numEntries, bytes);
+            header->guard = GUARD;
+
+            // now increment base to point to after our header.
+            // this should just work since our header is 8 bytes.
+            base = (AllocationEntry*)base + 1;
+
+        pthread_mutex_unlock(&gAllocationsMutex);
+    }
+
+    return base;
+}","void* leak_malloc(size_t bytes)
+{
+    // allocate enough space infront of the allocation to store the pointer for
+    // the alloc structure. This will making free'ing the structer really fast!
+
+    // 1. allocate enough memory and include our header
+    // 2. set the base pointer to be right after our header
+
+    size_t size = bytes + sizeof(AllocationEntry);
+    if (size < bytes) { // Overflow.
+        return NULL;
+    }
+
+    void* base = dlmalloc(size);
+    if (base != NULL) {
+        pthread_mutex_lock(&gAllocationsMutex);
+
+            intptr_t backtrace[BACKTRACE_SIZE];
+            size_t numEntries = get_backtrace(backtrace, BACKTRACE_SIZE);
+
+            AllocationEntry* header = (AllocationEntry*)base;
+            header->entry = record_backtrace(backtrace, numEntries, bytes);
+            header->guard = GUARD;
+
+            // now increment base to point to after our header.
+            // this should just work since our header is 8 bytes.
+            base = (AllocationEntry*)base + 1;
+
+        pthread_mutex_unlock(&gAllocationsMutex);
+    }
+
+    return base;
+}",
+2688,"""CWE-189""",platform_bionic,7f5aa4f35e23fd37425b3a5041737cdf58f87385,7f5aa4f35e23fd37425b3a5041737cdf58f87385,0,515993,2.0995034677966647e+38,,,other,"void* chk_malloc(size_t bytes)
+{
+    char* buffer = (char*)dlmalloc(bytes + CHK_OVERHEAD_SIZE);
+    if (buffer) {
+        memset(buffer, CHK_SENTINEL_VALUE, bytes + CHK_OVERHEAD_SIZE);
+        size_t offset = dlmalloc_usable_size(buffer) - sizeof(size_t);
+        *(size_t *)(buffer + offset) = bytes;
+        buffer += CHK_SENTINEL_HEAD_SIZE;
+    }
+    return buffer;
+}","void* chk_malloc(size_t bytes)
+{
+    size_t size = bytes + CHK_OVERHEAD_SIZE;
+    if (size < bytes) { // Overflow.
+        return NULL;
+    }
+    uint8_t* buffer = (uint8_t*) dlmalloc(size);
+    if (buffer) {
+        memset(buffer, CHK_SENTINEL_VALUE, bytes + CHK_OVERHEAD_SIZE);
+        size_t offset = dlmalloc_usable_size(buffer) - sizeof(size_t);
+        *(size_t *)(buffer + offset) = bytes;
+        buffer += CHK_SENTINEL_HEAD_SIZE;
+    }
+    return buffer;
+}",
+2689,"""CWE-189""",platform_bionic,7f5aa4f35e23fd37425b3a5041737cdf58f87385,7f5aa4f35e23fd37425b3a5041737cdf58f87385,0,516002,4.973011144875138e+37,,,other,"void* leak_memalign(size_t alignment, size_t bytes)
+{
+    // we can just use malloc
+    if (alignment <= MALLOC_ALIGNMENT)
+        return leak_malloc(bytes);
+
+    // need to make sure it's a power of two
+    if (alignment & (alignment-1))
+        alignment = 1L << (31 - __builtin_clz(alignment));
+
+    // here, aligment is at least MALLOC_ALIGNMENT<<1 bytes
+    // we will align by at least MALLOC_ALIGNMENT bytes
+    // and at most alignment-MALLOC_ALIGNMENT bytes
+    size_t size = (alignment-MALLOC_ALIGNMENT) + bytes;
+    void* base = leak_malloc(size);
+    if (base != NULL) {
+        intptr_t ptr = (intptr_t)base;
+        if ((ptr % alignment) == 0)
+            return base;
+
+        // align the pointer
+        ptr += ((-ptr) % alignment);
+
+        // there is always enough space for the base pointer and the guard
+        ((void**)ptr)[-1] = MEMALIGN_GUARD;
+        ((void**)ptr)[-2] = base;
+
+        return (void*)ptr;
+    }
+    return base;
+}","void* leak_memalign(size_t alignment, size_t bytes)
+{
+    // we can just use malloc
+    if (alignment <= MALLOC_ALIGNMENT)
+        return leak_malloc(bytes);
+
+    // need to make sure it's a power of two
+    if (alignment & (alignment-1))
+        alignment = 1L << (31 - __builtin_clz(alignment));
+
+    // here, aligment is at least MALLOC_ALIGNMENT<<1 bytes
+    // we will align by at least MALLOC_ALIGNMENT bytes
+    // and at most alignment-MALLOC_ALIGNMENT bytes
+    size_t size = (alignment-MALLOC_ALIGNMENT) + bytes;
+    if (size < bytes) { // Overflow.
+        return NULL;
+    }
+
+    void* base = leak_malloc(size);
+    if (base != NULL) {
+        intptr_t ptr = (intptr_t)base;
+        if ((ptr % alignment) == 0)
+            return base;
+
+        // align the pointer
+        ptr += ((-ptr) % alignment);
+
+        // there is always enough space for the base pointer and the guard
+        ((void**)ptr)[-1] = MEMALIGN_GUARD;
+        ((void**)ptr)[-2] = base;
+
+        return (void*)ptr;
+    }
+    return base;
+}",
+2690,"""CWE-189""",nedmalloc,2965eca30c408c13473c4146a9d47d547d288db1,2965eca30c408c13473c4146a9d47d547d288db1,0,516019,3.3384565897302213e+38,,,other,"NEDMALLOCNOALIASATTR NEDMALLOCPTRATTR void * nedpcalloc(nedpool *p, size_t no, size_t size) THROWSPEC
+{
+	unsigned flags=NEDMALLOC_FORCERESERVE(p, 0, no*size);
+	return nedpmalloc2(p, size*no, 0, M2_ZERO_MEMORY|flags);
+}","NEDMALLOCNOALIASATTR NEDMALLOCPTRATTR void * nedpmalloc(nedpool *p, size_t size) THROWSPEC
+{
+	unsigned flags=NEDMALLOC_FORCERESERVE(p, 0, size);
+	return nedpmalloc2(p, size, 0, flags);
+}",

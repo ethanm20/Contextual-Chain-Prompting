@@ -1,0 +1,802 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+2394,180130,,Remote,Not required,,CVE-2016-7125,https://www.cvedetails.com/cve/CVE-2016-7125/,CWE-74,Low,,Partial,,2016-09-11,5.0,"ext/session/session.c in PHP before 5.6.25 and 7.x before 7.0.10 skips invalid session names in a way that triggers incorrect parsing, which allows remote attackers to inject arbitrary-type session data by leveraging control of a session name, as demonstrated by object injection.",2018-01-04,,9,https://github.com/php/php-src/commit/8763c6090d627d8bb0ee1d030c30e58f406be9ce?w=1,8763c6090d627d8bb0ee1d030c30e58f406be9ce?w=1,Fix bug #72681 - consume data even if we're not storing them,4,ext/session/session.c,"{""sha"": ""b2d02361dfd139a2bddf402d96d2b819ba27eb77"", ""filename"": ""ext/session/session.c"", ""status"": ""modified"", ""additions"": 18, ""deletions"": 7, ""changes"": 25, ""blob_url"": ""https://github.com/php/php-src/blob/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/session.c"", ""raw_url"": ""https://github.com/php/php-src/raw/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/session.c"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/ext/session/session.c?ref=8763c6090d627d8bb0ee1d030c30e58f406be9ce"", ""patch"": ""@@ -924,11 +924,13 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */\n \tint namelen;\n \tint has_value;\n \tphp_unserialize_data_t var_hash;\n+\tint skip = 0;\n \n \tPHP_VAR_UNSERIALIZE_INIT(var_hash);\n \n \tfor (p = val; p < endptr; ) {\n \t\tzval **tmp;\n+\t\tskip = 0;\n \t\tnamelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);\n \n \t\tif (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {\n@@ -944,22 +946,25 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */\n \n \t\tif (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {\n \t\t\tif ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {\n-\t\t\t\tefree(name);\n-\t\t\t\tcontinue;\n+\t\t\t\tskip = 1;\n \t\t\t}\n \t\t}\n \n \t\tif (has_value) {\n \t\t\tALLOC_INIT_ZVAL(current);\n \t\t\tif (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {\n-\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\tif (!skip) {\n+\t\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\t}\n \t\t\t} else {\n \t\t\t\tPHP_VAR_UNSERIALIZE_DESTROY(var_hash);\n \t\t\t\treturn FAILURE;\n \t\t\t}\n \t\t\tvar_push_dtor_no_addref(&var_hash, &current);\n \t\t}\n-\t\tPS_ADD_VARL(name, namelen);\n+\t\tif (!skip) {\n+\t\t\tPS_ADD_VARL(name, namelen);\n+\t\t}\n \t\tefree(name);\n \t}\n \n@@ -1016,6 +1021,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \tint namelen;\n \tint has_value;\n \tphp_unserialize_data_t var_hash;\n+\tint skip = 0;\n \n \tPHP_VAR_UNSERIALIZE_INIT(var_hash);\n \n@@ -1024,6 +1030,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \twhile (p < endptr) {\n \t\tzval **tmp;\n \t\tq = p;\n+\t\tskip = 0;\n \t\twhile (*q != PS_DELIMITER) {\n \t\t\tif (++q >= endptr) goto break_outer_loop;\n \t\t}\n@@ -1040,14 +1047,16 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \n \t\tif (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {\n \t\t\tif ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {\n-\t\t\t\tgoto skip;\n+\t\t\t\tskip = 1;\n \t\t\t}\n \t\t}\n \n \t\tif (has_value) {\n \t\t\tALLOC_INIT_ZVAL(current);\n \t\t\tif (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {\n-\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\tif (!skip) {\n+\t\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\t}\n \t\t\t} else {\n \t\t\t\tvar_push_dtor_no_addref(&var_hash, &current);\n \t\t\t\tefree(name);\n@@ -1056,7 +1065,9 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \t\t\t}\n \t\t\tvar_push_dtor_no_addref(&var_hash, &current);\n \t\t}\n-\t\tPS_ADD_VARL(name, namelen);\n+\t\tif (!skip) {\n+\t\t\tPS_ADD_VARL(name, namelen);\n+\t\t}\n skip:\n \t\tefree(name);\n ""}<_**next**_>{""sha"": ""ca38b07fc909eddb81182f78472bfcdb81fa9965"", ""filename"": ""ext/session/tests/bug72681.phpt"", ""status"": ""added"", ""additions"": 16, ""deletions"": 0, ""changes"": 16, ""blob_url"": ""https://github.com/php/php-src/blob/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/tests/bug72681.phpt"", ""raw_url"": ""https://github.com/php/php-src/raw/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/tests/bug72681.phpt"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/ext/session/tests/bug72681.phpt?ref=8763c6090d627d8bb0ee1d030c30e58f406be9ce"", ""patch"": ""@@ -0,0 +1,16 @@\n+--TEST--\n+Bug #72681: PHP Session Data Injection Vulnerability\n+--SKIPIF--\n+<?php include('skipif.inc'); ?>\n+--FILE--\n+<?php\n+ini_set('session.serialize_handler', 'php');\n+session_start();\n+$_SESSION['_SESSION'] = 'ryat|O:8:\""stdClass\"":0:{}';\n+session_write_close();\n+session_start();\n+var_dump($_SESSION);\n+?>\n+--EXPECT--\n+array(0) {\n+}""}","PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+{
+	const char *p;
+	char *name;
+	const char *endptr = val + vallen;
+	zval *current;
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
+	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+ 	for (p = val; p < endptr; ) {
+ 		zval **tmp;
+		skip = 0;
+ 		namelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);
+ 
+ 		if (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {
+			PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+			return FAILURE;
+		}
+
+		has_value = *p & PS_BIN_UNDEF ? 0 : 1;
+
+		name = estrndup(p + 1, namelen);
+
+		p += namelen + 1;
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+				if (!skip) {
+					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+				}
+ 			} else {
+ 				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+ 				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+		if (!skip) {
+			PS_ADD_VARL(name, namelen);
+		}
+ 		efree(name);
+ 	}
+ 
+	PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+
+	return SUCCESS;
+}
+/* }}} */
+","PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+{
+	const char *p;
+	char *name;
+	const char *endptr = val + vallen;
+	zval *current;
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+ 	for (p = val; p < endptr; ) {
+ 		zval **tmp;
+ 		namelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);
+ 
+ 		if (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {
+			PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+			return FAILURE;
+		}
+
+		has_value = *p & PS_BIN_UNDEF ? 0 : 1;
+
+		name = estrndup(p + 1, namelen);
+
+		p += namelen + 1;
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+				efree(name);
+				continue;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+ 			} else {
+ 				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+ 				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+		PS_ADD_VARL(name, namelen);
+ 		efree(name);
+ 	}
+ 
+	PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+
+	return SUCCESS;
+}
+/* }}} */
+",C,"	int skip = 0;
+		skip = 0;
+				skip = 1;
+				if (!skip) {
+					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+				}
+		if (!skip) {
+			PS_ADD_VARL(name, namelen);
+		}
+","				efree(name);
+				continue;
+				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+		PS_ADD_VARL(name, namelen);
+",,"@@ -924,11 +924,13 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
++	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+ 	for (p = val; p < endptr; ) {
+ 		zval **tmp;
++		skip = 0;
+ 		namelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);
+ 
+ 		if (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {
+@@ -944,22 +946,25 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+-				efree(name);
+-				continue;
++				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+-				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				if (!skip) {
++					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				}
+ 			} else {
+ 				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+ 				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+-		PS_ADD_VARL(name, namelen);
++		if (!skip) {
++			PS_ADD_VARL(name, namelen);
++		}
+ 		efree(name);
+ 	}
+ 
+@@ -1016,6 +1021,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
++	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+@@ -1024,6 +1030,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 	while (p < endptr) {
+ 		zval **tmp;
+ 		q = p;
++		skip = 0;
+ 		while (*q != PS_DELIMITER) {
+ 			if (++q >= endptr) goto break_outer_loop;
+ 		}
+@@ -1040,14 +1047,16 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+-				goto skip;
++				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+-				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				if (!skip) {
++					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				}
+ 			} else {
+ 				var_push_dtor_no_addref(&var_hash, &current);
+ 				efree(name);
+@@ -1056,7 +1065,9 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+-		PS_ADD_VARL(name, namelen);
++		if (!skip) {
++			PS_ADD_VARL(name, namelen);
++		}
+ skip:
+ 		efree(name);
+ ",php-src,8763c6090d627d8bb0ee1d030c30e58f406be9ce?w=1,448c9be157f4147e121f1a2a524536c75c9c6059,1,"PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+{
+	const char *p;
+	char *name;
+	const char *endptr = val + vallen;
+	zval *current;
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
+//fix_flaw_line_below:
+//	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+ 	for (p = val; p < endptr; ) {
+ 		zval **tmp;
+//fix_flaw_line_below:
+//		skip = 0;
+ 		namelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);
+ 
+ 		if (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {
+			PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+			return FAILURE;
+		}
+
+		has_value = *p & PS_BIN_UNDEF ? 0 : 1;
+
+		name = estrndup(p + 1, namelen);
+
+		p += namelen + 1;
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+//flaw_line_below:
+				efree(name);
+//flaw_line_below:
+				continue;
+//fix_flaw_line_below:
+//				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+//flaw_line_below:
+				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+//fix_flaw_line_below:
+//				if (!skip) {
+//fix_flaw_line_below:
+//					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+//fix_flaw_line_below:
+//				}
+ 			} else {
+ 				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+ 				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+//flaw_line_below:
+		PS_ADD_VARL(name, namelen);
+//fix_flaw_line_below:
+//		if (!skip) {
+//fix_flaw_line_below:
+//			PS_ADD_VARL(name, namelen);
+//fix_flaw_line_below:
+//		}
+ 		efree(name);
+ 	}
+ 
+	PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+
+	return SUCCESS;
+}
+/* }}} */
+"
+2395,180131,,Remote,Not required,,CVE-2016-7125,https://www.cvedetails.com/cve/CVE-2016-7125/,CWE-74,Low,,Partial,,2016-09-11,5.0,"ext/session/session.c in PHP before 5.6.25 and 7.x before 7.0.10 skips invalid session names in a way that triggers incorrect parsing, which allows remote attackers to inject arbitrary-type session data by leveraging control of a session name, as demonstrated by object injection.",2018-01-04,,9,https://github.com/php/php-src/commit/8763c6090d627d8bb0ee1d030c30e58f406be9ce?w=1,8763c6090d627d8bb0ee1d030c30e58f406be9ce?w=1,Fix bug #72681 - consume data even if we're not storing them,3,ext/session/session.c,"{""sha"": ""b2d02361dfd139a2bddf402d96d2b819ba27eb77"", ""filename"": ""ext/session/session.c"", ""status"": ""modified"", ""additions"": 18, ""deletions"": 7, ""changes"": 25, ""blob_url"": ""https://github.com/php/php-src/blob/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/session.c"", ""raw_url"": ""https://github.com/php/php-src/raw/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/session.c"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/ext/session/session.c?ref=8763c6090d627d8bb0ee1d030c30e58f406be9ce"", ""patch"": ""@@ -924,11 +924,13 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */\n \tint namelen;\n \tint has_value;\n \tphp_unserialize_data_t var_hash;\n+\tint skip = 0;\n \n \tPHP_VAR_UNSERIALIZE_INIT(var_hash);\n \n \tfor (p = val; p < endptr; ) {\n \t\tzval **tmp;\n+\t\tskip = 0;\n \t\tnamelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);\n \n \t\tif (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {\n@@ -944,22 +946,25 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */\n \n \t\tif (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {\n \t\t\tif ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {\n-\t\t\t\tefree(name);\n-\t\t\t\tcontinue;\n+\t\t\t\tskip = 1;\n \t\t\t}\n \t\t}\n \n \t\tif (has_value) {\n \t\t\tALLOC_INIT_ZVAL(current);\n \t\t\tif (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {\n-\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\tif (!skip) {\n+\t\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\t}\n \t\t\t} else {\n \t\t\t\tPHP_VAR_UNSERIALIZE_DESTROY(var_hash);\n \t\t\t\treturn FAILURE;\n \t\t\t}\n \t\t\tvar_push_dtor_no_addref(&var_hash, &current);\n \t\t}\n-\t\tPS_ADD_VARL(name, namelen);\n+\t\tif (!skip) {\n+\t\t\tPS_ADD_VARL(name, namelen);\n+\t\t}\n \t\tefree(name);\n \t}\n \n@@ -1016,6 +1021,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \tint namelen;\n \tint has_value;\n \tphp_unserialize_data_t var_hash;\n+\tint skip = 0;\n \n \tPHP_VAR_UNSERIALIZE_INIT(var_hash);\n \n@@ -1024,6 +1030,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \twhile (p < endptr) {\n \t\tzval **tmp;\n \t\tq = p;\n+\t\tskip = 0;\n \t\twhile (*q != PS_DELIMITER) {\n \t\t\tif (++q >= endptr) goto break_outer_loop;\n \t\t}\n@@ -1040,14 +1047,16 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \n \t\tif (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {\n \t\t\tif ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {\n-\t\t\t\tgoto skip;\n+\t\t\t\tskip = 1;\n \t\t\t}\n \t\t}\n \n \t\tif (has_value) {\n \t\t\tALLOC_INIT_ZVAL(current);\n \t\t\tif (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {\n-\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\tif (!skip) {\n+\t\t\t\t\tphp_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);\n+\t\t\t\t}\n \t\t\t} else {\n \t\t\t\tvar_push_dtor_no_addref(&var_hash, &current);\n \t\t\t\tefree(name);\n@@ -1056,7 +1065,9 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */\n \t\t\t}\n \t\t\tvar_push_dtor_no_addref(&var_hash, &current);\n \t\t}\n-\t\tPS_ADD_VARL(name, namelen);\n+\t\tif (!skip) {\n+\t\t\tPS_ADD_VARL(name, namelen);\n+\t\t}\n skip:\n \t\tefree(name);\n ""}<_**next**_>{""sha"": ""ca38b07fc909eddb81182f78472bfcdb81fa9965"", ""filename"": ""ext/session/tests/bug72681.phpt"", ""status"": ""added"", ""additions"": 16, ""deletions"": 0, ""changes"": 16, ""blob_url"": ""https://github.com/php/php-src/blob/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/tests/bug72681.phpt"", ""raw_url"": ""https://github.com/php/php-src/raw/8763c6090d627d8bb0ee1d030c30e58f406be9ce/ext/session/tests/bug72681.phpt"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/ext/session/tests/bug72681.phpt?ref=8763c6090d627d8bb0ee1d030c30e58f406be9ce"", ""patch"": ""@@ -0,0 +1,16 @@\n+--TEST--\n+Bug #72681: PHP Session Data Injection Vulnerability\n+--SKIPIF--\n+<?php include('skipif.inc'); ?>\n+--FILE--\n+<?php\n+ini_set('session.serialize_handler', 'php');\n+session_start();\n+$_SESSION['_SESSION'] = 'ryat|O:8:\""stdClass\"":0:{}';\n+session_write_close();\n+session_start();\n+var_dump($_SESSION);\n+?>\n+--EXPECT--\n+array(0) {\n+}""}","PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+{
+	const char *p, *q;
+	char *name;
+	const char *endptr = val + vallen;
+	zval *current;
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
+	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+	p = val;
+
+ 	while (p < endptr) {
+ 		zval **tmp;
+ 		q = p;
+		skip = 0;
+ 		while (*q != PS_DELIMITER) {
+ 			if (++q >= endptr) goto break_outer_loop;
+ 		}
+		if (p[0] == PS_UNDEF_MARKER) {
+			p++;
+			has_value = 0;
+		} else {
+			has_value = 1;
+		}
+
+		namelen = q - p;
+		name = estrndup(p, namelen);
+		q++;
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+				if (!skip) {
+					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+				}
+ 			} else {
+ 				var_push_dtor_no_addref(&var_hash, &current);
+ 				efree(name);
+				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+		if (!skip) {
+			PS_ADD_VARL(name, namelen);
+		}
+ skip:
+ 		efree(name);
+ 
+		p = q;
+	}
+break_outer_loop:
+
+	PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+
+	return SUCCESS;
+}
+/* }}} */
+","PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+{
+	const char *p, *q;
+	char *name;
+	const char *endptr = val + vallen;
+	zval *current;
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+	p = val;
+
+ 	while (p < endptr) {
+ 		zval **tmp;
+ 		q = p;
+ 		while (*q != PS_DELIMITER) {
+ 			if (++q >= endptr) goto break_outer_loop;
+ 		}
+		if (p[0] == PS_UNDEF_MARKER) {
+			p++;
+			has_value = 0;
+		} else {
+			has_value = 1;
+		}
+
+		namelen = q - p;
+		name = estrndup(p, namelen);
+		q++;
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+				goto skip;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+ 			} else {
+ 				var_push_dtor_no_addref(&var_hash, &current);
+ 				efree(name);
+				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+		PS_ADD_VARL(name, namelen);
+ skip:
+ 		efree(name);
+ 
+		p = q;
+	}
+break_outer_loop:
+
+	PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+
+	return SUCCESS;
+}
+/* }}} */
+",C,"	int skip = 0;
+		skip = 0;
+				skip = 1;
+				if (!skip) {
+					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+				}
+		if (!skip) {
+			PS_ADD_VARL(name, namelen);
+		}
+","				goto skip;
+				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+		PS_ADD_VARL(name, namelen);
+",,"@@ -924,11 +924,13 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
++	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+ 	for (p = val; p < endptr; ) {
+ 		zval **tmp;
++		skip = 0;
+ 		namelen = ((unsigned char)(*p)) & (~PS_BIN_UNDEF);
+ 
+ 		if (namelen < 0 || namelen > PS_BIN_MAX || (p + namelen) >= endptr) {
+@@ -944,22 +946,25 @@ PS_SERIALIZER_DECODE_FUNC(php_binary) /* {{{ */
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+-				efree(name);
+-				continue;
++				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &p, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+-				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				if (!skip) {
++					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				}
+ 			} else {
+ 				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+ 				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+-		PS_ADD_VARL(name, namelen);
++		if (!skip) {
++			PS_ADD_VARL(name, namelen);
++		}
+ 		efree(name);
+ 	}
+ 
+@@ -1016,6 +1021,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
++	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+@@ -1024,6 +1030,7 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 	while (p < endptr) {
+ 		zval **tmp;
+ 		q = p;
++		skip = 0;
+ 		while (*q != PS_DELIMITER) {
+ 			if (++q >= endptr) goto break_outer_loop;
+ 		}
+@@ -1040,14 +1047,16 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+-				goto skip;
++				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+-				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				if (!skip) {
++					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
++				}
+ 			} else {
+ 				var_push_dtor_no_addref(&var_hash, &current);
+ 				efree(name);
+@@ -1056,7 +1065,9 @@ PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+-		PS_ADD_VARL(name, namelen);
++		if (!skip) {
++			PS_ADD_VARL(name, namelen);
++		}
+ skip:
+ 		efree(name);
+ ",php-src,8763c6090d627d8bb0ee1d030c30e58f406be9ce?w=1,448c9be157f4147e121f1a2a524536c75c9c6059,1,"PS_SERIALIZER_DECODE_FUNC(php) /* {{{ */
+{
+	const char *p, *q;
+	char *name;
+	const char *endptr = val + vallen;
+	zval *current;
+ 	int namelen;
+ 	int has_value;
+ 	php_unserialize_data_t var_hash;
+//fix_flaw_line_below:
+//	int skip = 0;
+ 
+ 	PHP_VAR_UNSERIALIZE_INIT(var_hash);
+ 
+	p = val;
+
+ 	while (p < endptr) {
+ 		zval **tmp;
+ 		q = p;
+//fix_flaw_line_below:
+//		skip = 0;
+ 		while (*q != PS_DELIMITER) {
+ 			if (++q >= endptr) goto break_outer_loop;
+ 		}
+		if (p[0] == PS_UNDEF_MARKER) {
+			p++;
+			has_value = 0;
+		} else {
+			has_value = 1;
+		}
+
+		namelen = q - p;
+		name = estrndup(p, namelen);
+		q++;
+ 
+ 		if (zend_hash_find(&EG(symbol_table), name, namelen + 1, (void **) &tmp) == SUCCESS) {
+ 			if ((Z_TYPE_PP(tmp) == IS_ARRAY && Z_ARRVAL_PP(tmp) == &EG(symbol_table)) || *tmp == PS(http_session_vars)) {
+//flaw_line_below:
+				goto skip;
+//fix_flaw_line_below:
+//				skip = 1;
+ 			}
+ 		}
+ 
+ 		if (has_value) {
+ 			ALLOC_INIT_ZVAL(current);
+ 			if (php_var_unserialize(&current, (const unsigned char **) &q, (const unsigned char *) endptr, &var_hash TSRMLS_CC)) {
+//flaw_line_below:
+				php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+//fix_flaw_line_below:
+//				if (!skip) {
+//fix_flaw_line_below:
+//					php_set_session_var(name, namelen, current, &var_hash  TSRMLS_CC);
+//fix_flaw_line_below:
+//				}
+ 			} else {
+ 				var_push_dtor_no_addref(&var_hash, &current);
+ 				efree(name);
+				PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+				return FAILURE;
+ 			}
+ 			var_push_dtor_no_addref(&var_hash, &current);
+ 		}
+//flaw_line_below:
+		PS_ADD_VARL(name, namelen);
+//fix_flaw_line_below:
+//		if (!skip) {
+//fix_flaw_line_below:
+//			PS_ADD_VARL(name, namelen);
+//fix_flaw_line_below:
+//		}
+ skip:
+ 		efree(name);
+ 
+		p = q;
+	}
+break_outer_loop:
+
+	PHP_VAR_UNSERIALIZE_DESTROY(var_hash);
+
+	return SUCCESS;
+}
+/* }}} */
+"
+4273,182009,,Local,Not required,Partial,CVE-2016-3695,https://www.cvedetails.com/cve/CVE-2016-3695/,CWE-74,Low,,,,2017-12-29,2.1,The einj_error_inject function in drivers/acpi/apei/einj.c in the Linux kernel allows local users to simulate hardware errors and consequently cause a denial of service by leveraging failure to disable APEI error injection through EINJ when securelevel is set.,2018-01-10,DoS ,3,https://github.com/mjg59/linux/commit/d7a6be58edc01b1c66ecd8fcc91236bfbce0a420,d7a6be58edc01b1c66ecd8fcc91236bfbce0a420,"acpi: Disable APEI error injection if securelevel is set
+
+ACPI provides an error injection mechanism, EINJ, for debugging and testing
+the ACPI Platform Error Interface (APEI) and other RAS features. If
+supported by the firmware, ACPI specification 5.0 and later provide for a
+way to specify a physical memory address to which to inject the error.
+
+Injecting errors through EINJ can produce errors which to the platform are
+indistinguishable from real hardware errors. This can have undesirable
+side-effects, such as causing the platform to mark hardware as needing
+replacement.
+
+While it does not provide a method to load unauthenticated privileged code,
+the effect of these errors may persist across reboots and affect trust in
+the underlying hardware, so disable error injection through EINJ if
+securelevel is set.
+
+Signed-off-by: Linn Crosetto <linn@hpe.com>",0,drivers/acpi/apei/einj.c,"{""sha"": ""8c1e5f17fb3da11d6151fa873db6de1684829211"", ""filename"": ""drivers/acpi/apei/einj.c"", ""status"": ""modified"", ""additions"": 4, ""deletions"": 0, ""changes"": 4, ""blob_url"": ""https://github.com/mjg59/linux/blob/d7a6be58edc01b1c66ecd8fcc91236bfbce0a420/drivers/acpi/apei/einj.c"", ""raw_url"": ""https://github.com/mjg59/linux/raw/d7a6be58edc01b1c66ecd8fcc91236bfbce0a420/drivers/acpi/apei/einj.c"", ""contents_url"": ""https://api.github.com/repos/mjg59/linux/contents/drivers/acpi/apei/einj.c?ref=d7a6be58edc01b1c66ecd8fcc91236bfbce0a420"", ""patch"": ""@@ -29,6 +29,7 @@\n #include <linux/nmi.h>\n #include <linux/delay.h>\n #include <linux/mm.h>\n+#include <linux/security.h>\n #include <asm/unaligned.h>\n \n #include \""apei-internal.h\""\n@@ -521,6 +522,9 @@ static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,\n \tint rc;\n \tu64 base_addr, size;\n \n+\tif (get_securelevel() > 0)\n+\t\treturn -EPERM;\n+\n \t/* If user manually set \""flags\"", make sure it is legal */\n \tif (flags && (flags &\n \t\t~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))""}","static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+	if (get_securelevel() > 0)
+		return -EPERM;
+
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+","static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+",C,"	if (get_securelevel() > 0)
+		return -EPERM;
+
+",,,"@@ -29,6 +29,7 @@
+ #include <linux/nmi.h>
+ #include <linux/delay.h>
+ #include <linux/mm.h>
++#include <linux/security.h>
+ #include <asm/unaligned.h>
+ 
+ #include ""apei-internal.h""
+@@ -521,6 +522,9 @@ static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+ 	int rc;
+ 	u64 base_addr, size;
+ 
++	if (get_securelevel() > 0)
++		return -EPERM;
++
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))",linux,d7a6be58edc01b1c66ecd8fcc91236bfbce0a420,a4a5ed2835e8ea042868b7401dced3f517cafa76,1,"static int einj_error_inject(u32 type, u32 flags, u64 param1, u64 param2,
+			     u64 param3, u64 param4)
+{
+ 	int rc;
+ 	u64 base_addr, size;
+ 
+//fix_flaw_line_below:
+//	if (get_securelevel() > 0)
+//fix_flaw_line_below:
+//		return -EPERM;
+//fix_flaw_line_below:
+//
+ 	/* If user manually set ""flags"", make sure it is legal */
+ 	if (flags && (flags &
+ 		~(SETWA_FLAGS_APICID|SETWA_FLAGS_MEM|SETWA_FLAGS_PCIE_SBDF)))
+		return -EINVAL;
+
+	/*
+	 * We need extra sanity checks for memory errors.
+	 * Other types leap directly to injection.
+	 */
+
+	/* ensure param1/param2 existed */
+	if (!(param_extension || acpi5))
+		goto inject;
+
+	/* ensure injection is memory related */
+	if (type & ACPI5_VENDOR_BIT) {
+		if (vendor_flags != SETWA_FLAGS_MEM)
+			goto inject;
+	} else if (!(type & MEM_ERROR_MASK) && !(flags & SETWA_FLAGS_MEM))
+		goto inject;
+
+	/*
+	 * Disallow crazy address masks that give BIOS leeway to pick
+	 * injection address almost anywhere. Insist on page or
+	 * better granularity and that target address is normal RAM or
+	 * NVDIMM.
+	 */
+	base_addr = param1 & param2;
+	size = ~param2 + 1;
+
+	if (((param2 & PAGE_MASK) != PAGE_MASK) ||
+	    ((region_intersects(base_addr, size, IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
+				!= REGION_INTERSECTS) &&
+	     (region_intersects(base_addr, size, IORESOURCE_MEM, IORES_DESC_PERSISTENT_MEMORY)
+				!= REGION_INTERSECTS)))
+		return -EINVAL;
+
+inject:
+	mutex_lock(&einj_mutex);
+	rc = __einj_error_inject(type, flags, param1, param2, param3, param4);
+	mutex_unlock(&einj_mutex);
+
+	return rc;
+}
+"

@@ -1,0 +1,2767 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+520,"[""CWE-189""]",linux-2.6,328fc47ea0bcc27d9afa69c3ad6e52431cadd76c,328fc47ea0bcc27d9afa69c3ad6e52431cadd76c,0,488919,3.060759777542683e+38,39.0,"sctp: correct bounds check in sctp_setsockopt_auth_key
+
+The bonds check to prevent buffer overlflow was not exactly
+right.  It still allowed overflow of up to 8 bytes which is
+sizeof(struct sctp_authkey).
+
+Since optlen is already checked against the size of that struct,
+we are guaranteed not to cause interger overflow either.
+
+Signed-off-by: Vlad Yasevich <vladislav.yasevich@hp.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int sctp_setsockopt_auth_key(struct sock *sk,
+				    char __user *optval,
+				    int optlen)
+{
+	struct sctp_authkey *authkey;
+	struct sctp_association *asoc;
+	int ret;
+
+	if (!sctp_auth_enable)
+		return -EACCES;
+
+	if (optlen <= sizeof(struct sctp_authkey))
+		return -EINVAL;
+
+	authkey = kmalloc(optlen, GFP_KERNEL);
+	if (!authkey)
+		return -ENOMEM;
+
+	if (copy_from_user(authkey, optval, optlen)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	if (authkey->sca_keylength > optlen) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	asoc = sctp_id2assoc(sk, authkey->sca_assoc_id);
+	if (!asoc && authkey->sca_assoc_id && sctp_style(sk, UDP)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = sctp_auth_set_key(sctp_sk(sk)->ep, asoc, authkey);
+out:
+	kfree(authkey);
+	return ret;
+}","static int sctp_setsockopt_auth_key(struct sock *sk,
+				    char __user *optval,
+				    int optlen)
+{
+	struct sctp_authkey *authkey;
+	struct sctp_association *asoc;
+	int ret;
+
+	if (!sctp_auth_enable)
+		return -EACCES;
+
+	if (optlen <= sizeof(struct sctp_authkey))
+		return -EINVAL;
+
+	authkey = kmalloc(optlen, GFP_KERNEL);
+	if (!authkey)
+		return -ENOMEM;
+
+	if (copy_from_user(authkey, optval, optlen)) {
+		ret = -EFAULT;
+		goto out;
+	}
+
+	if (authkey->sca_keylength > optlen - sizeof(struct sctp_authkey)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	asoc = sctp_id2assoc(sk, authkey->sca_assoc_id);
+	if (!asoc && authkey->sca_assoc_id && sctp_style(sk, UDP)) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	ret = sctp_auth_set_key(sctp_sk(sk)->ep, asoc, authkey);
+out:
+	kfree(authkey);
+	return ret;
+}",
+525,"[""CWE-189""]",gzip,a3db5806d012082b9e25cc36d09f19cd736a468f,a3db5806d012082b9e25cc36d09f19cd736a468f,0,491979,1.174712110431115e+38,190.0,"gzip -d: do not clobber stack for valid input on x86_64
+
+* unlzw.c (unlzw): Avoid integer overflow.
+Aki Helin reported the segfault along with an input to trigger the bug.
+* NEWS (Bug fixes): Mention it.",other,"int unlzw(in, out)
+    int in, out;    /* input and output file descriptors */
+{
+    REG2   char_type  *stackp;
+    REG3   code_int   code;
+    REG4   int        finchar;
+    REG5   code_int   oldcode;
+    REG6   code_int   incode;
+    REG7   long       inbits;
+    REG8   long       posbits;
+    REG9   int        outpos;
+/*  REG10  int        insize; (global) */
+    REG11  unsigned   bitmask;
+    REG12  code_int   free_ent;
+    REG13  code_int   maxcode;
+    REG14  code_int   maxmaxcode;
+    REG15  int        n_bits;
+    REG16  int        rsize;
+
+#ifdef MAXSEG_64K
+    tab_prefix[0] = tab_prefix0;
+    tab_prefix[1] = tab_prefix1;
+#endif
+    maxbits = get_byte();
+    block_mode = maxbits & BLOCK_MODE;
+    if ((maxbits & LZW_RESERVED) != 0) {
+	WARN((stderr, ""\n%s: %s: warning, unknown flags 0x%x\n"",
+	      program_name, ifname, maxbits & LZW_RESERVED));
+    }
+    maxbits &= BIT_MASK;
+    maxmaxcode = MAXCODE(maxbits);
+
+    if (maxbits > BITS) {
+	fprintf(stderr,
+		""\n%s: %s: compressed with %d bits, can only handle %d bits\n"",
+		program_name, ifname, maxbits, BITS);
+	exit_code = ERROR;
+	return ERROR;
+    }
+    rsize = insize;
+    maxcode = MAXCODE(n_bits = INIT_BITS)-1;
+    bitmask = (1<<n_bits)-1;
+    oldcode = -1;
+    finchar = 0;
+    outpos = 0;
+    posbits = inptr<<3;
+
+    free_ent = ((block_mode) ? FIRST : 256);
+
+    clear_tab_prefixof(); /* Initialize the first 256 entries in the table. */
+
+    for (code = 255 ; code >= 0 ; --code) {
+	tab_suffixof(code) = (char_type)code;
+    }
+    do {
+	REG1 int i;
+	int  e;
+	int  o;
+
+    resetbuf:
+	e = insize-(o = (posbits>>3));
+
+	for (i = 0 ; i < e ; ++i) {
+	    inbuf[i] = inbuf[i+o];
+	}
+	insize = e;
+	posbits = 0;
+
+	if (insize < INBUF_EXTRA) {
+	    rsize = read_buffer (in, (char *) inbuf + insize, INBUFSIZ);
+	    if (rsize == -1) {
+		read_error();
+	    }
+	    insize += rsize;
+	    bytes_in += (off_t)rsize;
+	}
+	inbits = ((rsize != 0) ? ((long)insize - insize%n_bits)<<3 :
+		  ((long)insize<<3)-(n_bits-1));
+
+	while (inbits > posbits) {
+	    if (free_ent > maxcode) {
+		posbits = ((posbits-1) +
+			   ((n_bits<<3)-(posbits-1+(n_bits<<3))%(n_bits<<3)));
+		++n_bits;
+		if (n_bits == maxbits) {
+		    maxcode = maxmaxcode;
+		} else {
+		    maxcode = MAXCODE(n_bits)-1;
+		}
+		bitmask = (1<<n_bits)-1;
+		goto resetbuf;
+	    }
+	    input(inbuf,posbits,code,n_bits,bitmask);
+	    Tracev((stderr, ""%d "", code));
+
+	    if (oldcode == -1) {
+		if (256 <= code)
+		  gzip_error (""corrupt input."");
+		outbuf[outpos++] = (char_type)(finchar = (int)(oldcode=code));
+		continue;
+	    }
+	    if (code == CLEAR && block_mode) {
+		clear_tab_prefixof();
+		free_ent = FIRST - 1;
+		posbits = ((posbits-1) +
+			   ((n_bits<<3)-(posbits-1+(n_bits<<3))%(n_bits<<3)));
+		maxcode = MAXCODE(n_bits = INIT_BITS)-1;
+		bitmask = (1<<n_bits)-1;
+		goto resetbuf;
+	    }
+	    incode = code;
+	    stackp = de_stack;
+
+	    if (code >= free_ent) { /* Special case for KwKwK string. */
+		if (code > free_ent) {
+#ifdef DEBUG
+		    char_type *p;
+
+		    posbits -= n_bits;
+		    p = &inbuf[posbits>>3];
+		    fprintf(stderr,
+			    ""code:%ld free_ent:%ld n_bits:%d insize:%u\n"",
+			    code, free_ent, n_bits, insize);
+		    fprintf(stderr,
+			    ""posbits:%ld inbuf:%02X %02X %02X %02X %02X\n"",
+			    posbits, p[-1],p[0],p[1],p[2],p[3]);
+#endif
+		    if (!test && outpos > 0) {
+			write_buf(out, (char*)outbuf, outpos);
+			bytes_out += (off_t)outpos;
+		    }
+		    gzip_error (to_stdout
+				? ""corrupt input.""
+				: ""corrupt input. Use zcat to recover some data."");
+		}
+		*--stackp = (char_type)finchar;
+		code = oldcode;
+	    }
+
+	    while ((cmp_code_int)code >= (cmp_code_int)256) {
+		/* Generate output characters in reverse order */
+		*--stackp = tab_suffixof(code);
+		code = tab_prefixof(code);
+	    }
+	    *--stackp =	(char_type)(finchar = tab_suffixof(code));
+
+	    /* And put them out in forward order */
+	    {
+		REG1 int	i;
+
+		if (outpos+(i = (de_stack-stackp)) >= OUTBUFSIZ) {
+		    do {
+			if (i > OUTBUFSIZ-outpos) i = OUTBUFSIZ-outpos;
+
+			if (i > 0) {
+			    memcpy(outbuf+outpos, stackp, i);
+			    outpos += i;
+			}
+			if (outpos >= OUTBUFSIZ) {
+			    if (!test) {
+				write_buf(out, (char*)outbuf, outpos);
+				bytes_out += (off_t)outpos;
+			    }
+			    outpos = 0;
+			}
+			stackp+= i;
+		    } while ((i = (de_stack-stackp)) > 0);
+		} else {
+		    memcpy(outbuf+outpos, stackp, i);
+		    outpos += i;
+		}
+	    }
+
+	    if ((code = free_ent) < maxmaxcode) { /* Generate the new entry. */
+
+		tab_prefixof(code) = (unsigned short)oldcode;
+		tab_suffixof(code) = (char_type)finchar;
+		free_ent = code+1;
+	    }
+	    oldcode = incode;	/* Remember previous code.	*/
+	}
+    } while (rsize != 0);
+
+    if (!test && outpos > 0) {
+	write_buf(out, (char*)outbuf, outpos);
+	bytes_out += (off_t)outpos;
+    }
+    return OK;
+}","int unlzw(in, out)
+    int in, out;    /* input and output file descriptors */
+{
+    REG2   char_type  *stackp;
+    REG3   code_int   code;
+    REG4   int        finchar;
+    REG5   code_int   oldcode;
+    REG6   code_int   incode;
+    REG7   long       inbits;
+    REG8   long       posbits;
+    REG9   int        outpos;
+/*  REG10  int        insize; (global) */
+    REG11  unsigned   bitmask;
+    REG12  code_int   free_ent;
+    REG13  code_int   maxcode;
+    REG14  code_int   maxmaxcode;
+    REG15  int        n_bits;
+    REG16  int        rsize;
+
+#ifdef MAXSEG_64K
+    tab_prefix[0] = tab_prefix0;
+    tab_prefix[1] = tab_prefix1;
+#endif
+    maxbits = get_byte();
+    block_mode = maxbits & BLOCK_MODE;
+    if ((maxbits & LZW_RESERVED) != 0) {
+	WARN((stderr, ""\n%s: %s: warning, unknown flags 0x%x\n"",
+	      program_name, ifname, maxbits & LZW_RESERVED));
+    }
+    maxbits &= BIT_MASK;
+    maxmaxcode = MAXCODE(maxbits);
+
+    if (maxbits > BITS) {
+	fprintf(stderr,
+		""\n%s: %s: compressed with %d bits, can only handle %d bits\n"",
+		program_name, ifname, maxbits, BITS);
+	exit_code = ERROR;
+	return ERROR;
+    }
+    rsize = insize;
+    maxcode = MAXCODE(n_bits = INIT_BITS)-1;
+    bitmask = (1<<n_bits)-1;
+    oldcode = -1;
+    finchar = 0;
+    outpos = 0;
+    posbits = inptr<<3;
+
+    free_ent = ((block_mode) ? FIRST : 256);
+
+    clear_tab_prefixof(); /* Initialize the first 256 entries in the table. */
+
+    for (code = 255 ; code >= 0 ; --code) {
+	tab_suffixof(code) = (char_type)code;
+    }
+    do {
+	REG1 int i;
+	int  e;
+	int  o;
+
+    resetbuf:
+	o = posbits >> 3;
+	e = o <= insize ? insize - o : 0;
+
+	for (i = 0 ; i < e ; ++i) {
+	    inbuf[i] = inbuf[i+o];
+	}
+	insize = e;
+	posbits = 0;
+
+	if (insize < INBUF_EXTRA) {
+	    rsize = read_buffer (in, (char *) inbuf + insize, INBUFSIZ);
+	    if (rsize == -1) {
+		read_error();
+	    }
+	    insize += rsize;
+	    bytes_in += (off_t)rsize;
+	}
+	inbits = ((rsize != 0) ? ((long)insize - insize%n_bits)<<3 :
+		  ((long)insize<<3)-(n_bits-1));
+
+	while (inbits > posbits) {
+	    if (free_ent > maxcode) {
+		posbits = ((posbits-1) +
+			   ((n_bits<<3)-(posbits-1+(n_bits<<3))%(n_bits<<3)));
+		++n_bits;
+		if (n_bits == maxbits) {
+		    maxcode = maxmaxcode;
+		} else {
+		    maxcode = MAXCODE(n_bits)-1;
+		}
+		bitmask = (1<<n_bits)-1;
+		goto resetbuf;
+	    }
+	    input(inbuf,posbits,code,n_bits,bitmask);
+	    Tracev((stderr, ""%d "", code));
+
+	    if (oldcode == -1) {
+		if (256 <= code)
+		  gzip_error (""corrupt input."");
+		outbuf[outpos++] = (char_type)(finchar = (int)(oldcode=code));
+		continue;
+	    }
+	    if (code == CLEAR && block_mode) {
+		clear_tab_prefixof();
+		free_ent = FIRST - 1;
+		posbits = ((posbits-1) +
+			   ((n_bits<<3)-(posbits-1+(n_bits<<3))%(n_bits<<3)));
+		maxcode = MAXCODE(n_bits = INIT_BITS)-1;
+		bitmask = (1<<n_bits)-1;
+		goto resetbuf;
+	    }
+	    incode = code;
+	    stackp = de_stack;
+
+	    if (code >= free_ent) { /* Special case for KwKwK string. */
+		if (code > free_ent) {
+#ifdef DEBUG
+		    char_type *p;
+
+		    posbits -= n_bits;
+		    p = &inbuf[posbits>>3];
+		    fprintf(stderr,
+			    ""code:%ld free_ent:%ld n_bits:%d insize:%u\n"",
+			    code, free_ent, n_bits, insize);
+		    fprintf(stderr,
+			    ""posbits:%ld inbuf:%02X %02X %02X %02X %02X\n"",
+			    posbits, p[-1],p[0],p[1],p[2],p[3]);
+#endif
+		    if (!test && outpos > 0) {
+			write_buf(out, (char*)outbuf, outpos);
+			bytes_out += (off_t)outpos;
+		    }
+		    gzip_error (to_stdout
+				? ""corrupt input.""
+				: ""corrupt input. Use zcat to recover some data."");
+		}
+		*--stackp = (char_type)finchar;
+		code = oldcode;
+	    }
+
+	    while ((cmp_code_int)code >= (cmp_code_int)256) {
+		/* Generate output characters in reverse order */
+		*--stackp = tab_suffixof(code);
+		code = tab_prefixof(code);
+	    }
+	    *--stackp =	(char_type)(finchar = tab_suffixof(code));
+
+	    /* And put them out in forward order */
+	    {
+		REG1 int	i;
+
+		if (outpos+(i = (de_stack-stackp)) >= OUTBUFSIZ) {
+		    do {
+			if (i > OUTBUFSIZ-outpos) i = OUTBUFSIZ-outpos;
+
+			if (i > 0) {
+			    memcpy(outbuf+outpos, stackp, i);
+			    outpos += i;
+			}
+			if (outpos >= OUTBUFSIZ) {
+			    if (!test) {
+				write_buf(out, (char*)outbuf, outpos);
+				bytes_out += (off_t)outpos;
+			    }
+			    outpos = 0;
+			}
+			stackp+= i;
+		    } while ((i = (de_stack-stackp)) > 0);
+		} else {
+		    memcpy(outbuf+outpos, stackp, i);
+		    outpos += i;
+		}
+	    }
+
+	    if ((code = free_ent) < maxmaxcode) { /* Generate the new entry. */
+
+		tab_prefixof(code) = (unsigned short)oldcode;
+		tab_suffixof(code) = (char_type)finchar;
+		free_ent = code+1;
+	    }
+	    oldcode = incode;	/* Remember previous code.	*/
+	}
+    } while (rsize != 0);
+
+    if (!test && outpos > 0) {
+	write_buf(out, (char*)outbuf, outpos);
+	bytes_out += (off_t)outpos;
+    }
+    return OK;
+}",
+2436,"[""CWE-189""]",linux-2.6,04045f98e0457aba7d4e6736f37eed189c48a5f7,04045f98e0457aba7d4e6736f37eed189c48a5f7,0,487362,3.367312734507213e+38,508.0,"[IEEE80211]: avoid integer underflow for runt rx frames
+
+Reported by Chris Evans <scarybeasts@gmail.com>:
+
+> The summary is that an evil 80211 frame can crash out a victim's
+> machine. It only applies to drivers using the 80211 wireless code, and
+> only then to certain drivers (and even then depends on a card's
+> firmware not dropping a dubious packet). I must confess I'm not
+> keeping track of Linux wireless support, and the different protocol
+> stacks etc.
+>
+> Details are as follows:
+>
+> ieee80211_rx() does not explicitly check that ""skb->len >= hdrlen"".
+> There are other skb->len checks, but not enough to prevent a subtle
+> off-by-two error if the frame has the IEEE80211_STYPE_QOS_DATA flag
+> set.
+>
+> This leads to integer underflow and crash here:
+>
+> if (frag != 0)
+>    flen -= hdrlen;
+>
+> (flen is subsequently used as a memcpy length parameter).
+
+How about this?
+
+Signed-off-by: John W. Linville <linville@tuxdriver.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
+		 struct ieee80211_rx_stats *rx_stats)
+{
+	struct net_device *dev = ieee->dev;
+	struct ieee80211_hdr_4addr *hdr;
+	size_t hdrlen;
+	u16 fc, type, stype, sc;
+	struct net_device_stats *stats;
+	unsigned int frag;
+	u8 *payload;
+	u16 ethertype;
+#ifdef NOT_YET
+	struct net_device *wds = NULL;
+	struct sk_buff *skb2 = NULL;
+	struct net_device *wds = NULL;
+	int frame_authorized = 0;
+	int from_assoc_ap = 0;
+	void *sta = NULL;
+#endif
+	u8 dst[ETH_ALEN];
+	u8 src[ETH_ALEN];
+	struct ieee80211_crypt_data *crypt = NULL;
+	int keyidx = 0;
+	int can_be_decrypted = 0;
+
+	hdr = (struct ieee80211_hdr_4addr *)skb->data;
+	stats = &ieee->stats;
+
+	if (skb->len < 10) {
+		printk(KERN_INFO ""%s: SKB length < 10\n"", dev->name);
+		goto rx_dropped;
+	}
+
+	fc = le16_to_cpu(hdr->frame_ctl);
+	type = WLAN_FC_GET_TYPE(fc);
+	stype = WLAN_FC_GET_STYPE(fc);
+	sc = le16_to_cpu(hdr->seq_ctl);
+	frag = WLAN_GET_SEQ_FRAG(sc);
+	hdrlen = ieee80211_get_hdrlen(fc);
+
+	/* Put this code here so that we avoid duplicating it in all
+	 * Rx paths. - Jean II */
+#ifdef CONFIG_WIRELESS_EXT
+#ifdef IW_WIRELESS_SPY		/* defined in iw_handler.h */
+	/* If spy monitoring on */
+	if (ieee->spy_data.spy_number > 0) {
+		struct iw_quality wstats;
+
+		wstats.updated = 0;
+		if (rx_stats->mask & IEEE80211_STATMASK_RSSI) {
+			wstats.level = rx_stats->rssi;
+			wstats.updated |= IW_QUAL_LEVEL_UPDATED;
+		} else
+			wstats.updated |= IW_QUAL_LEVEL_INVALID;
+
+		if (rx_stats->mask & IEEE80211_STATMASK_NOISE) {
+			wstats.noise = rx_stats->noise;
+			wstats.updated |= IW_QUAL_NOISE_UPDATED;
+		} else
+			wstats.updated |= IW_QUAL_NOISE_INVALID;
+
+		if (rx_stats->mask & IEEE80211_STATMASK_SIGNAL) {
+			wstats.qual = rx_stats->signal;
+			wstats.updated |= IW_QUAL_QUAL_UPDATED;
+		} else
+			wstats.updated |= IW_QUAL_QUAL_INVALID;
+
+		/* Update spy records */
+		wireless_spy_update(ieee->dev, hdr->addr2, &wstats);
+	}
+#endif				/* IW_WIRELESS_SPY */
+#endif				/* CONFIG_WIRELESS_EXT */
+
+#ifdef NOT_YET
+	hostap_update_rx_stats(local->ap, hdr, rx_stats);
+#endif
+
+	if (ieee->iw_mode == IW_MODE_MONITOR) {
+		stats->rx_packets++;
+		stats->rx_bytes += skb->len;
+		ieee80211_monitor_rx(ieee, skb, rx_stats);
+		return 1;
+	}
+
+	can_be_decrypted = (is_multicast_ether_addr(hdr->addr1) ||
+			    is_broadcast_ether_addr(hdr->addr2)) ?
+	    ieee->host_mc_decrypt : ieee->host_decrypt;
+
+	if (can_be_decrypted) {
+		if (skb->len >= hdrlen + 3) {
+			/* Top two-bits of byte 3 are the key index */
+			keyidx = skb->data[hdrlen + 3] >> 6;
+		}
+
+		/* ieee->crypt[] is WEP_KEY (4) in length.  Given that keyidx
+		 * is only allowed 2-bits of storage, no value of keyidx can
+		 * be provided via above code that would result in keyidx
+		 * being out of range */
+		crypt = ieee->crypt[keyidx];
+
+#ifdef NOT_YET
+		sta = NULL;
+
+		/* Use station specific key to override default keys if the
+		 * receiver address is a unicast address (""individual RA""). If
+		 * bcrx_sta_key parameter is set, station specific key is used
+		 * even with broad/multicast targets (this is against IEEE
+		 * 802.11, but makes it easier to use different keys with
+		 * stations that do not support WEP key mapping). */
+
+		if (!(hdr->addr1[0] & 0x01) || local->bcrx_sta_key)
+			(void)hostap_handle_sta_crypto(local, hdr, &crypt,
+						       &sta);
+#endif
+
+		/* allow NULL decrypt to indicate an station specific override
+		 * for default encryption */
+		if (crypt && (crypt->ops == NULL ||
+			      crypt->ops->decrypt_mpdu == NULL))
+			crypt = NULL;
+
+		if (!crypt && (fc & IEEE80211_FCTL_PROTECTED)) {
+			/* This seems to be triggered by some (multicast?)
+			 * frames from other than current BSS, so just drop the
+			 * frames silently instead of filling system log with
+			 * these reports. */
+			IEEE80211_DEBUG_DROP(""Decryption failed (not set)""
+					     "" (SA="" MAC_FMT "")\n"",
+					     MAC_ARG(hdr->addr2));
+			ieee->ieee_stats.rx_discards_undecryptable++;
+			goto rx_dropped;
+		}
+	}
+#ifdef NOT_YET
+	if (type != WLAN_FC_TYPE_DATA) {
+		if (type == WLAN_FC_TYPE_MGMT && stype == WLAN_FC_STYPE_AUTH &&
+		    fc & IEEE80211_FCTL_PROTECTED && ieee->host_decrypt &&
+		    (keyidx = hostap_rx_frame_decrypt(ieee, skb, crypt)) < 0) {
+			printk(KERN_DEBUG ""%s: failed to decrypt mgmt::auth ""
+			       ""from "" MAC_FMT ""\n"", dev->name,
+			       MAC_ARG(hdr->addr2));
+			/* TODO: could inform hostapd about this so that it
+			 * could send auth failure report */
+			goto rx_dropped;
+		}
+
+		if (ieee80211_rx_frame_mgmt(ieee, skb, rx_stats, type, stype))
+			goto rx_dropped;
+		else
+			goto rx_exit;
+	}
+#endif
+	/* drop duplicate 802.11 retransmissions (IEEE 802.11 Chap. 9.29) */
+	if (sc == ieee->prev_seq_ctl)
+		goto rx_dropped;
+	else
+		ieee->prev_seq_ctl = sc;
+
+	/* Data frame - extract src/dst addresses */
+	if (skb->len < IEEE80211_3ADDR_LEN)
+		goto rx_dropped;
+
+	switch (fc & (IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS)) {
+	case IEEE80211_FCTL_FROMDS:
+		memcpy(dst, hdr->addr1, ETH_ALEN);
+		memcpy(src, hdr->addr3, ETH_ALEN);
+		break;
+	case IEEE80211_FCTL_TODS:
+		memcpy(dst, hdr->addr3, ETH_ALEN);
+		memcpy(src, hdr->addr2, ETH_ALEN);
+		break;
+	case IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS:
+		if (skb->len < IEEE80211_4ADDR_LEN)
+			goto rx_dropped;
+		memcpy(dst, hdr->addr3, ETH_ALEN);
+		memcpy(src, hdr->addr4, ETH_ALEN);
+		break;
+	case 0:
+		memcpy(dst, hdr->addr1, ETH_ALEN);
+		memcpy(src, hdr->addr2, ETH_ALEN);
+		break;
+	}
+
+#ifdef NOT_YET
+	if (hostap_rx_frame_wds(ieee, hdr, fc, &wds))
+		goto rx_dropped;
+	if (wds) {
+		skb->dev = dev = wds;
+		stats = hostap_get_stats(dev);
+	}
+
+	if (ieee->iw_mode == IW_MODE_MASTER && !wds &&
+	    (fc & (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS)) ==
+	    IEEE80211_FCTL_FROMDS && ieee->stadev
+	    && !compare_ether_addr(hdr->addr2, ieee->assoc_ap_addr)) {
+		/* Frame from BSSID of the AP for which we are a client */
+		skb->dev = dev = ieee->stadev;
+		stats = hostap_get_stats(dev);
+		from_assoc_ap = 1;
+	}
+#endif
+
+	dev->last_rx = jiffies;
+
+#ifdef NOT_YET
+	if ((ieee->iw_mode == IW_MODE_MASTER ||
+	     ieee->iw_mode == IW_MODE_REPEAT) && !from_assoc_ap) {
+		switch (hostap_handle_sta_rx(ieee, dev, skb, rx_stats,
+					     wds != NULL)) {
+		case AP_RX_CONTINUE_NOT_AUTHORIZED:
+			frame_authorized = 0;
+			break;
+		case AP_RX_CONTINUE:
+			frame_authorized = 1;
+			break;
+		case AP_RX_DROP:
+			goto rx_dropped;
+		case AP_RX_EXIT:
+			goto rx_exit;
+		}
+	}
+#endif
+
+	/* Nullfunc frames may have PS-bit set, so they must be passed to
+	 * hostap_handle_sta_rx() before being dropped here. */
+
+	stype &= ~IEEE80211_STYPE_QOS_DATA;
+
+	if (stype != IEEE80211_STYPE_DATA &&
+	    stype != IEEE80211_STYPE_DATA_CFACK &&
+	    stype != IEEE80211_STYPE_DATA_CFPOLL &&
+	    stype != IEEE80211_STYPE_DATA_CFACKPOLL) {
+		if (stype != IEEE80211_STYPE_NULLFUNC)
+			IEEE80211_DEBUG_DROP(""RX: dropped data frame ""
+					     ""with no data (type=0x%02x, ""
+					     ""subtype=0x%02x, len=%d)\n"",
+					     type, stype, skb->len);
+		goto rx_dropped;
+	}
+
+	/* skb: hdr + (possibly fragmented, possibly encrypted) payload */
+
+	if ((fc & IEEE80211_FCTL_PROTECTED) && can_be_decrypted &&
+	    (keyidx = ieee80211_rx_frame_decrypt(ieee, skb, crypt)) < 0)
+		goto rx_dropped;
+
+	hdr = (struct ieee80211_hdr_4addr *)skb->data;
+
+	/* skb: hdr + (possibly fragmented) plaintext payload */
+	// PR: FIXME: hostap has additional conditions in the ""if"" below:
+	// ieee->host_decrypt && (fc & IEEE80211_FCTL_PROTECTED) &&
+	if ((frag != 0) || (fc & IEEE80211_FCTL_MOREFRAGS)) {
+		int flen;
+		struct sk_buff *frag_skb = ieee80211_frag_cache_get(ieee, hdr);
+		IEEE80211_DEBUG_FRAG(""Rx Fragment received (%u)\n"", frag);
+
+		if (!frag_skb) {
+			IEEE80211_DEBUG(IEEE80211_DL_RX | IEEE80211_DL_FRAG,
+					""Rx cannot get skb from fragment ""
+					""cache (morefrag=%d seq=%u frag=%u)\n"",
+					(fc & IEEE80211_FCTL_MOREFRAGS) != 0,
+					WLAN_GET_SEQ_SEQ(sc), frag);
+			goto rx_dropped;
+		}
+
+		flen = skb->len;
+		if (frag != 0)
+			flen -= hdrlen;
+
+		if (frag_skb->tail + flen > frag_skb->end) {
+			printk(KERN_WARNING ""%s: host decrypted and ""
+			       ""reassembled frame did not fit skb\n"",
+			       dev->name);
+			ieee80211_frag_cache_invalidate(ieee, hdr);
+			goto rx_dropped;
+		}
+
+		if (frag == 0) {
+			/* copy first fragment (including full headers) into
+			 * beginning of the fragment cache skb */
+			skb_copy_from_linear_data(skb, skb_put(frag_skb, flen), flen);
+		} else {
+			/* append frame payload to the end of the fragment
+			 * cache skb */
+			skb_copy_from_linear_data_offset(skb, hdrlen,
+				      skb_put(frag_skb, flen), flen);
+		}
+		dev_kfree_skb_any(skb);
+		skb = NULL;
+
+		if (fc & IEEE80211_FCTL_MOREFRAGS) {
+			/* more fragments expected - leave the skb in fragment
+			 * cache for now; it will be delivered to upper layers
+			 * after all fragments have been received */
+			goto rx_exit;
+		}
+
+		/* this was the last fragment and the frame will be
+		 * delivered, so remove skb from fragment cache */
+		skb = frag_skb;
+		hdr = (struct ieee80211_hdr_4addr *)skb->data;
+		ieee80211_frag_cache_invalidate(ieee, hdr);
+	}
+
+	/* skb: hdr + (possible reassembled) full MSDU payload; possibly still
+	 * encrypted/authenticated */
+	if ((fc & IEEE80211_FCTL_PROTECTED) && can_be_decrypted &&
+	    ieee80211_rx_frame_decrypt_msdu(ieee, skb, keyidx, crypt))
+		goto rx_dropped;
+
+	hdr = (struct ieee80211_hdr_4addr *)skb->data;
+	if (crypt && !(fc & IEEE80211_FCTL_PROTECTED) && !ieee->open_wep) {
+		if (		/*ieee->ieee802_1x && */
+			   ieee80211_is_eapol_frame(ieee, skb)) {
+			/* pass unencrypted EAPOL frames even if encryption is
+			 * configured */
+		} else {
+			IEEE80211_DEBUG_DROP(""encryption configured, but RX ""
+					     ""frame not encrypted (SA="" MAC_FMT
+					     "")\n"", MAC_ARG(hdr->addr2));
+			goto rx_dropped;
+		}
+	}
+
+	if (crypt && !(fc & IEEE80211_FCTL_PROTECTED) && !ieee->open_wep &&
+	    !ieee80211_is_eapol_frame(ieee, skb)) {
+		IEEE80211_DEBUG_DROP(""dropped unencrypted RX data ""
+				     ""frame from "" MAC_FMT
+				     "" (drop_unencrypted=1)\n"",
+				     MAC_ARG(hdr->addr2));
+		goto rx_dropped;
+	}
+
+	/* If the frame was decrypted in hardware, we may need to strip off
+	 * any security data (IV, ICV, etc) that was left behind */
+	if (!can_be_decrypted && (fc & IEEE80211_FCTL_PROTECTED) &&
+	    ieee->host_strip_iv_icv) {
+		int trimlen = 0;
+
+		/* Top two-bits of byte 3 are the key index */
+		if (skb->len >= hdrlen + 3)
+			keyidx = skb->data[hdrlen + 3] >> 6;
+
+		/* To strip off any security data which appears before the
+		 * payload, we simply increase hdrlen (as the header gets
+		 * chopped off immediately below). For the security data which
+		 * appears after the payload, we use skb_trim. */
+
+		switch (ieee->sec.encode_alg[keyidx]) {
+		case SEC_ALG_WEP:
+			/* 4 byte IV */
+			hdrlen += 4;
+			/* 4 byte ICV */
+			trimlen = 4;
+			break;
+		case SEC_ALG_TKIP:
+			/* 4 byte IV, 4 byte ExtIV */
+			hdrlen += 8;
+			/* 8 byte MIC, 4 byte ICV */
+			trimlen = 12;
+			break;
+		case SEC_ALG_CCMP:
+			/* 8 byte CCMP header */
+			hdrlen += 8;
+			/* 8 byte MIC */
+			trimlen = 8;
+			break;
+		}
+
+		if (skb->len < trimlen)
+			goto rx_dropped;
+
+		__skb_trim(skb, skb->len - trimlen);
+
+		if (skb->len < hdrlen)
+			goto rx_dropped;
+	}
+
+	/* skb: hdr + (possible reassembled) full plaintext payload */
+
+	payload = skb->data + hdrlen;
+	ethertype = (payload[6] << 8) | payload[7];
+
+#ifdef NOT_YET
+	/* If IEEE 802.1X is used, check whether the port is authorized to send
+	 * the received frame. */
+	if (ieee->ieee802_1x && ieee->iw_mode == IW_MODE_MASTER) {
+		if (ethertype == ETH_P_PAE) {
+			printk(KERN_DEBUG ""%s: RX: IEEE 802.1X frame\n"",
+			       dev->name);
+			if (ieee->hostapd && ieee->apdev) {
+				/* Send IEEE 802.1X frames to the user
+				 * space daemon for processing */
+				prism2_rx_80211(ieee->apdev, skb, rx_stats,
+						PRISM2_RX_MGMT);
+				ieee->apdevstats.rx_packets++;
+				ieee->apdevstats.rx_bytes += skb->len;
+				goto rx_exit;
+			}
+		} else if (!frame_authorized) {
+			printk(KERN_DEBUG ""%s: dropped frame from ""
+			       ""unauthorized port (IEEE 802.1X): ""
+			       ""ethertype=0x%04x\n"", dev->name, ethertype);
+			goto rx_dropped;
+		}
+	}
+#endif
+
+	/* convert hdr + possible LLC headers into Ethernet header */
+	if (skb->len - hdrlen >= 8 &&
+	    ((memcmp(payload, rfc1042_header, SNAP_SIZE) == 0 &&
+	      ethertype != ETH_P_AARP && ethertype != ETH_P_IPX) ||
+	     memcmp(payload, bridge_tunnel_header, SNAP_SIZE) == 0)) {
+		/* remove RFC1042 or Bridge-Tunnel encapsulation and
+		 * replace EtherType */
+		skb_pull(skb, hdrlen + SNAP_SIZE);
+		memcpy(skb_push(skb, ETH_ALEN), src, ETH_ALEN);
+		memcpy(skb_push(skb, ETH_ALEN), dst, ETH_ALEN);
+	} else {
+		u16 len;
+		/* Leave Ethernet header part of hdr and full payload */
+		skb_pull(skb, hdrlen);
+		len = htons(skb->len);
+		memcpy(skb_push(skb, 2), &len, 2);
+		memcpy(skb_push(skb, ETH_ALEN), src, ETH_ALEN);
+		memcpy(skb_push(skb, ETH_ALEN), dst, ETH_ALEN);
+	}
+
+#ifdef NOT_YET
+	if (wds && ((fc & (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS)) ==
+		    IEEE80211_FCTL_TODS) && skb->len >= ETH_HLEN + ETH_ALEN) {
+		/* Non-standard frame: get addr4 from its bogus location after
+		 * the payload */
+		skb_copy_to_linear_data_offset(skb, ETH_ALEN,
+					       skb->data + skb->len - ETH_ALEN,
+					       ETH_ALEN);
+		skb_trim(skb, skb->len - ETH_ALEN);
+	}
+#endif
+
+	stats->rx_packets++;
+	stats->rx_bytes += skb->len;
+
+#ifdef NOT_YET
+	if (ieee->iw_mode == IW_MODE_MASTER && !wds && ieee->ap->bridge_packets) {
+		if (dst[0] & 0x01) {
+			/* copy multicast frame both to the higher layers and
+			 * to the wireless media */
+			ieee->ap->bridged_multicast++;
+			skb2 = skb_clone(skb, GFP_ATOMIC);
+			if (skb2 == NULL)
+				printk(KERN_DEBUG ""%s: skb_clone failed for ""
+				       ""multicast frame\n"", dev->name);
+		} else if (hostap_is_sta_assoc(ieee->ap, dst)) {
+			/* send frame directly to the associated STA using
+			 * wireless media and not passing to higher layers */
+			ieee->ap->bridged_unicast++;
+			skb2 = skb;
+			skb = NULL;
+		}
+	}
+
+	if (skb2 != NULL) {
+		/* send to wireless media */
+		skb2->dev = dev;
+		skb2->protocol = __constant_htons(ETH_P_802_3);
+		skb_reset_mac_header(skb2);
+		skb_reset_network_header(skb2);
+		/* skb2->network_header += ETH_HLEN; */
+		dev_queue_xmit(skb2);
+	}
+#endif
+
+	if (skb) {
+		skb->protocol = eth_type_trans(skb, dev);
+		memset(skb->cb, 0, sizeof(skb->cb));
+		skb->ip_summed = CHECKSUM_NONE;	/* 802.11 crc not sufficient */
+		if (netif_rx(skb) == NET_RX_DROP) {
+			/* netif_rx always succeeds, but it might drop
+			 * the packet.  If it drops the packet, we log that
+			 * in our stats. */
+			IEEE80211_DEBUG_DROP
+			    (""RX: netif_rx dropped the packet\n"");
+			stats->rx_dropped++;
+		}
+	}
+
+      rx_exit:
+#ifdef NOT_YET
+	if (sta)
+		hostap_handle_sta_release(sta);
+#endif
+	return 1;
+
+      rx_dropped:
+	stats->rx_dropped++;
+
+	/* Returning 0 indicates to caller that we have not handled the SKB--
+	 * so it is still allocated and can be used again by underlying
+	 * hardware as a DMA target */
+	return 0;
+}","int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
+		 struct ieee80211_rx_stats *rx_stats)
+{
+	struct net_device *dev = ieee->dev;
+	struct ieee80211_hdr_4addr *hdr;
+	size_t hdrlen;
+	u16 fc, type, stype, sc;
+	struct net_device_stats *stats;
+	unsigned int frag;
+	u8 *payload;
+	u16 ethertype;
+#ifdef NOT_YET
+	struct net_device *wds = NULL;
+	struct sk_buff *skb2 = NULL;
+	struct net_device *wds = NULL;
+	int frame_authorized = 0;
+	int from_assoc_ap = 0;
+	void *sta = NULL;
+#endif
+	u8 dst[ETH_ALEN];
+	u8 src[ETH_ALEN];
+	struct ieee80211_crypt_data *crypt = NULL;
+	int keyidx = 0;
+	int can_be_decrypted = 0;
+
+	hdr = (struct ieee80211_hdr_4addr *)skb->data;
+	stats = &ieee->stats;
+
+	if (skb->len < 10) {
+		printk(KERN_INFO ""%s: SKB length < 10\n"", dev->name);
+		goto rx_dropped;
+	}
+
+	fc = le16_to_cpu(hdr->frame_ctl);
+	type = WLAN_FC_GET_TYPE(fc);
+	stype = WLAN_FC_GET_STYPE(fc);
+	sc = le16_to_cpu(hdr->seq_ctl);
+	frag = WLAN_GET_SEQ_FRAG(sc);
+	hdrlen = ieee80211_get_hdrlen(fc);
+
+	if (skb->len < hdrlen) {
+		printk(KERN_INFO ""%s: invalid SKB length %d\n"",
+			dev->name, skb->len);
+		goto rx_dropped;
+	}
+
+	/* Put this code here so that we avoid duplicating it in all
+	 * Rx paths. - Jean II */
+#ifdef CONFIG_WIRELESS_EXT
+#ifdef IW_WIRELESS_SPY		/* defined in iw_handler.h */
+	/* If spy monitoring on */
+	if (ieee->spy_data.spy_number > 0) {
+		struct iw_quality wstats;
+
+		wstats.updated = 0;
+		if (rx_stats->mask & IEEE80211_STATMASK_RSSI) {
+			wstats.level = rx_stats->rssi;
+			wstats.updated |= IW_QUAL_LEVEL_UPDATED;
+		} else
+			wstats.updated |= IW_QUAL_LEVEL_INVALID;
+
+		if (rx_stats->mask & IEEE80211_STATMASK_NOISE) {
+			wstats.noise = rx_stats->noise;
+			wstats.updated |= IW_QUAL_NOISE_UPDATED;
+		} else
+			wstats.updated |= IW_QUAL_NOISE_INVALID;
+
+		if (rx_stats->mask & IEEE80211_STATMASK_SIGNAL) {
+			wstats.qual = rx_stats->signal;
+			wstats.updated |= IW_QUAL_QUAL_UPDATED;
+		} else
+			wstats.updated |= IW_QUAL_QUAL_INVALID;
+
+		/* Update spy records */
+		wireless_spy_update(ieee->dev, hdr->addr2, &wstats);
+	}
+#endif				/* IW_WIRELESS_SPY */
+#endif				/* CONFIG_WIRELESS_EXT */
+
+#ifdef NOT_YET
+	hostap_update_rx_stats(local->ap, hdr, rx_stats);
+#endif
+
+	if (ieee->iw_mode == IW_MODE_MONITOR) {
+		stats->rx_packets++;
+		stats->rx_bytes += skb->len;
+		ieee80211_monitor_rx(ieee, skb, rx_stats);
+		return 1;
+	}
+
+	can_be_decrypted = (is_multicast_ether_addr(hdr->addr1) ||
+			    is_broadcast_ether_addr(hdr->addr2)) ?
+	    ieee->host_mc_decrypt : ieee->host_decrypt;
+
+	if (can_be_decrypted) {
+		if (skb->len >= hdrlen + 3) {
+			/* Top two-bits of byte 3 are the key index */
+			keyidx = skb->data[hdrlen + 3] >> 6;
+		}
+
+		/* ieee->crypt[] is WEP_KEY (4) in length.  Given that keyidx
+		 * is only allowed 2-bits of storage, no value of keyidx can
+		 * be provided via above code that would result in keyidx
+		 * being out of range */
+		crypt = ieee->crypt[keyidx];
+
+#ifdef NOT_YET
+		sta = NULL;
+
+		/* Use station specific key to override default keys if the
+		 * receiver address is a unicast address (""individual RA""). If
+		 * bcrx_sta_key parameter is set, station specific key is used
+		 * even with broad/multicast targets (this is against IEEE
+		 * 802.11, but makes it easier to use different keys with
+		 * stations that do not support WEP key mapping). */
+
+		if (!(hdr->addr1[0] & 0x01) || local->bcrx_sta_key)
+			(void)hostap_handle_sta_crypto(local, hdr, &crypt,
+						       &sta);
+#endif
+
+		/* allow NULL decrypt to indicate an station specific override
+		 * for default encryption */
+		if (crypt && (crypt->ops == NULL ||
+			      crypt->ops->decrypt_mpdu == NULL))
+			crypt = NULL;
+
+		if (!crypt && (fc & IEEE80211_FCTL_PROTECTED)) {
+			/* This seems to be triggered by some (multicast?)
+			 * frames from other than current BSS, so just drop the
+			 * frames silently instead of filling system log with
+			 * these reports. */
+			IEEE80211_DEBUG_DROP(""Decryption failed (not set)""
+					     "" (SA="" MAC_FMT "")\n"",
+					     MAC_ARG(hdr->addr2));
+			ieee->ieee_stats.rx_discards_undecryptable++;
+			goto rx_dropped;
+		}
+	}
+#ifdef NOT_YET
+	if (type != WLAN_FC_TYPE_DATA) {
+		if (type == WLAN_FC_TYPE_MGMT && stype == WLAN_FC_STYPE_AUTH &&
+		    fc & IEEE80211_FCTL_PROTECTED && ieee->host_decrypt &&
+		    (keyidx = hostap_rx_frame_decrypt(ieee, skb, crypt)) < 0) {
+			printk(KERN_DEBUG ""%s: failed to decrypt mgmt::auth ""
+			       ""from "" MAC_FMT ""\n"", dev->name,
+			       MAC_ARG(hdr->addr2));
+			/* TODO: could inform hostapd about this so that it
+			 * could send auth failure report */
+			goto rx_dropped;
+		}
+
+		if (ieee80211_rx_frame_mgmt(ieee, skb, rx_stats, type, stype))
+			goto rx_dropped;
+		else
+			goto rx_exit;
+	}
+#endif
+	/* drop duplicate 802.11 retransmissions (IEEE 802.11 Chap. 9.29) */
+	if (sc == ieee->prev_seq_ctl)
+		goto rx_dropped;
+	else
+		ieee->prev_seq_ctl = sc;
+
+	/* Data frame - extract src/dst addresses */
+	if (skb->len < IEEE80211_3ADDR_LEN)
+		goto rx_dropped;
+
+	switch (fc & (IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS)) {
+	case IEEE80211_FCTL_FROMDS:
+		memcpy(dst, hdr->addr1, ETH_ALEN);
+		memcpy(src, hdr->addr3, ETH_ALEN);
+		break;
+	case IEEE80211_FCTL_TODS:
+		memcpy(dst, hdr->addr3, ETH_ALEN);
+		memcpy(src, hdr->addr2, ETH_ALEN);
+		break;
+	case IEEE80211_FCTL_FROMDS | IEEE80211_FCTL_TODS:
+		if (skb->len < IEEE80211_4ADDR_LEN)
+			goto rx_dropped;
+		memcpy(dst, hdr->addr3, ETH_ALEN);
+		memcpy(src, hdr->addr4, ETH_ALEN);
+		break;
+	case 0:
+		memcpy(dst, hdr->addr1, ETH_ALEN);
+		memcpy(src, hdr->addr2, ETH_ALEN);
+		break;
+	}
+
+#ifdef NOT_YET
+	if (hostap_rx_frame_wds(ieee, hdr, fc, &wds))
+		goto rx_dropped;
+	if (wds) {
+		skb->dev = dev = wds;
+		stats = hostap_get_stats(dev);
+	}
+
+	if (ieee->iw_mode == IW_MODE_MASTER && !wds &&
+	    (fc & (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS)) ==
+	    IEEE80211_FCTL_FROMDS && ieee->stadev
+	    && !compare_ether_addr(hdr->addr2, ieee->assoc_ap_addr)) {
+		/* Frame from BSSID of the AP for which we are a client */
+		skb->dev = dev = ieee->stadev;
+		stats = hostap_get_stats(dev);
+		from_assoc_ap = 1;
+	}
+#endif
+
+	dev->last_rx = jiffies;
+
+#ifdef NOT_YET
+	if ((ieee->iw_mode == IW_MODE_MASTER ||
+	     ieee->iw_mode == IW_MODE_REPEAT) && !from_assoc_ap) {
+		switch (hostap_handle_sta_rx(ieee, dev, skb, rx_stats,
+					     wds != NULL)) {
+		case AP_RX_CONTINUE_NOT_AUTHORIZED:
+			frame_authorized = 0;
+			break;
+		case AP_RX_CONTINUE:
+			frame_authorized = 1;
+			break;
+		case AP_RX_DROP:
+			goto rx_dropped;
+		case AP_RX_EXIT:
+			goto rx_exit;
+		}
+	}
+#endif
+
+	/* Nullfunc frames may have PS-bit set, so they must be passed to
+	 * hostap_handle_sta_rx() before being dropped here. */
+
+	stype &= ~IEEE80211_STYPE_QOS_DATA;
+
+	if (stype != IEEE80211_STYPE_DATA &&
+	    stype != IEEE80211_STYPE_DATA_CFACK &&
+	    stype != IEEE80211_STYPE_DATA_CFPOLL &&
+	    stype != IEEE80211_STYPE_DATA_CFACKPOLL) {
+		if (stype != IEEE80211_STYPE_NULLFUNC)
+			IEEE80211_DEBUG_DROP(""RX: dropped data frame ""
+					     ""with no data (type=0x%02x, ""
+					     ""subtype=0x%02x, len=%d)\n"",
+					     type, stype, skb->len);
+		goto rx_dropped;
+	}
+
+	/* skb: hdr + (possibly fragmented, possibly encrypted) payload */
+
+	if ((fc & IEEE80211_FCTL_PROTECTED) && can_be_decrypted &&
+	    (keyidx = ieee80211_rx_frame_decrypt(ieee, skb, crypt)) < 0)
+		goto rx_dropped;
+
+	hdr = (struct ieee80211_hdr_4addr *)skb->data;
+
+	/* skb: hdr + (possibly fragmented) plaintext payload */
+	// PR: FIXME: hostap has additional conditions in the ""if"" below:
+	// ieee->host_decrypt && (fc & IEEE80211_FCTL_PROTECTED) &&
+	if ((frag != 0) || (fc & IEEE80211_FCTL_MOREFRAGS)) {
+		int flen;
+		struct sk_buff *frag_skb = ieee80211_frag_cache_get(ieee, hdr);
+		IEEE80211_DEBUG_FRAG(""Rx Fragment received (%u)\n"", frag);
+
+		if (!frag_skb) {
+			IEEE80211_DEBUG(IEEE80211_DL_RX | IEEE80211_DL_FRAG,
+					""Rx cannot get skb from fragment ""
+					""cache (morefrag=%d seq=%u frag=%u)\n"",
+					(fc & IEEE80211_FCTL_MOREFRAGS) != 0,
+					WLAN_GET_SEQ_SEQ(sc), frag);
+			goto rx_dropped;
+		}
+
+		flen = skb->len;
+		if (frag != 0)
+			flen -= hdrlen;
+
+		if (frag_skb->tail + flen > frag_skb->end) {
+			printk(KERN_WARNING ""%s: host decrypted and ""
+			       ""reassembled frame did not fit skb\n"",
+			       dev->name);
+			ieee80211_frag_cache_invalidate(ieee, hdr);
+			goto rx_dropped;
+		}
+
+		if (frag == 0) {
+			/* copy first fragment (including full headers) into
+			 * beginning of the fragment cache skb */
+			skb_copy_from_linear_data(skb, skb_put(frag_skb, flen), flen);
+		} else {
+			/* append frame payload to the end of the fragment
+			 * cache skb */
+			skb_copy_from_linear_data_offset(skb, hdrlen,
+				      skb_put(frag_skb, flen), flen);
+		}
+		dev_kfree_skb_any(skb);
+		skb = NULL;
+
+		if (fc & IEEE80211_FCTL_MOREFRAGS) {
+			/* more fragments expected - leave the skb in fragment
+			 * cache for now; it will be delivered to upper layers
+			 * after all fragments have been received */
+			goto rx_exit;
+		}
+
+		/* this was the last fragment and the frame will be
+		 * delivered, so remove skb from fragment cache */
+		skb = frag_skb;
+		hdr = (struct ieee80211_hdr_4addr *)skb->data;
+		ieee80211_frag_cache_invalidate(ieee, hdr);
+	}
+
+	/* skb: hdr + (possible reassembled) full MSDU payload; possibly still
+	 * encrypted/authenticated */
+	if ((fc & IEEE80211_FCTL_PROTECTED) && can_be_decrypted &&
+	    ieee80211_rx_frame_decrypt_msdu(ieee, skb, keyidx, crypt))
+		goto rx_dropped;
+
+	hdr = (struct ieee80211_hdr_4addr *)skb->data;
+	if (crypt && !(fc & IEEE80211_FCTL_PROTECTED) && !ieee->open_wep) {
+		if (		/*ieee->ieee802_1x && */
+			   ieee80211_is_eapol_frame(ieee, skb)) {
+			/* pass unencrypted EAPOL frames even if encryption is
+			 * configured */
+		} else {
+			IEEE80211_DEBUG_DROP(""encryption configured, but RX ""
+					     ""frame not encrypted (SA="" MAC_FMT
+					     "")\n"", MAC_ARG(hdr->addr2));
+			goto rx_dropped;
+		}
+	}
+
+	if (crypt && !(fc & IEEE80211_FCTL_PROTECTED) && !ieee->open_wep &&
+	    !ieee80211_is_eapol_frame(ieee, skb)) {
+		IEEE80211_DEBUG_DROP(""dropped unencrypted RX data ""
+				     ""frame from "" MAC_FMT
+				     "" (drop_unencrypted=1)\n"",
+				     MAC_ARG(hdr->addr2));
+		goto rx_dropped;
+	}
+
+	/* If the frame was decrypted in hardware, we may need to strip off
+	 * any security data (IV, ICV, etc) that was left behind */
+	if (!can_be_decrypted && (fc & IEEE80211_FCTL_PROTECTED) &&
+	    ieee->host_strip_iv_icv) {
+		int trimlen = 0;
+
+		/* Top two-bits of byte 3 are the key index */
+		if (skb->len >= hdrlen + 3)
+			keyidx = skb->data[hdrlen + 3] >> 6;
+
+		/* To strip off any security data which appears before the
+		 * payload, we simply increase hdrlen (as the header gets
+		 * chopped off immediately below). For the security data which
+		 * appears after the payload, we use skb_trim. */
+
+		switch (ieee->sec.encode_alg[keyidx]) {
+		case SEC_ALG_WEP:
+			/* 4 byte IV */
+			hdrlen += 4;
+			/* 4 byte ICV */
+			trimlen = 4;
+			break;
+		case SEC_ALG_TKIP:
+			/* 4 byte IV, 4 byte ExtIV */
+			hdrlen += 8;
+			/* 8 byte MIC, 4 byte ICV */
+			trimlen = 12;
+			break;
+		case SEC_ALG_CCMP:
+			/* 8 byte CCMP header */
+			hdrlen += 8;
+			/* 8 byte MIC */
+			trimlen = 8;
+			break;
+		}
+
+		if (skb->len < trimlen)
+			goto rx_dropped;
+
+		__skb_trim(skb, skb->len - trimlen);
+
+		if (skb->len < hdrlen)
+			goto rx_dropped;
+	}
+
+	/* skb: hdr + (possible reassembled) full plaintext payload */
+
+	payload = skb->data + hdrlen;
+	ethertype = (payload[6] << 8) | payload[7];
+
+#ifdef NOT_YET
+	/* If IEEE 802.1X is used, check whether the port is authorized to send
+	 * the received frame. */
+	if (ieee->ieee802_1x && ieee->iw_mode == IW_MODE_MASTER) {
+		if (ethertype == ETH_P_PAE) {
+			printk(KERN_DEBUG ""%s: RX: IEEE 802.1X frame\n"",
+			       dev->name);
+			if (ieee->hostapd && ieee->apdev) {
+				/* Send IEEE 802.1X frames to the user
+				 * space daemon for processing */
+				prism2_rx_80211(ieee->apdev, skb, rx_stats,
+						PRISM2_RX_MGMT);
+				ieee->apdevstats.rx_packets++;
+				ieee->apdevstats.rx_bytes += skb->len;
+				goto rx_exit;
+			}
+		} else if (!frame_authorized) {
+			printk(KERN_DEBUG ""%s: dropped frame from ""
+			       ""unauthorized port (IEEE 802.1X): ""
+			       ""ethertype=0x%04x\n"", dev->name, ethertype);
+			goto rx_dropped;
+		}
+	}
+#endif
+
+	/* convert hdr + possible LLC headers into Ethernet header */
+	if (skb->len - hdrlen >= 8 &&
+	    ((memcmp(payload, rfc1042_header, SNAP_SIZE) == 0 &&
+	      ethertype != ETH_P_AARP && ethertype != ETH_P_IPX) ||
+	     memcmp(payload, bridge_tunnel_header, SNAP_SIZE) == 0)) {
+		/* remove RFC1042 or Bridge-Tunnel encapsulation and
+		 * replace EtherType */
+		skb_pull(skb, hdrlen + SNAP_SIZE);
+		memcpy(skb_push(skb, ETH_ALEN), src, ETH_ALEN);
+		memcpy(skb_push(skb, ETH_ALEN), dst, ETH_ALEN);
+	} else {
+		u16 len;
+		/* Leave Ethernet header part of hdr and full payload */
+		skb_pull(skb, hdrlen);
+		len = htons(skb->len);
+		memcpy(skb_push(skb, 2), &len, 2);
+		memcpy(skb_push(skb, ETH_ALEN), src, ETH_ALEN);
+		memcpy(skb_push(skb, ETH_ALEN), dst, ETH_ALEN);
+	}
+
+#ifdef NOT_YET
+	if (wds && ((fc & (IEEE80211_FCTL_TODS | IEEE80211_FCTL_FROMDS)) ==
+		    IEEE80211_FCTL_TODS) && skb->len >= ETH_HLEN + ETH_ALEN) {
+		/* Non-standard frame: get addr4 from its bogus location after
+		 * the payload */
+		skb_copy_to_linear_data_offset(skb, ETH_ALEN,
+					       skb->data + skb->len - ETH_ALEN,
+					       ETH_ALEN);
+		skb_trim(skb, skb->len - ETH_ALEN);
+	}
+#endif
+
+	stats->rx_packets++;
+	stats->rx_bytes += skb->len;
+
+#ifdef NOT_YET
+	if (ieee->iw_mode == IW_MODE_MASTER && !wds && ieee->ap->bridge_packets) {
+		if (dst[0] & 0x01) {
+			/* copy multicast frame both to the higher layers and
+			 * to the wireless media */
+			ieee->ap->bridged_multicast++;
+			skb2 = skb_clone(skb, GFP_ATOMIC);
+			if (skb2 == NULL)
+				printk(KERN_DEBUG ""%s: skb_clone failed for ""
+				       ""multicast frame\n"", dev->name);
+		} else if (hostap_is_sta_assoc(ieee->ap, dst)) {
+			/* send frame directly to the associated STA using
+			 * wireless media and not passing to higher layers */
+			ieee->ap->bridged_unicast++;
+			skb2 = skb;
+			skb = NULL;
+		}
+	}
+
+	if (skb2 != NULL) {
+		/* send to wireless media */
+		skb2->dev = dev;
+		skb2->protocol = __constant_htons(ETH_P_802_3);
+		skb_reset_mac_header(skb2);
+		skb_reset_network_header(skb2);
+		/* skb2->network_header += ETH_HLEN; */
+		dev_queue_xmit(skb2);
+	}
+#endif
+
+	if (skb) {
+		skb->protocol = eth_type_trans(skb, dev);
+		memset(skb->cb, 0, sizeof(skb->cb));
+		skb->ip_summed = CHECKSUM_NONE;	/* 802.11 crc not sufficient */
+		if (netif_rx(skb) == NET_RX_DROP) {
+			/* netif_rx always succeeds, but it might drop
+			 * the packet.  If it drops the packet, we log that
+			 * in our stats. */
+			IEEE80211_DEBUG_DROP
+			    (""RX: netif_rx dropped the packet\n"");
+			stats->rx_dropped++;
+		}
+	}
+
+      rx_exit:
+#ifdef NOT_YET
+	if (sta)
+		hostap_handle_sta_release(sta);
+#endif
+	return 1;
+
+      rx_dropped:
+	stats->rx_dropped++;
+
+	/* Returning 0 indicates to caller that we have not handled the SKB--
+	 * so it is still allocated and can be used again by underlying
+	 * hardware as a DMA target */
+	return 0;
+}",
+2442,"[""CWE-189""]",linux-2.6,13788ccc41ceea5893f9c747c59bc0b28f2416c2,13788ccc41ceea5893f9c747c59bc0b28f2416c2,0,487791,3.7660902210498123e+37,36.0,"[PATCH] hrtimer: prevent overrun DoS in hrtimer_forward()
+
+hrtimer_forward() does not check for the possible overflow of
+timer->expires.  This can happen on 64 bit machines with large interval
+values and results currently in an endless loop in the softirq because the
+expiry value becomes negative and therefor the timer is expired all the
+time.
+
+Check for this condition and set the expiry value to the max.  expiry time
+in the future.  The fix should be applied to stable kernel series as well.
+
+Signed-off-by: Thomas Gleixner <tglx@linutronix.de>
+Acked-by: Ingo Molnar <mingo@elte.hu>
+Cc: <stable@kernel.org>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"hrtimer_forward(struct hrtimer *timer, ktime_t now, ktime_t interval)
+{
+	unsigned long orun = 1;
+	ktime_t delta;
+
+	delta = ktime_sub(now, timer->expires);
+
+	if (delta.tv64 < 0)
+		return 0;
+
+	if (interval.tv64 < timer->base->resolution.tv64)
+		interval.tv64 = timer->base->resolution.tv64;
+
+	if (unlikely(delta.tv64 >= interval.tv64)) {
+		s64 incr = ktime_to_ns(interval);
+
+		orun = ktime_divns(delta, incr);
+		timer->expires = ktime_add_ns(timer->expires, incr * orun);
+		if (timer->expires.tv64 > now.tv64)
+			return orun;
+		/*
+		 * This (and the ktime_add() below) is the
+		 * correction for exact:
+		 */
+		orun++;
+	}
+	timer->expires = ktime_add(timer->expires, interval);
+
+	return orun;
+}","hrtimer_forward(struct hrtimer *timer, ktime_t now, ktime_t interval)
+{
+	unsigned long orun = 1;
+	ktime_t delta;
+
+	delta = ktime_sub(now, timer->expires);
+
+	if (delta.tv64 < 0)
+		return 0;
+
+	if (interval.tv64 < timer->base->resolution.tv64)
+		interval.tv64 = timer->base->resolution.tv64;
+
+	if (unlikely(delta.tv64 >= interval.tv64)) {
+		s64 incr = ktime_to_ns(interval);
+
+		orun = ktime_divns(delta, incr);
+		timer->expires = ktime_add_ns(timer->expires, incr * orun);
+		if (timer->expires.tv64 > now.tv64)
+			return orun;
+		/*
+		 * This (and the ktime_add() below) is the
+		 * correction for exact:
+		 */
+		orun++;
+	}
+	timer->expires = ktime_add(timer->expires, interval);
+	/*
+	 * Make sure, that the result did not wrap with a very large
+	 * interval.
+	 */
+	if (timer->expires.tv64 < 0)
+		timer->expires = ktime_set(KTIME_SEC_MAX, 0);
+
+	return orun;
+}",
+2534,"[""CWE-189""]",chrony,7712455d9aa33d0db0945effaa07e900b85987b1,7712455d9aa33d0db0945effaa07e900b85987b1,0,495779,4.36368773192096e+37,133.0,"Fix buffer overflow when processing crafted command packets
+
+When the length of the REQ_SUBNETS_ACCESSED, REQ_CLIENT_ACCESSES
+command requests and the RPY_SUBNETS_ACCESSED, RPY_CLIENT_ACCESSES,
+RPY_CLIENT_ACCESSES_BY_INDEX, RPY_MANUAL_LIST command replies is
+calculated, the number of items stored in the packet is not validated.
+
+A crafted command request/reply can be used to crash the server/client.
+Only clients allowed by cmdallow (by default only localhost) can crash
+the server.
+
+With chrony versions 1.25 and 1.26 this bug has a smaller security
+impact as the server requires the clients to be authenticated in order
+to process the subnet and client accesses commands. In 1.27 and 1.28,
+however, the invalid calculated length is included also in the
+authentication check which may cause another crash.",other,"PKL_CommandLength(CMD_Request *r)
+{
+  int type;
+  type = ntohs(r->command);
+  if (type < 0 || type >= N_REQUEST_TYPES) {
+    return 0;
+  } else {
+    switch (type) {
+      
+      case REQ_NULL:
+        return offsetof(CMD_Request, data);
+      case REQ_ONLINE:
+        return offsetof(CMD_Request, data.online.EOR);
+      case REQ_OFFLINE:
+        return offsetof(CMD_Request, data.offline.EOR);
+      case REQ_BURST:
+        return offsetof(CMD_Request, data.burst.EOR);
+      case REQ_MODIFY_MINPOLL:
+        return offsetof(CMD_Request, data.modify_minpoll.EOR);
+      case REQ_MODIFY_MAXPOLL:
+        return offsetof(CMD_Request, data.modify_maxpoll.EOR);
+      case REQ_DUMP:
+        return offsetof(CMD_Request, data.dump.EOR);
+      case REQ_MODIFY_MAXDELAY:
+        return offsetof(CMD_Request, data.modify_maxdelay.EOR);
+      case REQ_MODIFY_MAXDELAYRATIO:
+        return offsetof(CMD_Request, data.modify_maxdelayratio.EOR);
+      case REQ_MODIFY_MAXDELAYDEVRATIO:
+        return offsetof(CMD_Request, data.modify_maxdelaydevratio.EOR);
+      case REQ_MODIFY_MAXUPDATESKEW:
+        return offsetof(CMD_Request, data.modify_maxupdateskew.EOR);
+      case REQ_LOGON :
+        return offsetof(CMD_Request, data.logon.EOR);
+      case REQ_SETTIME :
+        return offsetof(CMD_Request, data.settime.EOR);
+      case REQ_LOCAL :
+        return offsetof(CMD_Request, data.local.EOR);
+      case REQ_MANUAL :
+        return offsetof(CMD_Request, data.manual.EOR);
+      case REQ_N_SOURCES :
+        return offsetof(CMD_Request, data.n_sources.EOR);
+      case REQ_SOURCE_DATA :
+        return offsetof(CMD_Request, data.source_data.EOR);
+      case REQ_REKEY :
+        return offsetof(CMD_Request, data.rekey.EOR);
+      case REQ_ALLOW :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_ALLOWALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_DENY :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_DENYALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDALLOW :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDALLOWALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDDENY :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDDENYALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_ACCHECK :
+        return offsetof(CMD_Request, data.ac_check.EOR);
+      case REQ_CMDACCHECK :
+        return offsetof(CMD_Request, data.ac_check.EOR);
+      case REQ_ADD_SERVER :
+        return offsetof(CMD_Request, data.ntp_source.EOR);
+      case REQ_ADD_PEER :
+        return offsetof(CMD_Request, data.ntp_source.EOR);
+      case REQ_DEL_SOURCE :
+        return offsetof(CMD_Request, data.del_source.EOR);
+      case REQ_WRITERTC :
+        return offsetof(CMD_Request, data.writertc.EOR);
+      case REQ_DFREQ :
+        return offsetof(CMD_Request, data.dfreq.EOR);
+      case REQ_DOFFSET :
+        return offsetof(CMD_Request, data.doffset.EOR);
+      case REQ_TRACKING :
+        return offsetof(CMD_Request, data.tracking.EOR);
+      case REQ_SOURCESTATS :
+        return offsetof(CMD_Request, data.sourcestats.EOR);
+      case REQ_RTCREPORT :
+        return offsetof(CMD_Request, data.rtcreport.EOR);
+      case REQ_TRIMRTC :
+        return offsetof(CMD_Request, data.trimrtc.EOR);
+      case REQ_CYCLELOGS :
+        return offsetof(CMD_Request, data.cyclelogs.EOR);
+      case REQ_SUBNETS_ACCESSED :
+        {
+          unsigned long ns;
+          ns = ntohl(r->data.subnets_accessed.n_subnets);
+          return (offsetof(CMD_Request, data.subnets_accessed.subnets) +
+                  ns * sizeof(REQ_SubnetsAccessed_Subnet));
+        }
+      case REQ_CLIENT_ACCESSES:
+        {
+          unsigned long nc;
+          nc = ntohl(r->data.client_accesses.n_clients);
+          return (offsetof(CMD_Request, data.client_accesses.client_ips) +
+                  nc * sizeof(unsigned long));
+        }
+      case REQ_CLIENT_ACCESSES_BY_INDEX:
+        return offsetof(CMD_Request, data.client_accesses_by_index.EOR);
+      case REQ_MANUAL_LIST:
+        return offsetof(CMD_Request, data.manual_list.EOR);
+      case REQ_MANUAL_DELETE:
+        return offsetof(CMD_Request, data.manual_delete.EOR);
+      case REQ_MAKESTEP:
+        return offsetof(CMD_Request, data.make_step.EOR);
+      case REQ_ACTIVITY:
+        return offsetof(CMD_Request, data.activity.EOR);
+      case REQ_RESELECT:
+        return offsetof(CMD_Request, data.reselect.EOR);
+      case REQ_RESELECTDISTANCE:
+        return offsetof(CMD_Request, data.reselect_distance.EOR);
+      case REQ_MODIFY_MINSTRATUM:
+        return offsetof(CMD_Request, data.modify_minstratum.EOR);
+      case REQ_MODIFY_POLLTARGET:
+        return offsetof(CMD_Request, data.modify_polltarget.EOR);
+      default:
+        /* If we fall through the switch, it most likely means we've forgotten to implement a new case */
+        assert(0);
+    }
+  }
+
+  /* Catch-all case */
+  return 0;
+
+}","PKL_CommandLength(CMD_Request *r)
+{
+  int type;
+  type = ntohs(r->command);
+  if (type < 0 || type >= N_REQUEST_TYPES) {
+    return 0;
+  } else {
+    switch (type) {
+      
+      case REQ_NULL:
+        return offsetof(CMD_Request, data);
+      case REQ_ONLINE:
+        return offsetof(CMD_Request, data.online.EOR);
+      case REQ_OFFLINE:
+        return offsetof(CMD_Request, data.offline.EOR);
+      case REQ_BURST:
+        return offsetof(CMD_Request, data.burst.EOR);
+      case REQ_MODIFY_MINPOLL:
+        return offsetof(CMD_Request, data.modify_minpoll.EOR);
+      case REQ_MODIFY_MAXPOLL:
+        return offsetof(CMD_Request, data.modify_maxpoll.EOR);
+      case REQ_DUMP:
+        return offsetof(CMD_Request, data.dump.EOR);
+      case REQ_MODIFY_MAXDELAY:
+        return offsetof(CMD_Request, data.modify_maxdelay.EOR);
+      case REQ_MODIFY_MAXDELAYRATIO:
+        return offsetof(CMD_Request, data.modify_maxdelayratio.EOR);
+      case REQ_MODIFY_MAXDELAYDEVRATIO:
+        return offsetof(CMD_Request, data.modify_maxdelaydevratio.EOR);
+      case REQ_MODIFY_MAXUPDATESKEW:
+        return offsetof(CMD_Request, data.modify_maxupdateskew.EOR);
+      case REQ_LOGON :
+        return offsetof(CMD_Request, data.logon.EOR);
+      case REQ_SETTIME :
+        return offsetof(CMD_Request, data.settime.EOR);
+      case REQ_LOCAL :
+        return offsetof(CMD_Request, data.local.EOR);
+      case REQ_MANUAL :
+        return offsetof(CMD_Request, data.manual.EOR);
+      case REQ_N_SOURCES :
+        return offsetof(CMD_Request, data.n_sources.EOR);
+      case REQ_SOURCE_DATA :
+        return offsetof(CMD_Request, data.source_data.EOR);
+      case REQ_REKEY :
+        return offsetof(CMD_Request, data.rekey.EOR);
+      case REQ_ALLOW :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_ALLOWALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_DENY :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_DENYALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDALLOW :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDALLOWALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDDENY :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_CMDDENYALL :
+        return offsetof(CMD_Request, data.allow_deny.EOR);
+      case REQ_ACCHECK :
+        return offsetof(CMD_Request, data.ac_check.EOR);
+      case REQ_CMDACCHECK :
+        return offsetof(CMD_Request, data.ac_check.EOR);
+      case REQ_ADD_SERVER :
+        return offsetof(CMD_Request, data.ntp_source.EOR);
+      case REQ_ADD_PEER :
+        return offsetof(CMD_Request, data.ntp_source.EOR);
+      case REQ_DEL_SOURCE :
+        return offsetof(CMD_Request, data.del_source.EOR);
+      case REQ_WRITERTC :
+        return offsetof(CMD_Request, data.writertc.EOR);
+      case REQ_DFREQ :
+        return offsetof(CMD_Request, data.dfreq.EOR);
+      case REQ_DOFFSET :
+        return offsetof(CMD_Request, data.doffset.EOR);
+      case REQ_TRACKING :
+        return offsetof(CMD_Request, data.tracking.EOR);
+      case REQ_SOURCESTATS :
+        return offsetof(CMD_Request, data.sourcestats.EOR);
+      case REQ_RTCREPORT :
+        return offsetof(CMD_Request, data.rtcreport.EOR);
+      case REQ_TRIMRTC :
+        return offsetof(CMD_Request, data.trimrtc.EOR);
+      case REQ_CYCLELOGS :
+        return offsetof(CMD_Request, data.cyclelogs.EOR);
+      case REQ_SUBNETS_ACCESSED :
+        {
+          unsigned long ns;
+          ns = ntohl(r->data.subnets_accessed.n_subnets);
+          if (ns > MAX_SUBNETS_ACCESSED)
+            return 0;
+          return (offsetof(CMD_Request, data.subnets_accessed.subnets) +
+                  ns * sizeof(REQ_SubnetsAccessed_Subnet));
+        }
+      case REQ_CLIENT_ACCESSES:
+        {
+          unsigned long nc;
+          nc = ntohl(r->data.client_accesses.n_clients);
+          if (nc > MAX_CLIENT_ACCESSES)
+            return 0;
+          return (offsetof(CMD_Request, data.client_accesses.client_ips) +
+                  nc * sizeof(unsigned long));
+        }
+      case REQ_CLIENT_ACCESSES_BY_INDEX:
+        return offsetof(CMD_Request, data.client_accesses_by_index.EOR);
+      case REQ_MANUAL_LIST:
+        return offsetof(CMD_Request, data.manual_list.EOR);
+      case REQ_MANUAL_DELETE:
+        return offsetof(CMD_Request, data.manual_delete.EOR);
+      case REQ_MAKESTEP:
+        return offsetof(CMD_Request, data.make_step.EOR);
+      case REQ_ACTIVITY:
+        return offsetof(CMD_Request, data.activity.EOR);
+      case REQ_RESELECT:
+        return offsetof(CMD_Request, data.reselect.EOR);
+      case REQ_RESELECTDISTANCE:
+        return offsetof(CMD_Request, data.reselect_distance.EOR);
+      case REQ_MODIFY_MINSTRATUM:
+        return offsetof(CMD_Request, data.modify_minstratum.EOR);
+      case REQ_MODIFY_POLLTARGET:
+        return offsetof(CMD_Request, data.modify_polltarget.EOR);
+      default:
+        /* If we fall through the switch, it most likely means we've forgotten to implement a new case */
+        assert(0);
+    }
+  }
+
+  /* Catch-all case */
+  return 0;
+
+}",
+2535,"[""CWE-189""]",chrony,7712455d9aa33d0db0945effaa07e900b85987b1,7712455d9aa33d0db0945effaa07e900b85987b1,0,495687,3.259060285205268e+38,81.0,"Fix buffer overflow when processing crafted command packets
+
+When the length of the REQ_SUBNETS_ACCESSED, REQ_CLIENT_ACCESSES
+command requests and the RPY_SUBNETS_ACCESSED, RPY_CLIENT_ACCESSES,
+RPY_CLIENT_ACCESSES_BY_INDEX, RPY_MANUAL_LIST command replies is
+calculated, the number of items stored in the packet is not validated.
+
+A crafted command request/reply can be used to crash the server/client.
+Only clients allowed by cmdallow (by default only localhost) can crash
+the server.
+
+With chrony versions 1.25 and 1.26 this bug has a smaller security
+impact as the server requires the clients to be authenticated in order
+to process the subnet and client accesses commands. In 1.27 and 1.28,
+however, the invalid calculated length is included also in the
+authentication check which may cause another crash.",other,"PKL_ReplyLength(CMD_Reply *r)
+{
+  int type;
+  type = ntohs(r->reply);
+  /* Note that reply type codes start from 1, not 0 */
+  if (type < 1 || type >= N_REPLY_TYPES) {
+    return 0;
+  } else {
+    switch (type) {
+      case RPY_NULL:
+        return offsetof(CMD_Reply, data.null.EOR);
+      case RPY_N_SOURCES:
+        return offsetof(CMD_Reply, data.n_sources.EOR);
+      case RPY_SOURCE_DATA:
+        return offsetof(CMD_Reply, data.source_data.EOR);
+      case RPY_MANUAL_TIMESTAMP:
+        return offsetof(CMD_Reply, data.manual_timestamp.EOR);
+      case RPY_TRACKING:
+        return offsetof(CMD_Reply, data.tracking.EOR);
+      case RPY_SOURCESTATS:
+        return offsetof(CMD_Reply, data.sourcestats.EOR);
+      case RPY_RTC:
+        return offsetof(CMD_Reply, data.rtc.EOR);
+      case RPY_SUBNETS_ACCESSED :
+        {
+          unsigned long ns = ntohl(r->data.subnets_accessed.n_subnets);
+          if (r->status == htons(STT_SUCCESS)) {
+            return (offsetof(CMD_Reply, data.subnets_accessed.subnets) +
+                    ns * sizeof(RPY_SubnetsAccessed_Subnet));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_CLIENT_ACCESSES:
+        {
+          unsigned long nc = ntohl(r->data.client_accesses.n_clients);
+          if (r->status == htons(STT_SUCCESS)) {
+            return (offsetof(CMD_Reply, data.client_accesses.clients) +
+                    nc * sizeof(RPY_ClientAccesses_Client));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_CLIENT_ACCESSES_BY_INDEX:
+        {
+          unsigned long nc = ntohl(r->data.client_accesses_by_index.n_clients);
+          if (r->status == htons(STT_SUCCESS)) {
+            return (offsetof(CMD_Reply, data.client_accesses_by_index.clients) +
+                    nc * sizeof(RPY_ClientAccesses_Client));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_MANUAL_LIST:
+        {
+          unsigned long ns = ntohl(r->data.manual_list.n_samples);
+          if (r->status == htons(STT_SUCCESS)) {
+            return (offsetof(CMD_Reply, data.manual_list.samples) +
+                    ns * sizeof(RPY_ManualListSample));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_ACTIVITY:
+        return offsetof(CMD_Reply, data.activity.EOR);
+        
+      default:
+        assert(0);
+    }
+  }
+
+  return 0;
+}","PKL_ReplyLength(CMD_Reply *r)
+{
+  int type;
+  type = ntohs(r->reply);
+  /* Note that reply type codes start from 1, not 0 */
+  if (type < 1 || type >= N_REPLY_TYPES) {
+    return 0;
+  } else {
+    switch (type) {
+      case RPY_NULL:
+        return offsetof(CMD_Reply, data.null.EOR);
+      case RPY_N_SOURCES:
+        return offsetof(CMD_Reply, data.n_sources.EOR);
+      case RPY_SOURCE_DATA:
+        return offsetof(CMD_Reply, data.source_data.EOR);
+      case RPY_MANUAL_TIMESTAMP:
+        return offsetof(CMD_Reply, data.manual_timestamp.EOR);
+      case RPY_TRACKING:
+        return offsetof(CMD_Reply, data.tracking.EOR);
+      case RPY_SOURCESTATS:
+        return offsetof(CMD_Reply, data.sourcestats.EOR);
+      case RPY_RTC:
+        return offsetof(CMD_Reply, data.rtc.EOR);
+      case RPY_SUBNETS_ACCESSED :
+        {
+          unsigned long ns = ntohl(r->data.subnets_accessed.n_subnets);
+          if (r->status == htons(STT_SUCCESS)) {
+            if (ns > MAX_SUBNETS_ACCESSED)
+              return 0;
+            return (offsetof(CMD_Reply, data.subnets_accessed.subnets) +
+                    ns * sizeof(RPY_SubnetsAccessed_Subnet));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_CLIENT_ACCESSES:
+        {
+          unsigned long nc = ntohl(r->data.client_accesses.n_clients);
+          if (r->status == htons(STT_SUCCESS)) {
+            if (nc > MAX_CLIENT_ACCESSES)
+              return 0;
+            return (offsetof(CMD_Reply, data.client_accesses.clients) +
+                    nc * sizeof(RPY_ClientAccesses_Client));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_CLIENT_ACCESSES_BY_INDEX:
+        {
+          unsigned long nc = ntohl(r->data.client_accesses_by_index.n_clients);
+          if (r->status == htons(STT_SUCCESS)) {
+            if (nc > MAX_CLIENT_ACCESSES)
+              return 0;
+            return (offsetof(CMD_Reply, data.client_accesses_by_index.clients) +
+                    nc * sizeof(RPY_ClientAccesses_Client));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_MANUAL_LIST:
+        {
+          unsigned long ns = ntohl(r->data.manual_list.n_samples);
+          if (ns > MAX_MANUAL_LIST_SAMPLES)
+            return 0;
+          if (r->status == htons(STT_SUCCESS)) {
+            return (offsetof(CMD_Reply, data.manual_list.samples) +
+                    ns * sizeof(RPY_ManualListSample));
+          } else {
+            return offsetof(CMD_Reply, data);
+          }
+        }
+      case RPY_ACTIVITY:
+        return offsetof(CMD_Reply, data.activity.EOR);
+        
+      default:
+        assert(0);
+    }
+  }
+
+  return 0;
+}",
+2581,"[""CWE-189""]",linux-2.6,f5fb09fa3392ad43fbcfc2f4580752f383ab5996,f5fb09fa3392ad43fbcfc2f4580752f383ab5996,0,499872,1.7763211869952973e+37,166.0,"[PATCH] Fix for minix crash
+
+Mounting a (corrupt) minix filesystem with zero s_zmap_blocks
+gives a spectacular crash on my 2.6.17.8 system, no doubt
+because minix/inode.c does an unconditional
+	minix_set_bit(0,sbi->s_zmap[0]->b_data);
+
+[akpm@osdl.org: make labels conistent while we're there]
+
+Signed-off-by: Andrew Morton <akpm@osdl.org>
+Signed-off-by: Linus Torvalds <torvalds@osdl.org>",other,"static int minix_fill_super(struct super_block *s, void *data, int silent)
+{
+	struct buffer_head *bh;
+	struct buffer_head **map;
+	struct minix_super_block *ms;
+	int i, block;
+	struct inode *root_inode;
+	struct minix_sb_info *sbi;
+
+	sbi = kmalloc(sizeof(struct minix_sb_info), GFP_KERNEL);
+	if (!sbi)
+		return -ENOMEM;
+	s->s_fs_info = sbi;
+	memset(sbi, 0, sizeof(struct minix_sb_info));
+
+	/* N.B. These should be compile-time tests.
+	   Unfortunately that is impossible. */
+	if (32 != sizeof (struct minix_inode))
+		panic(""bad V1 i-node size"");
+	if (64 != sizeof(struct minix2_inode))
+		panic(""bad V2 i-node size"");
+
+	if (!sb_set_blocksize(s, BLOCK_SIZE))
+		goto out_bad_hblock;
+
+	if (!(bh = sb_bread(s, 1)))
+		goto out_bad_sb;
+
+	ms = (struct minix_super_block *) bh->b_data;
+	sbi->s_ms = ms;
+	sbi->s_sbh = bh;
+	sbi->s_mount_state = ms->s_state;
+	sbi->s_ninodes = ms->s_ninodes;
+	sbi->s_nzones = ms->s_nzones;
+	sbi->s_imap_blocks = ms->s_imap_blocks;
+	sbi->s_zmap_blocks = ms->s_zmap_blocks;
+	sbi->s_firstdatazone = ms->s_firstdatazone;
+	sbi->s_log_zone_size = ms->s_log_zone_size;
+	sbi->s_max_size = ms->s_max_size;
+	s->s_magic = ms->s_magic;
+	if (s->s_magic == MINIX_SUPER_MAGIC) {
+		sbi->s_version = MINIX_V1;
+		sbi->s_dirsize = 16;
+		sbi->s_namelen = 14;
+		sbi->s_link_max = MINIX_LINK_MAX;
+	} else if (s->s_magic == MINIX_SUPER_MAGIC2) {
+		sbi->s_version = MINIX_V1;
+		sbi->s_dirsize = 32;
+		sbi->s_namelen = 30;
+		sbi->s_link_max = MINIX_LINK_MAX;
+	} else if (s->s_magic == MINIX2_SUPER_MAGIC) {
+		sbi->s_version = MINIX_V2;
+		sbi->s_nzones = ms->s_zones;
+		sbi->s_dirsize = 16;
+		sbi->s_namelen = 14;
+		sbi->s_link_max = MINIX2_LINK_MAX;
+	} else if (s->s_magic == MINIX2_SUPER_MAGIC2) {
+		sbi->s_version = MINIX_V2;
+		sbi->s_nzones = ms->s_zones;
+		sbi->s_dirsize = 32;
+		sbi->s_namelen = 30;
+		sbi->s_link_max = MINIX2_LINK_MAX;
+	} else
+		goto out_no_fs;
+
+	/*
+	 * Allocate the buffer map to keep the superblock small.
+	 */
+	i = (sbi->s_imap_blocks + sbi->s_zmap_blocks) * sizeof(bh);
+	map = kmalloc(i, GFP_KERNEL);
+	if (!map)
+		goto out_no_map;
+	memset(map, 0, i);
+	sbi->s_imap = &map[0];
+	sbi->s_zmap = &map[sbi->s_imap_blocks];
+
+	block=2;
+	for (i=0 ; i < sbi->s_imap_blocks ; i++) {
+		if (!(sbi->s_imap[i]=sb_bread(s, block)))
+			goto out_no_bitmap;
+		block++;
+	}
+	for (i=0 ; i < sbi->s_zmap_blocks ; i++) {
+		if (!(sbi->s_zmap[i]=sb_bread(s, block)))
+			goto out_no_bitmap;
+		block++;
+	}
+
+	minix_set_bit(0,sbi->s_imap[0]->b_data);
+	minix_set_bit(0,sbi->s_zmap[0]->b_data);
+
+	/* set up enough so that it can read an inode */
+	s->s_op = &minix_sops;
+	root_inode = iget(s, MINIX_ROOT_INO);
+	if (!root_inode || is_bad_inode(root_inode))
+		goto out_no_root;
+
+	s->s_root = d_alloc_root(root_inode);
+	if (!s->s_root)
+		goto out_iput;
+
+	if (!NO_TRUNCATE)
+		s->s_root->d_op = &minix_dentry_operations;
+
+	if (!(s->s_flags & MS_RDONLY)) {
+		ms->s_state &= ~MINIX_VALID_FS;
+		mark_buffer_dirty(bh);
+	}
+	if (!(sbi->s_mount_state & MINIX_VALID_FS))
+		printk(""MINIX-fs: mounting unchecked file system, ""
+			""running fsck is recommended\n"");
+ 	else if (sbi->s_mount_state & MINIX_ERROR_FS)
+		printk(""MINIX-fs: mounting file system with errors, ""
+			""running fsck is recommended\n"");
+	return 0;
+
+out_iput:
+	iput(root_inode);
+	goto out_freemap;
+
+out_no_root:
+	if (!silent)
+		printk(""MINIX-fs: get root inode failed\n"");
+	goto out_freemap;
+
+out_no_bitmap:
+	printk(""MINIX-fs: bad superblock or unable to read bitmaps\n"");
+    out_freemap:
+	for (i = 0; i < sbi->s_imap_blocks; i++)
+		brelse(sbi->s_imap[i]);
+	for (i = 0; i < sbi->s_zmap_blocks; i++)
+		brelse(sbi->s_zmap[i]);
+	kfree(sbi->s_imap);
+	goto out_release;
+
+out_no_map:
+	if (!silent)
+		printk(""MINIX-fs: can't allocate map\n"");
+	goto out_release;
+
+out_no_fs:
+	if (!silent)
+		printk(""VFS: Can't find a Minix or Minix V2 filesystem ""
+			""on device %s\n"", s->s_id);
+    out_release:
+	brelse(bh);
+	goto out;
+
+out_bad_hblock:
+	printk(""MINIX-fs: blocksize too small for device\n"");
+	goto out;
+
+out_bad_sb:
+	printk(""MINIX-fs: unable to read superblock\n"");
+ out:
+	s->s_fs_info = NULL;
+	kfree(sbi);
+	return -EINVAL;
+}","static int minix_fill_super(struct super_block *s, void *data, int silent)
+{
+	struct buffer_head *bh;
+	struct buffer_head **map;
+	struct minix_super_block *ms;
+	int i, block;
+	struct inode *root_inode;
+	struct minix_sb_info *sbi;
+
+	sbi = kmalloc(sizeof(struct minix_sb_info), GFP_KERNEL);
+	if (!sbi)
+		return -ENOMEM;
+	s->s_fs_info = sbi;
+	memset(sbi, 0, sizeof(struct minix_sb_info));
+
+	/* N.B. These should be compile-time tests.
+	   Unfortunately that is impossible. */
+	if (32 != sizeof (struct minix_inode))
+		panic(""bad V1 i-node size"");
+	if (64 != sizeof(struct minix2_inode))
+		panic(""bad V2 i-node size"");
+
+	if (!sb_set_blocksize(s, BLOCK_SIZE))
+		goto out_bad_hblock;
+
+	if (!(bh = sb_bread(s, 1)))
+		goto out_bad_sb;
+
+	ms = (struct minix_super_block *) bh->b_data;
+	sbi->s_ms = ms;
+	sbi->s_sbh = bh;
+	sbi->s_mount_state = ms->s_state;
+	sbi->s_ninodes = ms->s_ninodes;
+	sbi->s_nzones = ms->s_nzones;
+	sbi->s_imap_blocks = ms->s_imap_blocks;
+	sbi->s_zmap_blocks = ms->s_zmap_blocks;
+	sbi->s_firstdatazone = ms->s_firstdatazone;
+	sbi->s_log_zone_size = ms->s_log_zone_size;
+	sbi->s_max_size = ms->s_max_size;
+	s->s_magic = ms->s_magic;
+	if (s->s_magic == MINIX_SUPER_MAGIC) {
+		sbi->s_version = MINIX_V1;
+		sbi->s_dirsize = 16;
+		sbi->s_namelen = 14;
+		sbi->s_link_max = MINIX_LINK_MAX;
+	} else if (s->s_magic == MINIX_SUPER_MAGIC2) {
+		sbi->s_version = MINIX_V1;
+		sbi->s_dirsize = 32;
+		sbi->s_namelen = 30;
+		sbi->s_link_max = MINIX_LINK_MAX;
+	} else if (s->s_magic == MINIX2_SUPER_MAGIC) {
+		sbi->s_version = MINIX_V2;
+		sbi->s_nzones = ms->s_zones;
+		sbi->s_dirsize = 16;
+		sbi->s_namelen = 14;
+		sbi->s_link_max = MINIX2_LINK_MAX;
+	} else if (s->s_magic == MINIX2_SUPER_MAGIC2) {
+		sbi->s_version = MINIX_V2;
+		sbi->s_nzones = ms->s_zones;
+		sbi->s_dirsize = 32;
+		sbi->s_namelen = 30;
+		sbi->s_link_max = MINIX2_LINK_MAX;
+	} else
+		goto out_no_fs;
+
+	/*
+	 * Allocate the buffer map to keep the superblock small.
+	 */
+	if (sbi->s_imap_blocks == 0 || sbi->s_zmap_blocks == 0)
+		goto out_illegal_sb;
+	i = (sbi->s_imap_blocks + sbi->s_zmap_blocks) * sizeof(bh);
+	map = kmalloc(i, GFP_KERNEL);
+	if (!map)
+		goto out_no_map;
+	memset(map, 0, i);
+	sbi->s_imap = &map[0];
+	sbi->s_zmap = &map[sbi->s_imap_blocks];
+
+	block=2;
+	for (i=0 ; i < sbi->s_imap_blocks ; i++) {
+		if (!(sbi->s_imap[i]=sb_bread(s, block)))
+			goto out_no_bitmap;
+		block++;
+	}
+	for (i=0 ; i < sbi->s_zmap_blocks ; i++) {
+		if (!(sbi->s_zmap[i]=sb_bread(s, block)))
+			goto out_no_bitmap;
+		block++;
+	}
+
+	minix_set_bit(0,sbi->s_imap[0]->b_data);
+	minix_set_bit(0,sbi->s_zmap[0]->b_data);
+
+	/* set up enough so that it can read an inode */
+	s->s_op = &minix_sops;
+	root_inode = iget(s, MINIX_ROOT_INO);
+	if (!root_inode || is_bad_inode(root_inode))
+		goto out_no_root;
+
+	s->s_root = d_alloc_root(root_inode);
+	if (!s->s_root)
+		goto out_iput;
+
+	if (!NO_TRUNCATE)
+		s->s_root->d_op = &minix_dentry_operations;
+
+	if (!(s->s_flags & MS_RDONLY)) {
+		ms->s_state &= ~MINIX_VALID_FS;
+		mark_buffer_dirty(bh);
+	}
+	if (!(sbi->s_mount_state & MINIX_VALID_FS))
+		printk(""MINIX-fs: mounting unchecked file system, ""
+			""running fsck is recommended\n"");
+ 	else if (sbi->s_mount_state & MINIX_ERROR_FS)
+		printk(""MINIX-fs: mounting file system with errors, ""
+			""running fsck is recommended\n"");
+	return 0;
+
+out_iput:
+	iput(root_inode);
+	goto out_freemap;
+
+out_no_root:
+	if (!silent)
+		printk(""MINIX-fs: get root inode failed\n"");
+	goto out_freemap;
+
+out_no_bitmap:
+	printk(""MINIX-fs: bad superblock or unable to read bitmaps\n"");
+out_freemap:
+	for (i = 0; i < sbi->s_imap_blocks; i++)
+		brelse(sbi->s_imap[i]);
+	for (i = 0; i < sbi->s_zmap_blocks; i++)
+		brelse(sbi->s_zmap[i]);
+	kfree(sbi->s_imap);
+	goto out_release;
+
+out_no_map:
+	if (!silent)
+		printk(""MINIX-fs: can't allocate map\n"");
+	goto out_release;
+
+out_illegal_sb:
+	if (!silent)
+		printk(""MINIX-fs: bad superblock\n"");
+	goto out_release;
+
+out_no_fs:
+	if (!silent)
+		printk(""VFS: Can't find a Minix or Minix V2 filesystem ""
+			""on device %s\n"", s->s_id);
+out_release:
+	brelse(bh);
+	goto out;
+
+out_bad_hblock:
+	printk(""MINIX-fs: blocksize too small for device\n"");
+	goto out;
+
+out_bad_sb:
+	printk(""MINIX-fs: unable to read superblock\n"");
+out:
+	s->s_fs_info = NULL;
+	kfree(sbi);
+	return -EINVAL;
+}",
+3218,"[""CWE-189""]",linux-2.6,3e8a0a559c66ee9e7468195691a56fefc3589740,3e8a0a559c66ee9e7468195691a56fefc3589740,0,488804,7.877961288496376e+37,36.0,"dccp: change L/R must have at least one byte in the dccpsf_val field
+    
+Thanks to Eugene Teo for reporting this problem.
+    
+Signed-off-by: Eugene Teo <eugenete@kernel.sg>
+Signed-off-by: Arnaldo Carvalho de Melo <acme@redhat.com>
+Signed-off-by: Gerrit Renker <gerrit@erg.abdn.ac.uk>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int dccp_setsockopt_change(struct sock *sk, int type,
+				  struct dccp_so_feat __user *optval)
+{
+	struct dccp_so_feat opt;
+	u8 *val;
+	int rc;
+
+	if (copy_from_user(&opt, optval, sizeof(opt)))
+		return -EFAULT;
+
+	val = kmalloc(opt.dccpsf_len, GFP_KERNEL);
+	if (!val)
+		return -ENOMEM;
+
+	if (copy_from_user(val, opt.dccpsf_val, opt.dccpsf_len)) {
+		rc = -EFAULT;
+		goto out_free_val;
+	}
+
+	rc = dccp_feat_change(dccp_msk(sk), type, opt.dccpsf_feat,
+			      val, opt.dccpsf_len, GFP_KERNEL);
+	if (rc)
+		goto out_free_val;
+
+out:
+	return rc;
+
+out_free_val:
+	kfree(val);
+	goto out;
+}","static int dccp_setsockopt_change(struct sock *sk, int type,
+				  struct dccp_so_feat __user *optval)
+{
+	struct dccp_so_feat opt;
+	u8 *val;
+	int rc;
+
+	if (copy_from_user(&opt, optval, sizeof(opt)))
+		return -EFAULT;
+	/*
+	 * rfc4340: 6.1. Change Options
+	 */
+	if (opt.dccpsf_len < 1)
+		return -EINVAL;
+
+	val = kmalloc(opt.dccpsf_len, GFP_KERNEL);
+	if (!val)
+		return -ENOMEM;
+
+	if (copy_from_user(val, opt.dccpsf_val, opt.dccpsf_len)) {
+		rc = -EFAULT;
+		goto out_free_val;
+	}
+
+	rc = dccp_feat_change(dccp_msk(sk), type, opt.dccpsf_feat,
+			      val, opt.dccpsf_len, GFP_KERNEL);
+	if (rc)
+		goto out_free_val;
+
+out:
+	return rc;
+
+out_free_val:
+	kfree(val);
+	goto out;
+}",
+3222,"[""CWE-189""]",linux-2.6,8faece5f906725c10e7a1f6caf84452abadbdc7b,8faece5f906725c10e7a1f6caf84452abadbdc7b,0,490193,3.9007406608263614e+37,13.0,"eCryptfs: Allocate a variable number of pages for file headers
+
+When allocating the memory used to store the eCryptfs header contents, a
+single, zeroed page was being allocated with get_zeroed_page().
+However, the size of an eCryptfs header is either PAGE_CACHE_SIZE or
+ECRYPTFS_MINIMUM_HEADER_EXTENT_SIZE (8192), whichever is larger, and is
+stored in the file's private_data->crypt_stat->num_header_bytes_at_front
+field.
+
+ecryptfs_write_metadata_to_contents() was using
+num_header_bytes_at_front to decide how many bytes should be written to
+the lower filesystem for the file header.  Unfortunately, at least 8K
+was being written from the page, despite the chance of the single,
+zeroed page being smaller than 8K.  This resulted in random areas of
+kernel memory being written between the 0x1000 and 0x1FFF bytes offsets
+in the eCryptfs file headers if PAGE_SIZE was 4K.
+
+This patch allocates a variable number of pages, calculated with
+num_header_bytes_at_front, and passes the number of allocated pages
+along to ecryptfs_write_metadata_to_contents().
+
+Thanks to Florian Streibelt for reporting the data leak and working with
+me to find the problem.  2.6.28 is the only kernel release with this
+vulnerability.  Corresponds to CVE-2009-0787
+
+Signed-off-by: Tyler Hicks <tyhicks@linux.vnet.ibm.com>
+Acked-by: Dustin Kirkland <kirkland@canonical.com>
+Reviewed-by: Eric Sandeen <sandeen@redhat.com>
+Reviewed-by: Eugene Teo <eugeneteo@kernel.sg>
+Cc: Greg KH <greg@kroah.com>
+Cc: dann frazier <dannf@dannf.org>
+Cc: Serge E. Hallyn <serue@us.ibm.com>
+Cc: Florian Streibelt <florian@f-streibelt.de>
+Cc: stable@kernel.org
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"ecryptfs_write_metadata_to_contents(struct ecryptfs_crypt_stat *crypt_stat,
+				    struct dentry *ecryptfs_dentry,
+				    char *virt)
+{
+	int rc;
+
+	rc = ecryptfs_write_lower(ecryptfs_dentry->d_inode, virt,
+				  0, crypt_stat->num_header_bytes_at_front);
+	if (rc)
+		printk(KERN_ERR ""%s: Error attempting to write header ""
+		       ""information to lower file; rc = [%d]\n"", __func__,
+		       rc);
+	return rc;
+}","ecryptfs_write_metadata_to_contents(struct dentry *ecryptfs_dentry,
+				    char *virt, size_t virt_len)
+{
+	int rc;
+
+	rc = ecryptfs_write_lower(ecryptfs_dentry->d_inode, virt,
+				  0, virt_len);
+	if (rc)
+		printk(KERN_ERR ""%s: Error attempting to write header ""
+		       ""information to lower file; rc = [%d]\n"", __func__,
+		       rc);
+	return rc;
+}",
+3226,"[""CWE-189""]",grep,8fcf61523644df42e1905c81bed26838e0b04f91,8fcf61523644df42e1905c81bed26838e0b04f91,0,496454,2.7142359393247276e+38,127.0,"grep: fix integer-overflow issues in main program
+
+* NEWS: Document this.
+* bootstrap.conf (gnulib_modules): Add inttypes, xstrtoimax.
+Remove xstrtoumax.
+* src/main.c: Include <inttypes.h>, for INTMAX_MAX, PRIdMAX.
+(context_length_arg, prtext, grepbuf, grep, grepfile)
+(get_nondigit_option, main):
+Use intmax_t, not int, for line counts.
+(context_length_arg, main): Silently ceiling line counts
+to maximum value, since there's no practical difference between
+doing that and using infinite-precision arithmetic.
+(out_before, out_after, pending): Now intmax_t, not int.
+(max_count, outleft): Now intmax_t, not off_t.
+(prepend_args, prepend_default_options, main):
+Use size_t, not int, for sizes.
+(prepend_default_options): Check for int and size_t overflow.",other,"grep (int fd, char const *file, struct stats *stats)
+{
+  int nlines, i;
+  int not_text;
+  size_t residue, save;
+  char oldc;
+  char *beg;
+  char *lim;
+  char eol = eolbyte;
+
+  if (!reset (fd, file, stats))
+    return 0;
+
+  if (file && directories == RECURSE_DIRECTORIES
+      && S_ISDIR (stats->stat.st_mode))
+    {
+      /* Close fd now, so that we don't open a lot of file descriptors
+         when we recurse deeply.  */
+      if (close (fd) != 0)
+        suppressible_error (file, errno);
+      return grepdir (file, stats) - 2;
+    }
+
+  totalcc = 0;
+  lastout = 0;
+  totalnl = 0;
+  outleft = max_count;
+  after_last_match = 0;
+  pending = 0;
+
+  nlines = 0;
+  residue = 0;
+  save = 0;
+
+  if (! fillbuf (save, stats))
+    {
+      suppressible_error (filename, errno);
+      return 0;
+    }
+
+  not_text = (((binary_files == BINARY_BINARY_FILES && !out_quiet)
+               || binary_files == WITHOUT_MATCH_BINARY_FILES)
+              && memchr (bufbeg, eol ? '\0' : '\200', buflim - bufbeg));
+  if (not_text && binary_files == WITHOUT_MATCH_BINARY_FILES)
+    return 0;
+  done_on_match += not_text;
+  out_quiet += not_text;
+
+  for (;;)
+    {
+      lastnl = bufbeg;
+      if (lastout)
+        lastout = bufbeg;
+
+      beg = bufbeg + save;
+
+      /* no more data to scan (eof) except for maybe a residue -> break */
+      if (beg == buflim)
+        break;
+
+      /* Determine new residue (the length of an incomplete line at the end of
+         the buffer, 0 means there is no incomplete last line).  */
+      oldc = beg[-1];
+      beg[-1] = eol;
+      for (lim = buflim; lim[-1] != eol; lim--)
+        continue;
+      beg[-1] = oldc;
+      if (lim == beg)
+        lim = beg - residue;
+      beg -= residue;
+      residue = buflim - lim;
+
+      if (beg < lim)
+        {
+          if (outleft)
+            nlines += grepbuf (beg, lim);
+          if (pending)
+            prpending (lim);
+          if ((!outleft && !pending) || (nlines && done_on_match && !out_invert))
+            goto finish_grep;
+        }
+
+      /* The last OUT_BEFORE lines at the end of the buffer will be needed as
+         leading context if there is a matching line at the begin of the
+         next data. Make beg point to their begin.  */
+      i = 0;
+      beg = lim;
+      while (i < out_before && beg > bufbeg && beg != lastout)
+        {
+          ++i;
+          do
+            --beg;
+          while (beg[-1] != eol);
+        }
+
+      /* detect if leading context is discontinuous from last printed line.  */
+      if (beg != lastout)
+        lastout = 0;
+
+      /* Handle some details and read more data to scan.  */
+      save = residue + lim - beg;
+      if (out_byte)
+        totalcc = add_count (totalcc, buflim - bufbeg - save);
+      if (out_line)
+        nlscan (beg);
+      if (! fillbuf (save, stats))
+        {
+          suppressible_error (filename, errno);
+          goto finish_grep;
+        }
+    }
+  if (residue)
+    {
+      *buflim++ = eol;
+      if (outleft)
+        nlines += grepbuf (bufbeg + save - residue, buflim);
+      if (pending)
+        prpending (buflim);
+    }
+
+ finish_grep:
+  done_on_match -= not_text;
+  out_quiet -= not_text;
+  if ((not_text & ~out_quiet) && nlines != 0)
+    printf (_(""Binary file %s matches\n""), filename);
+  return nlines;
+}","grep (int fd, char const *file, struct stats *stats)
+{
+  intmax_t nlines, i;
+  int not_text;
+  size_t residue, save;
+  char oldc;
+  char *beg;
+  char *lim;
+  char eol = eolbyte;
+
+  if (!reset (fd, file, stats))
+    return 0;
+
+  if (file && directories == RECURSE_DIRECTORIES
+      && S_ISDIR (stats->stat.st_mode))
+    {
+      /* Close fd now, so that we don't open a lot of file descriptors
+         when we recurse deeply.  */
+      if (close (fd) != 0)
+        suppressible_error (file, errno);
+      return grepdir (file, stats) - 2;
+    }
+
+  totalcc = 0;
+  lastout = 0;
+  totalnl = 0;
+  outleft = max_count;
+  after_last_match = 0;
+  pending = 0;
+
+  nlines = 0;
+  residue = 0;
+  save = 0;
+
+  if (! fillbuf (save, stats))
+    {
+      suppressible_error (filename, errno);
+      return 0;
+    }
+
+  not_text = (((binary_files == BINARY_BINARY_FILES && !out_quiet)
+               || binary_files == WITHOUT_MATCH_BINARY_FILES)
+              && memchr (bufbeg, eol ? '\0' : '\200', buflim - bufbeg));
+  if (not_text && binary_files == WITHOUT_MATCH_BINARY_FILES)
+    return 0;
+  done_on_match += not_text;
+  out_quiet += not_text;
+
+  for (;;)
+    {
+      lastnl = bufbeg;
+      if (lastout)
+        lastout = bufbeg;
+
+      beg = bufbeg + save;
+
+      /* no more data to scan (eof) except for maybe a residue -> break */
+      if (beg == buflim)
+        break;
+
+      /* Determine new residue (the length of an incomplete line at the end of
+         the buffer, 0 means there is no incomplete last line).  */
+      oldc = beg[-1];
+      beg[-1] = eol;
+      for (lim = buflim; lim[-1] != eol; lim--)
+        continue;
+      beg[-1] = oldc;
+      if (lim == beg)
+        lim = beg - residue;
+      beg -= residue;
+      residue = buflim - lim;
+
+      if (beg < lim)
+        {
+          if (outleft)
+            nlines += grepbuf (beg, lim);
+          if (pending)
+            prpending (lim);
+          if ((!outleft && !pending) || (nlines && done_on_match && !out_invert))
+            goto finish_grep;
+        }
+
+      /* The last OUT_BEFORE lines at the end of the buffer will be needed as
+         leading context if there is a matching line at the begin of the
+         next data. Make beg point to their begin.  */
+      i = 0;
+      beg = lim;
+      while (i < out_before && beg > bufbeg && beg != lastout)
+        {
+          ++i;
+          do
+            --beg;
+          while (beg[-1] != eol);
+        }
+
+      /* detect if leading context is discontinuous from last printed line.  */
+      if (beg != lastout)
+        lastout = 0;
+
+      /* Handle some details and read more data to scan.  */
+      save = residue + lim - beg;
+      if (out_byte)
+        totalcc = add_count (totalcc, buflim - bufbeg - save);
+      if (out_line)
+        nlscan (beg);
+      if (! fillbuf (save, stats))
+        {
+          suppressible_error (filename, errno);
+          goto finish_grep;
+        }
+    }
+  if (residue)
+    {
+      *buflim++ = eol;
+      if (outleft)
+        nlines += grepbuf (bufbeg + save - residue, buflim);
+      if (pending)
+        prpending (buflim);
+    }
+
+ finish_grep:
+  done_on_match -= not_text;
+  out_quiet -= not_text;
+  if ((not_text & ~out_quiet) && nlines != 0)
+    printf (_(""Binary file %s matches\n""), filename);
+  return nlines;
+}",

@@ -1,0 +1,40 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+3266,"""CWE-190""",jsish,858da537bde4de9d8c92466d5a866505310bc328,858da537bde4de9d8c92466d5a866505310bc328,0,520950,1.8536294375935855e+38,,,other,"int Jsi_ObjArraySizer(Jsi_Interp *interp, Jsi_Obj *obj, uint len)
+{
+    int nsiz = len + 1, mod = ALLOC_MOD_SIZE;
+    assert(obj->isarrlist);
+    if (mod>1)
+        nsiz = nsiz + ((mod-1) - (nsiz + mod - 1)%mod);
+    if (nsiz > MAX_ARRAY_LIST) {
+        Jsi_LogError(""array size too large"");
+        return 0;
+    }
+    if (len >= obj->arrMaxSize) {
+        int oldsz = (nsiz-obj->arrMaxSize);
+        obj->arr = (Jsi_Value**)Jsi_Realloc(obj->arr, nsiz*sizeof(Jsi_Value*));
+        memset(obj->arr+obj->arrMaxSize, 0, oldsz*sizeof(Jsi_Value*));
+        obj->arrMaxSize = nsiz;
+    }
+    if (len>obj->arrCnt)
+        obj->arrCnt = len;
+    return nsiz;
+}","int Jsi_ObjArraySizer(Jsi_Interp *interp, Jsi_Obj *obj, uint len)
+{
+    uint nsiz = len + 1, mod = ALLOC_MOD_SIZE;
+    assert(obj->isarrlist);
+    if (mod>1)
+        nsiz = nsiz + ((mod-1) - (nsiz + mod - 1)%mod);
+    if (len >= interp->maxArrayList || nsiz > interp->maxArrayList) {
+        Jsi_LogError(""array size too big: %u >= %u"", len, interp->maxArrayList);
+        return 0;
+    }
+    if (len >= obj->arrMaxSize) {
+        int oldsz = (nsiz-obj->arrMaxSize);
+        obj->arr = (Jsi_Value**)Jsi_Realloc(obj->arr, nsiz*sizeof(Jsi_Value*));
+        memset(obj->arr+obj->arrMaxSize, 0, oldsz*sizeof(Jsi_Value*));
+        obj->arrMaxSize = nsiz;
+    }
+    if (len>obj->arrCnt)
+        obj->arrCnt = len;
+    return nsiz;
+}",

@@ -1,0 +1,14 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+547,"[""CWE-400""]",server,9e39d0ae44595dbd1570805d97c9c874778a6be8,9e39d0ae44595dbd1570805d97c9c874778a6be8,0,509510,2.850542145756816e+38,6.0,"MDEV-25787 Bug report: crash on SELECT DISTINCT thousands_blob_fields
+
+fix a debug assert to account for not opened temp tables",other,"void ha_maria::drop_table(const char *name)
+{
+  DBUG_ASSERT(file->s->temporary);
+  (void) ha_close();
+  (void) maria_delete_table_files(name, 1, MY_WME);
+}","void ha_maria::drop_table(const char *name)
+{
+  DBUG_ASSERT(!file || file->s->temporary);
+  (void) ha_close();
+  (void) maria_delete_table_files(name, 1, MY_WME);
+}",

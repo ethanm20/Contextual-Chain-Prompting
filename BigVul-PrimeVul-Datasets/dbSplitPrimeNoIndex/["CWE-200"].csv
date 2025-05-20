@@ -1,0 +1,4369 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2439,"[""CWE-200""]",linux-2.6,e84e2e132c9c66d8498e7710d4ea532d1feaaac5,e84e2e132c9c66d8498e7710d4ea532d1feaaac5,0,487521,3.3675669014286785e+38,222.0,"tmpfs: restore missing clear_highpage
+
+tmpfs was misconverted to __GFP_ZERO in 2.6.11.  There's an unusual case in
+which shmem_getpage receives the page from its caller instead of allocating.
+We must cover this case by clear_highpage before SetPageUptodate, as before.
+
+Signed-off-by: Hugh Dickins <hugh@veritas.com>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"static int shmem_getpage(struct inode *inode, unsigned long idx,
+			struct page **pagep, enum sgp_type sgp, int *type)
+{
+	struct address_space *mapping = inode->i_mapping;
+	struct shmem_inode_info *info = SHMEM_I(inode);
+	struct shmem_sb_info *sbinfo;
+	struct page *filepage = *pagep;
+	struct page *swappage;
+	swp_entry_t *entry;
+	swp_entry_t swap;
+	int error;
+
+	if (idx >= SHMEM_MAX_INDEX)
+		return -EFBIG;
+
+	if (type)
+		*type = 0;
+
+	/*
+	 * Normally, filepage is NULL on entry, and either found
+	 * uptodate immediately, or allocated and zeroed, or read
+	 * in under swappage, which is then assigned to filepage.
+	 * But shmem_readpage and shmem_write_begin pass in a locked
+	 * filepage, which may be found not uptodate by other callers
+	 * too, and may need to be copied from the swappage read in.
+	 */
+repeat:
+	if (!filepage)
+		filepage = find_lock_page(mapping, idx);
+	if (filepage && PageUptodate(filepage))
+		goto done;
+	error = 0;
+	if (sgp == SGP_QUICK)
+		goto failed;
+
+	spin_lock(&info->lock);
+	shmem_recalc_inode(inode);
+	entry = shmem_swp_alloc(info, idx, sgp);
+	if (IS_ERR(entry)) {
+		spin_unlock(&info->lock);
+		error = PTR_ERR(entry);
+		goto failed;
+	}
+	swap = *entry;
+
+	if (swap.val) {
+		/* Look it up and read it in.. */
+		swappage = lookup_swap_cache(swap);
+		if (!swappage) {
+			shmem_swp_unmap(entry);
+			/* here we actually do the io */
+			if (type && !(*type & VM_FAULT_MAJOR)) {
+				__count_vm_event(PGMAJFAULT);
+				*type |= VM_FAULT_MAJOR;
+			}
+			spin_unlock(&info->lock);
+			swappage = shmem_swapin(info, swap, idx);
+			if (!swappage) {
+				spin_lock(&info->lock);
+				entry = shmem_swp_alloc(info, idx, sgp);
+				if (IS_ERR(entry))
+					error = PTR_ERR(entry);
+				else {
+					if (entry->val == swap.val)
+						error = -ENOMEM;
+					shmem_swp_unmap(entry);
+				}
+				spin_unlock(&info->lock);
+				if (error)
+					goto failed;
+				goto repeat;
+			}
+			wait_on_page_locked(swappage);
+			page_cache_release(swappage);
+			goto repeat;
+		}
+
+		/* We have to do this with page locked to prevent races */
+		if (TestSetPageLocked(swappage)) {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			wait_on_page_locked(swappage);
+			page_cache_release(swappage);
+			goto repeat;
+		}
+		if (PageWriteback(swappage)) {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			wait_on_page_writeback(swappage);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			goto repeat;
+		}
+		if (!PageUptodate(swappage)) {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			error = -EIO;
+			goto failed;
+		}
+
+		if (filepage) {
+			shmem_swp_set(info, entry, 0);
+			shmem_swp_unmap(entry);
+			delete_from_swap_cache(swappage);
+			spin_unlock(&info->lock);
+			copy_highpage(filepage, swappage);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			flush_dcache_page(filepage);
+			SetPageUptodate(filepage);
+			set_page_dirty(filepage);
+			swap_free(swap);
+		} else if (!(error = move_from_swap_cache(
+				swappage, idx, mapping))) {
+			info->flags |= SHMEM_PAGEIN;
+			shmem_swp_set(info, entry, 0);
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			filepage = swappage;
+			swap_free(swap);
+		} else {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			if (error == -ENOMEM) {
+				/* let kswapd refresh zone for GFP_ATOMICs */
+				congestion_wait(WRITE, HZ/50);
+			}
+			goto repeat;
+		}
+	} else if (sgp == SGP_READ && !filepage) {
+		shmem_swp_unmap(entry);
+		filepage = find_get_page(mapping, idx);
+		if (filepage &&
+		    (!PageUptodate(filepage) || TestSetPageLocked(filepage))) {
+			spin_unlock(&info->lock);
+			wait_on_page_locked(filepage);
+			page_cache_release(filepage);
+			filepage = NULL;
+			goto repeat;
+		}
+		spin_unlock(&info->lock);
+	} else {
+		shmem_swp_unmap(entry);
+		sbinfo = SHMEM_SB(inode->i_sb);
+		if (sbinfo->max_blocks) {
+			spin_lock(&sbinfo->stat_lock);
+			if (sbinfo->free_blocks == 0 ||
+			    shmem_acct_block(info->flags)) {
+				spin_unlock(&sbinfo->stat_lock);
+				spin_unlock(&info->lock);
+				error = -ENOSPC;
+				goto failed;
+			}
+			sbinfo->free_blocks--;
+			inode->i_blocks += BLOCKS_PER_PAGE;
+			spin_unlock(&sbinfo->stat_lock);
+		} else if (shmem_acct_block(info->flags)) {
+			spin_unlock(&info->lock);
+			error = -ENOSPC;
+			goto failed;
+		}
+
+		if (!filepage) {
+			spin_unlock(&info->lock);
+			filepage = shmem_alloc_page(mapping_gfp_mask(mapping),
+						    info,
+						    idx);
+			if (!filepage) {
+				shmem_unacct_blocks(info->flags, 1);
+				shmem_free_blocks(inode, 1);
+				error = -ENOMEM;
+				goto failed;
+			}
+
+			spin_lock(&info->lock);
+			entry = shmem_swp_alloc(info, idx, sgp);
+			if (IS_ERR(entry))
+				error = PTR_ERR(entry);
+			else {
+				swap = *entry;
+				shmem_swp_unmap(entry);
+			}
+			if (error || swap.val || 0 != add_to_page_cache_lru(
+					filepage, mapping, idx, GFP_ATOMIC)) {
+				spin_unlock(&info->lock);
+				page_cache_release(filepage);
+				shmem_unacct_blocks(info->flags, 1);
+				shmem_free_blocks(inode, 1);
+				filepage = NULL;
+				if (error)
+					goto failed;
+				goto repeat;
+			}
+			info->flags |= SHMEM_PAGEIN;
+		}
+
+		info->alloced++;
+		spin_unlock(&info->lock);
+		flush_dcache_page(filepage);
+		SetPageUptodate(filepage);
+	}
+done:
+	if (*pagep != filepage) {
+		*pagep = filepage;
+		if (sgp != SGP_FAULT)
+			unlock_page(filepage);
+
+	}
+	return 0;
+
+failed:
+	if (*pagep != filepage) {
+		unlock_page(filepage);
+		page_cache_release(filepage);
+	}
+	return error;
+}","static int shmem_getpage(struct inode *inode, unsigned long idx,
+			struct page **pagep, enum sgp_type sgp, int *type)
+{
+	struct address_space *mapping = inode->i_mapping;
+	struct shmem_inode_info *info = SHMEM_I(inode);
+	struct shmem_sb_info *sbinfo;
+	struct page *filepage = *pagep;
+	struct page *swappage;
+	swp_entry_t *entry;
+	swp_entry_t swap;
+	int error;
+
+	if (idx >= SHMEM_MAX_INDEX)
+		return -EFBIG;
+
+	if (type)
+		*type = 0;
+
+	/*
+	 * Normally, filepage is NULL on entry, and either found
+	 * uptodate immediately, or allocated and zeroed, or read
+	 * in under swappage, which is then assigned to filepage.
+	 * But shmem_readpage and shmem_write_begin pass in a locked
+	 * filepage, which may be found not uptodate by other callers
+	 * too, and may need to be copied from the swappage read in.
+	 */
+repeat:
+	if (!filepage)
+		filepage = find_lock_page(mapping, idx);
+	if (filepage && PageUptodate(filepage))
+		goto done;
+	error = 0;
+	if (sgp == SGP_QUICK)
+		goto failed;
+
+	spin_lock(&info->lock);
+	shmem_recalc_inode(inode);
+	entry = shmem_swp_alloc(info, idx, sgp);
+	if (IS_ERR(entry)) {
+		spin_unlock(&info->lock);
+		error = PTR_ERR(entry);
+		goto failed;
+	}
+	swap = *entry;
+
+	if (swap.val) {
+		/* Look it up and read it in.. */
+		swappage = lookup_swap_cache(swap);
+		if (!swappage) {
+			shmem_swp_unmap(entry);
+			/* here we actually do the io */
+			if (type && !(*type & VM_FAULT_MAJOR)) {
+				__count_vm_event(PGMAJFAULT);
+				*type |= VM_FAULT_MAJOR;
+			}
+			spin_unlock(&info->lock);
+			swappage = shmem_swapin(info, swap, idx);
+			if (!swappage) {
+				spin_lock(&info->lock);
+				entry = shmem_swp_alloc(info, idx, sgp);
+				if (IS_ERR(entry))
+					error = PTR_ERR(entry);
+				else {
+					if (entry->val == swap.val)
+						error = -ENOMEM;
+					shmem_swp_unmap(entry);
+				}
+				spin_unlock(&info->lock);
+				if (error)
+					goto failed;
+				goto repeat;
+			}
+			wait_on_page_locked(swappage);
+			page_cache_release(swappage);
+			goto repeat;
+		}
+
+		/* We have to do this with page locked to prevent races */
+		if (TestSetPageLocked(swappage)) {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			wait_on_page_locked(swappage);
+			page_cache_release(swappage);
+			goto repeat;
+		}
+		if (PageWriteback(swappage)) {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			wait_on_page_writeback(swappage);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			goto repeat;
+		}
+		if (!PageUptodate(swappage)) {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			error = -EIO;
+			goto failed;
+		}
+
+		if (filepage) {
+			shmem_swp_set(info, entry, 0);
+			shmem_swp_unmap(entry);
+			delete_from_swap_cache(swappage);
+			spin_unlock(&info->lock);
+			copy_highpage(filepage, swappage);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			flush_dcache_page(filepage);
+			SetPageUptodate(filepage);
+			set_page_dirty(filepage);
+			swap_free(swap);
+		} else if (!(error = move_from_swap_cache(
+				swappage, idx, mapping))) {
+			info->flags |= SHMEM_PAGEIN;
+			shmem_swp_set(info, entry, 0);
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			filepage = swappage;
+			swap_free(swap);
+		} else {
+			shmem_swp_unmap(entry);
+			spin_unlock(&info->lock);
+			unlock_page(swappage);
+			page_cache_release(swappage);
+			if (error == -ENOMEM) {
+				/* let kswapd refresh zone for GFP_ATOMICs */
+				congestion_wait(WRITE, HZ/50);
+			}
+			goto repeat;
+		}
+	} else if (sgp == SGP_READ && !filepage) {
+		shmem_swp_unmap(entry);
+		filepage = find_get_page(mapping, idx);
+		if (filepage &&
+		    (!PageUptodate(filepage) || TestSetPageLocked(filepage))) {
+			spin_unlock(&info->lock);
+			wait_on_page_locked(filepage);
+			page_cache_release(filepage);
+			filepage = NULL;
+			goto repeat;
+		}
+		spin_unlock(&info->lock);
+	} else {
+		shmem_swp_unmap(entry);
+		sbinfo = SHMEM_SB(inode->i_sb);
+		if (sbinfo->max_blocks) {
+			spin_lock(&sbinfo->stat_lock);
+			if (sbinfo->free_blocks == 0 ||
+			    shmem_acct_block(info->flags)) {
+				spin_unlock(&sbinfo->stat_lock);
+				spin_unlock(&info->lock);
+				error = -ENOSPC;
+				goto failed;
+			}
+			sbinfo->free_blocks--;
+			inode->i_blocks += BLOCKS_PER_PAGE;
+			spin_unlock(&sbinfo->stat_lock);
+		} else if (shmem_acct_block(info->flags)) {
+			spin_unlock(&info->lock);
+			error = -ENOSPC;
+			goto failed;
+		}
+
+		if (!filepage) {
+			spin_unlock(&info->lock);
+			filepage = shmem_alloc_page(mapping_gfp_mask(mapping),
+						    info,
+						    idx);
+			if (!filepage) {
+				shmem_unacct_blocks(info->flags, 1);
+				shmem_free_blocks(inode, 1);
+				error = -ENOMEM;
+				goto failed;
+			}
+
+			spin_lock(&info->lock);
+			entry = shmem_swp_alloc(info, idx, sgp);
+			if (IS_ERR(entry))
+				error = PTR_ERR(entry);
+			else {
+				swap = *entry;
+				shmem_swp_unmap(entry);
+			}
+			if (error || swap.val || 0 != add_to_page_cache_lru(
+					filepage, mapping, idx, GFP_ATOMIC)) {
+				spin_unlock(&info->lock);
+				page_cache_release(filepage);
+				shmem_unacct_blocks(info->flags, 1);
+				shmem_free_blocks(inode, 1);
+				filepage = NULL;
+				if (error)
+					goto failed;
+				goto repeat;
+			}
+			info->flags |= SHMEM_PAGEIN;
+		}
+
+		info->alloced++;
+		spin_unlock(&info->lock);
+		clear_highpage(filepage);
+		flush_dcache_page(filepage);
+		SetPageUptodate(filepage);
+	}
+done:
+	if (*pagep != filepage) {
+		*pagep = filepage;
+		if (sgp != SGP_FAULT)
+			unlock_page(filepage);
+
+	}
+	return 0;
+
+failed:
+	if (*pagep != filepage) {
+		unlock_page(filepage);
+		page_cache_release(filepage);
+	}
+	return error;
+}",
+2451,"[""CWE-200""]",linux-2.6,82e68f7ffec3800425f2391c8c86277606860442,82e68f7ffec3800425f2391c8c86277606860442,0,488779,6.603169033112069e+37,27.0,"sound: ensure device number is valid in snd_seq_oss_synth_make_info
+
+snd_seq_oss_synth_make_info() incorrectly reports information
+to userspace without first checking for the validity of the
+device number, leading to possible information leak (CVE-2008-3272).
+
+Reported-By: Tobias Klein <tk@trapkit.de>
+Acked-and-tested-by: Takashi Iwai <tiwai@suse.de>
+Cc: stable@kernel.org
+Signed-off-by: Willy Tarreau <w@1wt.eu>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>",other,"snd_seq_oss_synth_make_info(struct seq_oss_devinfo *dp, int dev, struct synth_info *inf)
+{
+	struct seq_oss_synth *rec;
+
+	if (dp->synths[dev].is_midi) {
+		struct midi_info minf;
+		snd_seq_oss_midi_make_info(dp, dp->synths[dev].midi_mapped, &minf);
+		inf->synth_type = SYNTH_TYPE_MIDI;
+		inf->synth_subtype = 0;
+		inf->nr_voices = 16;
+		inf->device = dev;
+		strlcpy(inf->name, minf.name, sizeof(inf->name));
+	} else {
+		if ((rec = get_synthdev(dp, dev)) == NULL)
+			return -ENXIO;
+		inf->synth_type = rec->synth_type;
+		inf->synth_subtype = rec->synth_subtype;
+		inf->nr_voices = rec->nr_voices;
+		inf->device = dev;
+		strlcpy(inf->name, rec->name, sizeof(inf->name));
+		snd_use_lock_free(&rec->use_lock);
+	}
+	return 0;
+}","snd_seq_oss_synth_make_info(struct seq_oss_devinfo *dp, int dev, struct synth_info *inf)
+{
+	struct seq_oss_synth *rec;
+
+	if (dev < 0 || dev >= dp->max_synthdev)
+		return -ENXIO;
+
+	if (dp->synths[dev].is_midi) {
+		struct midi_info minf;
+		snd_seq_oss_midi_make_info(dp, dp->synths[dev].midi_mapped, &minf);
+		inf->synth_type = SYNTH_TYPE_MIDI;
+		inf->synth_subtype = 0;
+		inf->nr_voices = 16;
+		inf->device = dev;
+		strlcpy(inf->name, minf.name, sizeof(inf->name));
+	} else {
+		if ((rec = get_synthdev(dp, dev)) == NULL)
+			return -ENXIO;
+		inf->synth_type = rec->synth_type;
+		inf->synth_subtype = rec->synth_subtype;
+		inf->nr_voices = rec->nr_voices;
+		inf->device = dev;
+		strlcpy(inf->name, rec->name, sizeof(inf->name));
+		snd_use_lock_free(&rec->use_lock);
+	}
+	return 0;
+}",
+2460,"[""CWE-200""]",linux-2.6,d97240552cd98c4b07322f30f66fd9c3ba4171de,d97240552cd98c4b07322f30f66fd9c3ba4171de,0,489063,9.072464868650133e+37,32.0,"sctp: fix random memory dereference with SCTP_HMAC_IDENT option.
+
+The number of identifiers needs to be checked against the option
+length.  Also, the identifier index provided needs to be verified
+to make sure that it doesn't exceed the bounds of the array.
+
+Signed-off-by: Vlad Yasevich <vladislav.yasevich@hp.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"int sctp_auth_ep_set_hmacs(struct sctp_endpoint *ep,
+			   struct sctp_hmacalgo *hmacs)
+{
+	int has_sha1 = 0;
+	__u16 id;
+	int i;
+
+	/* Scan the list looking for unsupported id.  Also make sure that
+	 * SHA1 is specified.
+	 */
+	for (i = 0; i < hmacs->shmac_num_idents; i++) {
+		id = hmacs->shmac_idents[i];
+
+		if (SCTP_AUTH_HMAC_ID_SHA1 == id)
+			has_sha1 = 1;
+
+		if (!sctp_hmac_list[id].hmac_name)
+			return -EOPNOTSUPP;
+	}
+
+	if (!has_sha1)
+		return -EINVAL;
+
+	memcpy(ep->auth_hmacs_list->hmac_ids, &hmacs->shmac_idents[0],
+		hmacs->shmac_num_idents * sizeof(__u16));
+	ep->auth_hmacs_list->param_hdr.length = htons(sizeof(sctp_paramhdr_t) +
+				hmacs->shmac_num_idents * sizeof(__u16));
+	return 0;
+}","int sctp_auth_ep_set_hmacs(struct sctp_endpoint *ep,
+			   struct sctp_hmacalgo *hmacs)
+{
+	int has_sha1 = 0;
+	__u16 id;
+	int i;
+
+	/* Scan the list looking for unsupported id.  Also make sure that
+	 * SHA1 is specified.
+	 */
+	for (i = 0; i < hmacs->shmac_num_idents; i++) {
+		id = hmacs->shmac_idents[i];
+
+		if (id > SCTP_AUTH_HMAC_ID_MAX)
+			return -EOPNOTSUPP;
+
+		if (SCTP_AUTH_HMAC_ID_SHA1 == id)
+			has_sha1 = 1;
+
+		if (!sctp_hmac_list[id].hmac_name)
+			return -EOPNOTSUPP;
+	}
+
+	if (!has_sha1)
+		return -EINVAL;
+
+	memcpy(ep->auth_hmacs_list->hmac_ids, &hmacs->shmac_idents[0],
+		hmacs->shmac_num_idents * sizeof(__u16));
+	ep->auth_hmacs_list->param_hdr.length = htons(sizeof(sctp_paramhdr_t) +
+				hmacs->shmac_num_idents * sizeof(__u16));
+	return 0;
+}",
+2487,"[""CWE-200""]",linux-2.6,17ac2e9c58b69a1e25460a568eae1b0dc0188c25,17ac2e9c58b69a1e25460a568eae1b0dc0188c25,0,490869,1.7210859326913196e+38,30.0,"rose: Fix rose_getname() leak
+
+rose_getname() can leak kernel memory to user.
+
+Signed-off-by: Eric Dumazet <eric.dumazet@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int rose_getname(struct socket *sock, struct sockaddr *uaddr,
+	int *uaddr_len, int peer)
+{
+	struct full_sockaddr_rose *srose = (struct full_sockaddr_rose *)uaddr;
+	struct sock *sk = sock->sk;
+	struct rose_sock *rose = rose_sk(sk);
+	int n;
+
+	if (peer != 0) {
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -ENOTCONN;
+		srose->srose_family = AF_ROSE;
+		srose->srose_addr   = rose->dest_addr;
+		srose->srose_call   = rose->dest_call;
+		srose->srose_ndigis = rose->dest_ndigis;
+		for (n = 0; n < rose->dest_ndigis; n++)
+			srose->srose_digis[n] = rose->dest_digis[n];
+	} else {
+		srose->srose_family = AF_ROSE;
+		srose->srose_addr   = rose->source_addr;
+		srose->srose_call   = rose->source_call;
+		srose->srose_ndigis = rose->source_ndigis;
+		for (n = 0; n < rose->source_ndigis; n++)
+			srose->srose_digis[n] = rose->source_digis[n];
+	}
+
+	*uaddr_len = sizeof(struct full_sockaddr_rose);
+	return 0;
+}","static int rose_getname(struct socket *sock, struct sockaddr *uaddr,
+	int *uaddr_len, int peer)
+{
+	struct full_sockaddr_rose *srose = (struct full_sockaddr_rose *)uaddr;
+	struct sock *sk = sock->sk;
+	struct rose_sock *rose = rose_sk(sk);
+	int n;
+
+	memset(srose, 0, sizeof(*srose));
+	if (peer != 0) {
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -ENOTCONN;
+		srose->srose_family = AF_ROSE;
+		srose->srose_addr   = rose->dest_addr;
+		srose->srose_call   = rose->dest_call;
+		srose->srose_ndigis = rose->dest_ndigis;
+		for (n = 0; n < rose->dest_ndigis; n++)
+			srose->srose_digis[n] = rose->dest_digis[n];
+	} else {
+		srose->srose_family = AF_ROSE;
+		srose->srose_addr   = rose->source_addr;
+		srose->srose_call   = rose->source_call;
+		srose->srose_ndigis = rose->source_ndigis;
+		for (n = 0; n < rose->source_ndigis; n++)
+			srose->srose_digis[n] = rose->source_digis[n];
+	}
+
+	*uaddr_len = sizeof(struct full_sockaddr_rose);
+	return 0;
+}",
+2488,"[""CWE-200""]",linux-2.6,3d392475c873c10c10d6d96b94d092a34ebd4791,3d392475c873c10c10d6d96b94d092a34ebd4791,0,490903,1.797674594636025e+38,31.0,"appletalk: fix atalk_getname() leak
+
+atalk_getname() can leak 8 bytes of kernel memory to user
+
+Signed-off-by: Eric Dumazet <eric.dumazet@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int atalk_getname(struct socket *sock, struct sockaddr *uaddr,
+			 int *uaddr_len, int peer)
+{
+	struct sockaddr_at sat;
+	struct sock *sk = sock->sk;
+	struct atalk_sock *at = at_sk(sk);
+
+	if (sock_flag(sk, SOCK_ZAPPED))
+		if (atalk_autobind(sk) < 0)
+			return -ENOBUFS;
+
+	*uaddr_len = sizeof(struct sockaddr_at);
+
+	if (peer) {
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -ENOTCONN;
+
+		sat.sat_addr.s_net  = at->dest_net;
+		sat.sat_addr.s_node = at->dest_node;
+		sat.sat_port	    = at->dest_port;
+	} else {
+		sat.sat_addr.s_net  = at->src_net;
+		sat.sat_addr.s_node = at->src_node;
+		sat.sat_port	    = at->src_port;
+	}
+
+	sat.sat_family = AF_APPLETALK;
+	memcpy(uaddr, &sat, sizeof(sat));
+	return 0;
+}","static int atalk_getname(struct socket *sock, struct sockaddr *uaddr,
+			 int *uaddr_len, int peer)
+{
+	struct sockaddr_at sat;
+	struct sock *sk = sock->sk;
+	struct atalk_sock *at = at_sk(sk);
+
+	if (sock_flag(sk, SOCK_ZAPPED))
+		if (atalk_autobind(sk) < 0)
+			return -ENOBUFS;
+
+	*uaddr_len = sizeof(struct sockaddr_at);
+	memset(&sat.sat_zero, 0, sizeof(sat.sat_zero));
+
+	if (peer) {
+		if (sk->sk_state != TCP_ESTABLISHED)
+			return -ENOTCONN;
+
+		sat.sat_addr.s_net  = at->dest_net;
+		sat.sat_addr.s_node = at->dest_node;
+		sat.sat_port	    = at->dest_port;
+	} else {
+		sat.sat_addr.s_net  = at->src_net;
+		sat.sat_addr.s_node = at->src_node;
+		sat.sat_port	    = at->src_port;
+	}
+
+	sat.sat_family = AF_APPLETALK;
+	memcpy(uaddr, &sat, sizeof(sat));
+	return 0;
+}",
+2489,"[""CWE-200""]",linux-2.6,80922bbb12a105f858a8f0abb879cb4302d0ecaa,80922bbb12a105f858a8f0abb879cb4302d0ecaa,0,490916,1.2050145244010782e+38,26.0,"econet: Fix econet_getname() leak
+
+econet_getname() can leak kernel memory to user.
+
+Signed-off-by: Eric Dumazet <eric.dumazet@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int econet_getname(struct socket *sock, struct sockaddr *uaddr,
+			  int *uaddr_len, int peer)
+{
+	struct sock *sk;
+	struct econet_sock *eo;
+	struct sockaddr_ec *sec = (struct sockaddr_ec *)uaddr;
+
+	if (peer)
+		return -EOPNOTSUPP;
+
+	mutex_lock(&econet_mutex);
+
+	sk = sock->sk;
+	eo = ec_sk(sk);
+
+	sec->sec_family	  = AF_ECONET;
+	sec->port	  = eo->port;
+	sec->addr.station = eo->station;
+	sec->addr.net	  = eo->net;
+
+	mutex_unlock(&econet_mutex);
+
+	*uaddr_len = sizeof(*sec);
+	return 0;
+}","static int econet_getname(struct socket *sock, struct sockaddr *uaddr,
+			  int *uaddr_len, int peer)
+{
+	struct sock *sk;
+	struct econet_sock *eo;
+	struct sockaddr_ec *sec = (struct sockaddr_ec *)uaddr;
+
+	if (peer)
+		return -EOPNOTSUPP;
+
+	memset(sec, 0, sizeof(*sec));
+	mutex_lock(&econet_mutex);
+
+	sk = sock->sk;
+	eo = ec_sk(sk);
+
+	sec->sec_family	  = AF_ECONET;
+	sec->port	  = eo->port;
+	sec->addr.station = eo->station;
+	sec->addr.net	  = eo->net;
+
+	mutex_unlock(&econet_mutex);
+
+	*uaddr_len = sizeof(*sec);
+	return 0;
+}",
+2490,"[""CWE-200""]",linux-2.6,e84b90ae5eb3c112d1f208964df1d8156a538289,e84b90ae5eb3c112d1f208964df1d8156a538289,0,490941,7.523641520404744e+37,18.0,"can: Fix raw_getname() leak
+
+raw_getname() can leak 10 bytes of kernel memory to user
+
+(two bytes hole between can_family and can_ifindex,
+8 bytes at the end of sockaddr_can structure)
+
+Signed-off-by: Eric Dumazet <eric.dumazet@gmail.com>
+Acked-by: Oliver Hartkopp <oliver@hartkopp.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int raw_getname(struct socket *sock, struct sockaddr *uaddr,
+		       int *len, int peer)
+{
+	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
+	struct sock *sk = sock->sk;
+	struct raw_sock *ro = raw_sk(sk);
+
+	if (peer)
+		return -EOPNOTSUPP;
+
+	addr->can_family  = AF_CAN;
+	addr->can_ifindex = ro->ifindex;
+
+	*len = sizeof(*addr);
+
+	return 0;
+}","static int raw_getname(struct socket *sock, struct sockaddr *uaddr,
+		       int *len, int peer)
+{
+	struct sockaddr_can *addr = (struct sockaddr_can *)uaddr;
+	struct sock *sk = sock->sk;
+	struct raw_sock *ro = raw_sk(sk);
+
+	if (peer)
+		return -EOPNOTSUPP;
+
+	memset(addr, 0, sizeof(*addr));
+	addr->can_family  = AF_CAN;
+	addr->can_ifindex = ro->ifindex;
+
+	*len = sizeof(*addr);
+
+	return 0;
+}",
+2491,"[""CWE-200""]",linux-2.6,f6b97b29513950bfbf621a83d85b6f86b39ec8db,f6b97b29513950bfbf621a83d85b6f86b39ec8db,0,490989,1.3579244641080666e+38,29.0,"netrom: Fix nr_getname() leak
+
+nr_getname() can leak kernel memory to user.
+
+Signed-off-by: Eric Dumazet <eric.dumazet@gmail.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int nr_getname(struct socket *sock, struct sockaddr *uaddr,
+	int *uaddr_len, int peer)
+{
+	struct full_sockaddr_ax25 *sax = (struct full_sockaddr_ax25 *)uaddr;
+	struct sock *sk = sock->sk;
+	struct nr_sock *nr = nr_sk(sk);
+
+	lock_sock(sk);
+	if (peer != 0) {
+		if (sk->sk_state != TCP_ESTABLISHED) {
+			release_sock(sk);
+			return -ENOTCONN;
+		}
+		sax->fsa_ax25.sax25_family = AF_NETROM;
+		sax->fsa_ax25.sax25_ndigis = 1;
+		sax->fsa_ax25.sax25_call   = nr->user_addr;
+		sax->fsa_digipeater[0]     = nr->dest_addr;
+		*uaddr_len = sizeof(struct full_sockaddr_ax25);
+	} else {
+		sax->fsa_ax25.sax25_family = AF_NETROM;
+		sax->fsa_ax25.sax25_ndigis = 0;
+		sax->fsa_ax25.sax25_call   = nr->source_addr;
+		*uaddr_len = sizeof(struct sockaddr_ax25);
+	}
+	release_sock(sk);
+
+	return 0;
+}","static int nr_getname(struct socket *sock, struct sockaddr *uaddr,
+	int *uaddr_len, int peer)
+{
+	struct full_sockaddr_ax25 *sax = (struct full_sockaddr_ax25 *)uaddr;
+	struct sock *sk = sock->sk;
+	struct nr_sock *nr = nr_sk(sk);
+
+	lock_sock(sk);
+	if (peer != 0) {
+		if (sk->sk_state != TCP_ESTABLISHED) {
+			release_sock(sk);
+			return -ENOTCONN;
+		}
+		sax->fsa_ax25.sax25_family = AF_NETROM;
+		sax->fsa_ax25.sax25_ndigis = 1;
+		sax->fsa_ax25.sax25_call   = nr->user_addr;
+		memset(sax->fsa_digipeater, 0, sizeof(sax->fsa_digipeater));
+		sax->fsa_digipeater[0]     = nr->dest_addr;
+		*uaddr_len = sizeof(struct full_sockaddr_ax25);
+	} else {
+		sax->fsa_ax25.sax25_family = AF_NETROM;
+		sax->fsa_ax25.sax25_ndigis = 0;
+		sax->fsa_ax25.sax25_call   = nr->source_addr;
+		*uaddr_len = sizeof(struct sockaddr_ax25);
+	}
+	release_sock(sk);
+
+	return 0;
+}",
+2493,"[""CWE-200""]",linux-2.6,8a47077a0b5aa2649751c46e7a27884e6686ccbf,8a47077a0b5aa2649751c46e7a27884e6686ccbf,0,491107,6.704820641164503e+37,16.0,"[NETLINK]: Missing padding fields in dumped structures
+
+Plug holes with padding fields and initialized them to zero.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static __inline__ int cbq_dump_ovl(struct sk_buff *skb, struct cbq_class *cl)
+{
+	unsigned char	 *b = skb->tail;
+	struct tc_cbq_ovl opt;
+
+	opt.strategy = cl->ovl_strategy;
+	opt.priority2 = cl->priority2+1;
+	opt.penalty = (cl->penalty*1000)/HZ;
+	RTA_PUT(skb, TCA_CBQ_OVL_STRATEGY, sizeof(opt), &opt);
+	return skb->len;
+
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static __inline__ int cbq_dump_ovl(struct sk_buff *skb, struct cbq_class *cl)
+{
+	unsigned char	 *b = skb->tail;
+	struct tc_cbq_ovl opt;
+
+	opt.strategy = cl->ovl_strategy;
+	opt.priority2 = cl->priority2+1;
+	opt.pad = 0;
+	opt.penalty = (cl->penalty*1000)/HZ;
+	RTA_PUT(skb, TCA_CBQ_OVL_STRATEGY, sizeof(opt), &opt);
+	return skb->len;
+
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2494,"[""CWE-200""]",linux-2.6,8a47077a0b5aa2649751c46e7a27884e6686ccbf,8a47077a0b5aa2649751c46e7a27884e6686ccbf,0,491155,5.696578234846942e+37,45.0,"[NETLINK]: Missing padding fields in dumped structures
+
+Plug holes with padding fields and initialized them to zero.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int rsvp_dump(struct tcf_proto *tp, unsigned long fh,
+		     struct sk_buff *skb, struct tcmsg *t)
+{
+	struct rsvp_filter *f = (struct rsvp_filter*)fh;
+	struct rsvp_session *s;
+	unsigned char	 *b = skb->tail;
+	struct rtattr *rta;
+	struct tc_rsvp_pinfo pinfo;
+
+	if (f == NULL)
+		return skb->len;
+	s = f->sess;
+
+	t->tcm_handle = f->handle;
+
+
+	rta = (struct rtattr*)b;
+	RTA_PUT(skb, TCA_OPTIONS, 0, NULL);
+
+	RTA_PUT(skb, TCA_RSVP_DST, sizeof(s->dst), &s->dst);
+	pinfo.dpi = s->dpi;
+	pinfo.spi = f->spi;
+	pinfo.protocol = s->protocol;
+	pinfo.tunnelid = s->tunnelid;
+	pinfo.tunnelhdr = f->tunnelhdr;
+	RTA_PUT(skb, TCA_RSVP_PINFO, sizeof(pinfo), &pinfo);
+	if (f->res.classid)
+		RTA_PUT(skb, TCA_RSVP_CLASSID, 4, &f->res.classid);
+	if (((f->handle>>8)&0xFF) != 16)
+		RTA_PUT(skb, TCA_RSVP_SRC, sizeof(f->src), f->src);
+
+	if (tcf_exts_dump(skb, &f->exts, &rsvp_ext_map) < 0)
+		goto rtattr_failure;
+
+	rta->rta_len = skb->tail - b;
+
+	if (tcf_exts_dump_stats(skb, &f->exts, &rsvp_ext_map) < 0)
+		goto rtattr_failure;
+	return skb->len;
+
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static int rsvp_dump(struct tcf_proto *tp, unsigned long fh,
+		     struct sk_buff *skb, struct tcmsg *t)
+{
+	struct rsvp_filter *f = (struct rsvp_filter*)fh;
+	struct rsvp_session *s;
+	unsigned char	 *b = skb->tail;
+	struct rtattr *rta;
+	struct tc_rsvp_pinfo pinfo;
+
+	if (f == NULL)
+		return skb->len;
+	s = f->sess;
+
+	t->tcm_handle = f->handle;
+
+
+	rta = (struct rtattr*)b;
+	RTA_PUT(skb, TCA_OPTIONS, 0, NULL);
+
+	RTA_PUT(skb, TCA_RSVP_DST, sizeof(s->dst), &s->dst);
+	pinfo.dpi = s->dpi;
+	pinfo.spi = f->spi;
+	pinfo.protocol = s->protocol;
+	pinfo.tunnelid = s->tunnelid;
+	pinfo.tunnelhdr = f->tunnelhdr;
+	pinfo.pad = 0;
+	RTA_PUT(skb, TCA_RSVP_PINFO, sizeof(pinfo), &pinfo);
+	if (f->res.classid)
+		RTA_PUT(skb, TCA_RSVP_CLASSID, 4, &f->res.classid);
+	if (((f->handle>>8)&0xFF) != 16)
+		RTA_PUT(skb, TCA_RSVP_SRC, sizeof(f->src), f->src);
+
+	if (tcf_exts_dump(skb, &f->exts, &rsvp_ext_map) < 0)
+		goto rtattr_failure;
+
+	rta->rta_len = skb->tail - b;
+
+	if (tcf_exts_dump_stats(skb, &f->exts, &rsvp_ext_map) < 0)
+		goto rtattr_failure;
+	return skb->len;
+
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2495,"[""CWE-200""]",linux-2.6,8a47077a0b5aa2649751c46e7a27884e6686ccbf,8a47077a0b5aa2649751c46e7a27884e6686ccbf,0,491081,8.264617086337755e+36,39.0,"[NETLINK]: Missing padding fields in dumped structures
+
+Plug holes with padding fields and initialized them to zero.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int inet6_fill_prefix(struct sk_buff *skb, struct inet6_dev *idev,
+			struct prefix_info *pinfo, u32 pid, u32 seq, 
+			int event, unsigned int flags)
+{
+	struct prefixmsg	*pmsg;
+	struct nlmsghdr 	*nlh;
+	unsigned char		*b = skb->tail;
+	struct prefix_cacheinfo	ci;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*pmsg), flags);
+	pmsg = NLMSG_DATA(nlh);
+	pmsg->prefix_family = AF_INET6;
+	pmsg->prefix_ifindex = idev->dev->ifindex;
+	pmsg->prefix_len = pinfo->prefix_len;
+	pmsg->prefix_type = pinfo->type;
+	
+	pmsg->prefix_flags = 0;
+	if (pinfo->onlink)
+		pmsg->prefix_flags |= IF_PREFIX_ONLINK;
+	if (pinfo->autoconf)
+		pmsg->prefix_flags |= IF_PREFIX_AUTOCONF;
+
+	RTA_PUT(skb, PREFIX_ADDRESS, sizeof(pinfo->prefix), &pinfo->prefix);
+
+	ci.preferred_time = ntohl(pinfo->prefered);
+	ci.valid_time = ntohl(pinfo->valid);
+	RTA_PUT(skb, PREFIX_CACHEINFO, sizeof(ci), &ci);
+
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static int inet6_fill_prefix(struct sk_buff *skb, struct inet6_dev *idev,
+			struct prefix_info *pinfo, u32 pid, u32 seq, 
+			int event, unsigned int flags)
+{
+	struct prefixmsg	*pmsg;
+	struct nlmsghdr 	*nlh;
+	unsigned char		*b = skb->tail;
+	struct prefix_cacheinfo	ci;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*pmsg), flags);
+	pmsg = NLMSG_DATA(nlh);
+	pmsg->prefix_family = AF_INET6;
+	pmsg->prefix_pad1 = 0;
+	pmsg->prefix_pad2 = 0;
+	pmsg->prefix_ifindex = idev->dev->ifindex;
+	pmsg->prefix_len = pinfo->prefix_len;
+	pmsg->prefix_type = pinfo->type;
+	pmsg->prefix_pad3 = 0;
+	
+	pmsg->prefix_flags = 0;
+	if (pinfo->onlink)
+		pmsg->prefix_flags |= IF_PREFIX_ONLINK;
+	if (pinfo->autoconf)
+		pmsg->prefix_flags |= IF_PREFIX_AUTOCONF;
+
+	RTA_PUT(skb, PREFIX_ADDRESS, sizeof(pinfo->prefix), &pinfo->prefix);
+
+	ci.preferred_time = ntohl(pinfo->prefered);
+	ci.valid_time = ntohl(pinfo->valid);
+	RTA_PUT(skb, PREFIX_CACHEINFO, sizeof(ci), &ci);
+
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2496,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491340,2.0606168421600367e+38,84.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int neightbl_fill_info(struct neigh_table *tbl, struct sk_buff *skb,
+			      struct netlink_callback *cb)
+{
+	struct nlmsghdr *nlh;
+	struct ndtmsg *ndtmsg;
+
+	nlh = NLMSG_NEW_ANSWER(skb, cb, RTM_NEWNEIGHTBL, sizeof(struct ndtmsg),
+			       NLM_F_MULTI);
+
+	ndtmsg = NLMSG_DATA(nlh);
+
+	read_lock_bh(&tbl->lock);
+	ndtmsg->ndtm_family = tbl->family;
+
+	RTA_PUT_STRING(skb, NDTA_NAME, tbl->id);
+	RTA_PUT_MSECS(skb, NDTA_GC_INTERVAL, tbl->gc_interval);
+	RTA_PUT_U32(skb, NDTA_THRESH1, tbl->gc_thresh1);
+	RTA_PUT_U32(skb, NDTA_THRESH2, tbl->gc_thresh2);
+	RTA_PUT_U32(skb, NDTA_THRESH3, tbl->gc_thresh3);
+
+	{
+		unsigned long now = jiffies;
+		unsigned int flush_delta = now - tbl->last_flush;
+		unsigned int rand_delta = now - tbl->last_rand;
+
+		struct ndt_config ndc = {
+			.ndtc_key_len		= tbl->key_len,
+			.ndtc_entry_size	= tbl->entry_size,
+			.ndtc_entries		= atomic_read(&tbl->entries),
+			.ndtc_last_flush	= jiffies_to_msecs(flush_delta),
+			.ndtc_last_rand		= jiffies_to_msecs(rand_delta),
+			.ndtc_hash_rnd		= tbl->hash_rnd,
+			.ndtc_hash_mask		= tbl->hash_mask,
+			.ndtc_hash_chain_gc	= tbl->hash_chain_gc,
+			.ndtc_proxy_qlen	= tbl->proxy_queue.qlen,
+		};
+
+		RTA_PUT(skb, NDTA_CONFIG, sizeof(ndc), &ndc);
+	}
+
+	{
+		int cpu;
+		struct ndt_stats ndst;
+
+		memset(&ndst, 0, sizeof(ndst));
+
+		for (cpu = 0; cpu < NR_CPUS; cpu++) {
+			struct neigh_statistics	*st;
+
+			if (!cpu_possible(cpu))
+				continue;
+
+			st = per_cpu_ptr(tbl->stats, cpu);
+			ndst.ndts_allocs		+= st->allocs;
+			ndst.ndts_destroys		+= st->destroys;
+			ndst.ndts_hash_grows		+= st->hash_grows;
+			ndst.ndts_res_failed		+= st->res_failed;
+			ndst.ndts_lookups		+= st->lookups;
+			ndst.ndts_hits			+= st->hits;
+			ndst.ndts_rcv_probes_mcast	+= st->rcv_probes_mcast;
+			ndst.ndts_rcv_probes_ucast	+= st->rcv_probes_ucast;
+			ndst.ndts_periodic_gc_runs	+= st->periodic_gc_runs;
+			ndst.ndts_forced_gc_runs	+= st->forced_gc_runs;
+		}
+
+		RTA_PUT(skb, NDTA_STATS, sizeof(ndst), &ndst);
+	}
+
+	BUG_ON(tbl->parms.dev);
+	if (neightbl_fill_parms(skb, &tbl->parms) < 0)
+		goto rtattr_failure;
+
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_END(skb, nlh);
+
+rtattr_failure:
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_CANCEL(skb, nlh);
+ 
+nlmsg_failure:
+	return -1;
+}","static int neightbl_fill_info(struct neigh_table *tbl, struct sk_buff *skb,
+			      struct netlink_callback *cb)
+{
+	struct nlmsghdr *nlh;
+	struct ndtmsg *ndtmsg;
+
+	nlh = NLMSG_NEW_ANSWER(skb, cb, RTM_NEWNEIGHTBL, sizeof(struct ndtmsg),
+			       NLM_F_MULTI);
+
+	ndtmsg = NLMSG_DATA(nlh);
+
+	read_lock_bh(&tbl->lock);
+	ndtmsg->ndtm_family = tbl->family;
+	ndtmsg->ndtm_pad1   = 0;
+	ndtmsg->ndtm_pad2   = 0;
+
+	RTA_PUT_STRING(skb, NDTA_NAME, tbl->id);
+	RTA_PUT_MSECS(skb, NDTA_GC_INTERVAL, tbl->gc_interval);
+	RTA_PUT_U32(skb, NDTA_THRESH1, tbl->gc_thresh1);
+	RTA_PUT_U32(skb, NDTA_THRESH2, tbl->gc_thresh2);
+	RTA_PUT_U32(skb, NDTA_THRESH3, tbl->gc_thresh3);
+
+	{
+		unsigned long now = jiffies;
+		unsigned int flush_delta = now - tbl->last_flush;
+		unsigned int rand_delta = now - tbl->last_rand;
+
+		struct ndt_config ndc = {
+			.ndtc_key_len		= tbl->key_len,
+			.ndtc_entry_size	= tbl->entry_size,
+			.ndtc_entries		= atomic_read(&tbl->entries),
+			.ndtc_last_flush	= jiffies_to_msecs(flush_delta),
+			.ndtc_last_rand		= jiffies_to_msecs(rand_delta),
+			.ndtc_hash_rnd		= tbl->hash_rnd,
+			.ndtc_hash_mask		= tbl->hash_mask,
+			.ndtc_hash_chain_gc	= tbl->hash_chain_gc,
+			.ndtc_proxy_qlen	= tbl->proxy_queue.qlen,
+		};
+
+		RTA_PUT(skb, NDTA_CONFIG, sizeof(ndc), &ndc);
+	}
+
+	{
+		int cpu;
+		struct ndt_stats ndst;
+
+		memset(&ndst, 0, sizeof(ndst));
+
+		for (cpu = 0; cpu < NR_CPUS; cpu++) {
+			struct neigh_statistics	*st;
+
+			if (!cpu_possible(cpu))
+				continue;
+
+			st = per_cpu_ptr(tbl->stats, cpu);
+			ndst.ndts_allocs		+= st->allocs;
+			ndst.ndts_destroys		+= st->destroys;
+			ndst.ndts_hash_grows		+= st->hash_grows;
+			ndst.ndts_res_failed		+= st->res_failed;
+			ndst.ndts_lookups		+= st->lookups;
+			ndst.ndts_hits			+= st->hits;
+			ndst.ndts_rcv_probes_mcast	+= st->rcv_probes_mcast;
+			ndst.ndts_rcv_probes_ucast	+= st->rcv_probes_ucast;
+			ndst.ndts_periodic_gc_runs	+= st->periodic_gc_runs;
+			ndst.ndts_forced_gc_runs	+= st->forced_gc_runs;
+		}
+
+		RTA_PUT(skb, NDTA_STATS, sizeof(ndst), &ndst);
+	}
+
+	BUG_ON(tbl->parms.dev);
+	if (neightbl_fill_parms(skb, &tbl->parms) < 0)
+		goto rtattr_failure;
+
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_END(skb, nlh);
+
+rtattr_failure:
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_CANCEL(skb, nlh);
+ 
+nlmsg_failure:
+	return -1;
+}",
+2497,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491361,8.690587556542685e+37,23.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static void ipmr_destroy_unres(struct mfc_cache *c)
+{
+	struct sk_buff *skb;
+
+	atomic_dec(&cache_resolve_queue_len);
+
+	while((skb=skb_dequeue(&c->mfc_un.unres.unresolved))) {
+		if (skb->nh.iph->version == 0) {
+			struct nlmsghdr *nlh = (struct nlmsghdr *)skb_pull(skb, sizeof(struct iphdr));
+			nlh->nlmsg_type = NLMSG_ERROR;
+			nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
+			skb_trim(skb, nlh->nlmsg_len);
+			((struct nlmsgerr*)NLMSG_DATA(nlh))->error = -ETIMEDOUT;
+			netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
+		} else
+			kfree_skb(skb);
+	}
+
+	kmem_cache_free(mrt_cachep, c);
+}","static void ipmr_destroy_unres(struct mfc_cache *c)
+{
+	struct sk_buff *skb;
+	struct nlmsgerr *e;
+
+	atomic_dec(&cache_resolve_queue_len);
+
+	while((skb=skb_dequeue(&c->mfc_un.unres.unresolved))) {
+		if (skb->nh.iph->version == 0) {
+			struct nlmsghdr *nlh = (struct nlmsghdr *)skb_pull(skb, sizeof(struct iphdr));
+			nlh->nlmsg_type = NLMSG_ERROR;
+			nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
+			skb_trim(skb, nlh->nlmsg_len);
+			e = NLMSG_DATA(nlh);
+			e->error = -ETIMEDOUT;
+			memset(&e->msg, 0, sizeof(e->msg));
+			netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
+		} else
+			kfree_skb(skb);
+	}
+
+	kmem_cache_free(mrt_cachep, c);
+}",
+2498,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491233,3.0233277830037277e+38,29.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static void ipmr_cache_resolve(struct mfc_cache *uc, struct mfc_cache *c)
+{
+	struct sk_buff *skb;
+
+	/*
+	 *	Play the pending entries through our router
+	 */
+
+	while((skb=__skb_dequeue(&uc->mfc_un.unres.unresolved))) {
+		if (skb->nh.iph->version == 0) {
+			int err;
+			struct nlmsghdr *nlh = (struct nlmsghdr *)skb_pull(skb, sizeof(struct iphdr));
+
+			if (ipmr_fill_mroute(skb, c, NLMSG_DATA(nlh)) > 0) {
+				nlh->nlmsg_len = skb->tail - (u8*)nlh;
+			} else {
+				nlh->nlmsg_type = NLMSG_ERROR;
+				nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
+				skb_trim(skb, nlh->nlmsg_len);
+				((struct nlmsgerr*)NLMSG_DATA(nlh))->error = -EMSGSIZE;
+			}
+			err = netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
+		} else
+			ip_mr_forward(skb, c, 0);
+	}
+}","static void ipmr_cache_resolve(struct mfc_cache *uc, struct mfc_cache *c)
+{
+	struct sk_buff *skb;
+	struct nlmsgerr *e;
+
+	/*
+	 *	Play the pending entries through our router
+	 */
+
+	while((skb=__skb_dequeue(&uc->mfc_un.unres.unresolved))) {
+		if (skb->nh.iph->version == 0) {
+			int err;
+			struct nlmsghdr *nlh = (struct nlmsghdr *)skb_pull(skb, sizeof(struct iphdr));
+
+			if (ipmr_fill_mroute(skb, c, NLMSG_DATA(nlh)) > 0) {
+				nlh->nlmsg_len = skb->tail - (u8*)nlh;
+			} else {
+				nlh->nlmsg_type = NLMSG_ERROR;
+				nlh->nlmsg_len = NLMSG_LENGTH(sizeof(struct nlmsgerr));
+				skb_trim(skb, nlh->nlmsg_len);
+				e = NLMSG_DATA(nlh);
+				e->error = -EMSGSIZE;
+				memset(&e->msg, 0, sizeof(e->msg));
+			}
+			err = netlink_unicast(rtnl, skb, NETLINK_CB(skb).dst_pid, MSG_DONTWAIT);
+		} else
+			ip_mr_forward(skb, c, 0);
+	}
+}",
+2499,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491234,2.296393579531885e+38,43.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int tcf_add_notify(struct tc_action *a, u32 pid, u32 seq, int event,
+                          u16 flags)
+{
+	struct tcamsg *t;
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	struct rtattr *x;
+	unsigned char *b;
+	int err = 0;
+
+	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!skb)
+		return -ENOBUFS;
+
+	b = (unsigned char *)skb->tail;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*t), flags);
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+	
+	x = (struct rtattr*) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	if (tcf_action_dump(skb, a, 0, 0) < 0)
+		goto rtattr_failure;
+
+	x->rta_len = skb->tail - (u8*)x;
+	
+	nlh->nlmsg_len = skb->tail - b;
+	NETLINK_CB(skb).dst_groups = RTMGRP_TC;
+	
+	err = rtnetlink_send(skb, pid, RTMGRP_TC, flags&NLM_F_ECHO);
+	if (err > 0)
+		err = 0;
+	return err;
+
+rtattr_failure:
+nlmsg_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static int tcf_add_notify(struct tc_action *a, u32 pid, u32 seq, int event,
+                          u16 flags)
+{
+	struct tcamsg *t;
+	struct nlmsghdr *nlh;
+	struct sk_buff *skb;
+	struct rtattr *x;
+	unsigned char *b;
+	int err = 0;
+
+	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!skb)
+		return -ENOBUFS;
+
+	b = (unsigned char *)skb->tail;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*t), flags);
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+	t->tca__pad1 = 0;
+	t->tca__pad2 = 0;
+
+	x = (struct rtattr*) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	if (tcf_action_dump(skb, a, 0, 0) < 0)
+		goto rtattr_failure;
+
+	x->rta_len = skb->tail - (u8*)x;
+	
+	nlh->nlmsg_len = skb->tail - b;
+	NETLINK_CB(skb).dst_groups = RTMGRP_TC;
+	
+	err = rtnetlink_send(skb, pid, RTMGRP_TC, flags&NLM_F_ECHO);
+	if (err > 0)
+		err = 0;
+	return err;
+
+rtattr_failure:
+nlmsg_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2500,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491250,2.4542336092933576e+38,31.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"tca_get_fill(struct sk_buff *skb, struct tc_action *a, u32 pid, u32 seq,
+             u16 flags, int event, int bind, int ref)
+{
+	struct tcamsg *t;
+	struct nlmsghdr *nlh;
+	unsigned char *b = skb->tail;
+	struct rtattr *x;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*t), flags);
+
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+	
+	x = (struct rtattr*) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	if (tcf_action_dump(skb, a, bind, ref) < 0)
+		goto rtattr_failure;
+
+	x->rta_len = skb->tail - (u8*)x;
+	
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+rtattr_failure:
+nlmsg_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","tca_get_fill(struct sk_buff *skb, struct tc_action *a, u32 pid, u32 seq,
+             u16 flags, int event, int bind, int ref)
+{
+	struct tcamsg *t;
+	struct nlmsghdr *nlh;
+	unsigned char *b = skb->tail;
+	struct rtattr *x;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*t), flags);
+
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+	t->tca__pad1 = 0;
+	t->tca__pad2 = 0;
+	
+	x = (struct rtattr*) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	if (tcf_action_dump(skb, a, bind, ref) < 0)
+		goto rtattr_failure;
+
+	x->rta_len = skb->tail - (u8*)x;
+	
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+rtattr_failure:
+nlmsg_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2501,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491424,2.8364113205062774e+38,62.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"tc_dump_action(struct sk_buff *skb, struct netlink_callback *cb)
+{
+	struct nlmsghdr *nlh;
+	unsigned char *b = skb->tail;
+	struct rtattr *x;
+	struct tc_action_ops *a_o;
+	struct tc_action a;
+	int ret = 0;
+	struct tcamsg *t = (struct tcamsg *) NLMSG_DATA(cb->nlh);
+	char *kind = find_dump_kind(cb->nlh);
+
+	if (kind == NULL) {
+		printk(""tc_dump_action: action bad kind\n"");
+		return 0;
+	}
+
+	a_o = tc_lookup_action_n(kind);
+	if (a_o == NULL) {
+		printk(""failed to find %s\n"", kind);
+		return 0;
+	}
+
+	memset(&a, 0, sizeof(struct tc_action));
+	a.ops = a_o;
+
+	if (a_o->walk == NULL) {
+		printk(""tc_dump_action: %s !capable of dumping table\n"", kind);
+		goto rtattr_failure;
+	}
+
+	nlh = NLMSG_PUT(skb, NETLINK_CB(cb->skb).pid, cb->nlh->nlmsg_seq,
+	                cb->nlh->nlmsg_type, sizeof(*t));
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+
+	x = (struct rtattr *) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	ret = a_o->walk(skb, cb, RTM_GETACTION, &a);
+	if (ret < 0)
+		goto rtattr_failure;
+
+	if (ret > 0) {
+		x->rta_len = skb->tail - (u8 *) x;
+		ret = skb->len;
+	} else
+		skb_trim(skb, (u8*)x - skb->data);
+
+	nlh->nlmsg_len = skb->tail - b;
+	if (NETLINK_CB(cb->skb).pid && ret)
+		nlh->nlmsg_flags |= NLM_F_MULTI;
+	module_put(a_o->owner);
+	return skb->len;
+
+rtattr_failure:
+nlmsg_failure:
+	module_put(a_o->owner);
+	skb_trim(skb, b - skb->data);
+	return skb->len;
+}","tc_dump_action(struct sk_buff *skb, struct netlink_callback *cb)
+{
+	struct nlmsghdr *nlh;
+	unsigned char *b = skb->tail;
+	struct rtattr *x;
+	struct tc_action_ops *a_o;
+	struct tc_action a;
+	int ret = 0;
+	struct tcamsg *t = (struct tcamsg *) NLMSG_DATA(cb->nlh);
+	char *kind = find_dump_kind(cb->nlh);
+
+	if (kind == NULL) {
+		printk(""tc_dump_action: action bad kind\n"");
+		return 0;
+	}
+
+	a_o = tc_lookup_action_n(kind);
+	if (a_o == NULL) {
+		printk(""failed to find %s\n"", kind);
+		return 0;
+	}
+
+	memset(&a, 0, sizeof(struct tc_action));
+	a.ops = a_o;
+
+	if (a_o->walk == NULL) {
+		printk(""tc_dump_action: %s !capable of dumping table\n"", kind);
+		goto rtattr_failure;
+	}
+
+	nlh = NLMSG_PUT(skb, NETLINK_CB(cb->skb).pid, cb->nlh->nlmsg_seq,
+	                cb->nlh->nlmsg_type, sizeof(*t));
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+	t->tca__pad1 = 0;
+	t->tca__pad2 = 0;
+
+	x = (struct rtattr *) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	ret = a_o->walk(skb, cb, RTM_GETACTION, &a);
+	if (ret < 0)
+		goto rtattr_failure;
+
+	if (ret > 0) {
+		x->rta_len = skb->tail - (u8 *) x;
+		ret = skb->len;
+	} else
+		skb_trim(skb, (u8*)x - skb->data);
+
+	nlh->nlmsg_len = skb->tail - b;
+	if (NETLINK_CB(cb->skb).pid && ret)
+		nlh->nlmsg_flags |= NLM_F_MULTI;
+	module_put(a_o->owner);
+	return skb->len;
+
+rtattr_failure:
+nlmsg_failure:
+	module_put(a_o->owner);
+	skb_trim(skb, b - skb->data);
+	return skb->len;
+}",
+2502,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491294,7.689882500142421e+37,88.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int rtnetlink_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
+				 int type, u32 pid, u32 seq, u32 change, 
+				 unsigned int flags)
+{
+	struct ifinfomsg *r;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+
+	nlh = NLMSG_NEW(skb, pid, seq, type, sizeof(*r), flags);
+	r = NLMSG_DATA(nlh);
+	r->ifi_family = AF_UNSPEC;
+	r->ifi_type = dev->type;
+	r->ifi_index = dev->ifindex;
+	r->ifi_flags = dev_get_flags(dev);
+	r->ifi_change = change;
+
+	RTA_PUT(skb, IFLA_IFNAME, strlen(dev->name)+1, dev->name);
+
+	if (1) {
+		u32 txqlen = dev->tx_queue_len;
+		RTA_PUT(skb, IFLA_TXQLEN, sizeof(txqlen), &txqlen);
+	}
+
+	if (1) {
+		u32 weight = dev->weight;
+		RTA_PUT(skb, IFLA_WEIGHT, sizeof(weight), &weight);
+	}
+
+	if (1) {
+		struct rtnl_link_ifmap map = {
+			.mem_start   = dev->mem_start,
+			.mem_end     = dev->mem_end,
+			.base_addr   = dev->base_addr,
+			.irq         = dev->irq,
+			.dma         = dev->dma,
+			.port        = dev->if_port,
+		};
+		RTA_PUT(skb, IFLA_MAP, sizeof(map), &map);
+	}
+
+	if (dev->addr_len) {
+		RTA_PUT(skb, IFLA_ADDRESS, dev->addr_len, dev->dev_addr);
+		RTA_PUT(skb, IFLA_BROADCAST, dev->addr_len, dev->broadcast);
+	}
+
+	if (1) {
+		u32 mtu = dev->mtu;
+		RTA_PUT(skb, IFLA_MTU, sizeof(mtu), &mtu);
+	}
+
+	if (dev->ifindex != dev->iflink) {
+		u32 iflink = dev->iflink;
+		RTA_PUT(skb, IFLA_LINK, sizeof(iflink), &iflink);
+	}
+
+	if (dev->qdisc_sleeping)
+		RTA_PUT(skb, IFLA_QDISC,
+			strlen(dev->qdisc_sleeping->ops->id) + 1,
+			dev->qdisc_sleeping->ops->id);
+	
+	if (dev->master) {
+		u32 master = dev->master->ifindex;
+		RTA_PUT(skb, IFLA_MASTER, sizeof(master), &master);
+	}
+
+	if (dev->get_stats) {
+		unsigned long *stats = (unsigned long*)dev->get_stats(dev);
+		if (stats) {
+			struct rtattr  *a;
+			__u32	       *s;
+			int		i;
+			int		n = sizeof(struct rtnl_link_stats)/4;
+
+			a = __RTA_PUT(skb, IFLA_STATS, n*4);
+			s = RTA_DATA(a);
+			for (i=0; i<n; i++)
+				s[i] = stats[i];
+		}
+	}
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static int rtnetlink_fill_ifinfo(struct sk_buff *skb, struct net_device *dev,
+				 int type, u32 pid, u32 seq, u32 change, 
+				 unsigned int flags)
+{
+	struct ifinfomsg *r;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+
+	nlh = NLMSG_NEW(skb, pid, seq, type, sizeof(*r), flags);
+	r = NLMSG_DATA(nlh);
+	r->ifi_family = AF_UNSPEC;
+	r->__ifi_pad = 0;
+	r->ifi_type = dev->type;
+	r->ifi_index = dev->ifindex;
+	r->ifi_flags = dev_get_flags(dev);
+	r->ifi_change = change;
+
+	RTA_PUT(skb, IFLA_IFNAME, strlen(dev->name)+1, dev->name);
+
+	if (1) {
+		u32 txqlen = dev->tx_queue_len;
+		RTA_PUT(skb, IFLA_TXQLEN, sizeof(txqlen), &txqlen);
+	}
+
+	if (1) {
+		u32 weight = dev->weight;
+		RTA_PUT(skb, IFLA_WEIGHT, sizeof(weight), &weight);
+	}
+
+	if (1) {
+		struct rtnl_link_ifmap map = {
+			.mem_start   = dev->mem_start,
+			.mem_end     = dev->mem_end,
+			.base_addr   = dev->base_addr,
+			.irq         = dev->irq,
+			.dma         = dev->dma,
+			.port        = dev->if_port,
+		};
+		RTA_PUT(skb, IFLA_MAP, sizeof(map), &map);
+	}
+
+	if (dev->addr_len) {
+		RTA_PUT(skb, IFLA_ADDRESS, dev->addr_len, dev->dev_addr);
+		RTA_PUT(skb, IFLA_BROADCAST, dev->addr_len, dev->broadcast);
+	}
+
+	if (1) {
+		u32 mtu = dev->mtu;
+		RTA_PUT(skb, IFLA_MTU, sizeof(mtu), &mtu);
+	}
+
+	if (dev->ifindex != dev->iflink) {
+		u32 iflink = dev->iflink;
+		RTA_PUT(skb, IFLA_LINK, sizeof(iflink), &iflink);
+	}
+
+	if (dev->qdisc_sleeping)
+		RTA_PUT(skb, IFLA_QDISC,
+			strlen(dev->qdisc_sleeping->ops->id) + 1,
+			dev->qdisc_sleeping->ops->id);
+	
+	if (dev->master) {
+		u32 master = dev->master->ifindex;
+		RTA_PUT(skb, IFLA_MASTER, sizeof(master), &master);
+	}
+
+	if (dev->get_stats) {
+		unsigned long *stats = (unsigned long*)dev->get_stats(dev);
+		if (stats) {
+			struct rtattr  *a;
+			__u32	       *s;
+			int		i;
+			int		n = sizeof(struct rtnl_link_stats)/4;
+
+			a = __RTA_PUT(skb, IFLA_STATS, n*4);
+			s = RTA_DATA(a);
+			for (i=0; i<n; i++)
+				s[i] = stats[i];
+		}
+	}
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2503,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491269,1.554362995851462e+36,43.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int neigh_fill_info(struct sk_buff *skb, struct neighbour *n,
+			   u32 pid, u32 seq, int event, unsigned int flags)
+{
+	unsigned long now = jiffies;
+	unsigned char *b = skb->tail;
+	struct nda_cacheinfo ci;
+	int locked = 0;
+	u32 probes;
+	struct nlmsghdr *nlh = NLMSG_NEW(skb, pid, seq, event,
+					 sizeof(struct ndmsg), flags);
+	struct ndmsg *ndm = NLMSG_DATA(nlh);
+
+	ndm->ndm_family	 = n->ops->family;
+	ndm->ndm_flags	 = n->flags;
+	ndm->ndm_type	 = n->type;
+	ndm->ndm_ifindex = n->dev->ifindex;
+	RTA_PUT(skb, NDA_DST, n->tbl->key_len, n->primary_key);
+	read_lock_bh(&n->lock);
+	locked		 = 1;
+	ndm->ndm_state	 = n->nud_state;
+	if (n->nud_state & NUD_VALID)
+		RTA_PUT(skb, NDA_LLADDR, n->dev->addr_len, n->ha);
+	ci.ndm_used	 = now - n->used;
+	ci.ndm_confirmed = now - n->confirmed;
+	ci.ndm_updated	 = now - n->updated;
+	ci.ndm_refcnt	 = atomic_read(&n->refcnt) - 1;
+	probes = atomic_read(&n->probes);
+	read_unlock_bh(&n->lock);
+	locked		 = 0;
+	RTA_PUT(skb, NDA_CACHEINFO, sizeof(ci), &ci);
+	RTA_PUT(skb, NDA_PROBES, sizeof(probes), &probes);
+	nlh->nlmsg_len	 = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	if (locked)
+		read_unlock_bh(&n->lock);
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static int neigh_fill_info(struct sk_buff *skb, struct neighbour *n,
+			   u32 pid, u32 seq, int event, unsigned int flags)
+{
+	unsigned long now = jiffies;
+	unsigned char *b = skb->tail;
+	struct nda_cacheinfo ci;
+	int locked = 0;
+	u32 probes;
+	struct nlmsghdr *nlh = NLMSG_NEW(skb, pid, seq, event,
+					 sizeof(struct ndmsg), flags);
+	struct ndmsg *ndm = NLMSG_DATA(nlh);
+
+	ndm->ndm_family	 = n->ops->family;
+	ndm->ndm_pad1    = 0;
+	ndm->ndm_pad2    = 0;
+	ndm->ndm_flags	 = n->flags;
+	ndm->ndm_type	 = n->type;
+	ndm->ndm_ifindex = n->dev->ifindex;
+	RTA_PUT(skb, NDA_DST, n->tbl->key_len, n->primary_key);
+	read_lock_bh(&n->lock);
+	locked		 = 1;
+	ndm->ndm_state	 = n->nud_state;
+	if (n->nud_state & NUD_VALID)
+		RTA_PUT(skb, NDA_LLADDR, n->dev->addr_len, n->ha);
+	ci.ndm_used	 = now - n->used;
+	ci.ndm_confirmed = now - n->confirmed;
+	ci.ndm_updated	 = now - n->updated;
+	ci.ndm_refcnt	 = atomic_read(&n->refcnt) - 1;
+	probes = atomic_read(&n->probes);
+	read_unlock_bh(&n->lock);
+	locked		 = 0;
+	RTA_PUT(skb, NDA_CACHEINFO, sizeof(ci), &ci);
+	RTA_PUT(skb, NDA_PROBES, sizeof(probes), &probes);
+	nlh->nlmsg_len	 = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	if (locked)
+		read_unlock_bh(&n->lock);
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2504,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491265,1.6501796399471221e+38,31.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static inline int rtnetlink_fill_iwinfo(struct sk_buff *	skb,
+					struct net_device *	dev,
+					int			type,
+					char *			event,
+					int			event_len)
+{
+	struct ifinfomsg *r;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+
+	nlh = NLMSG_PUT(skb, 0, 0, type, sizeof(*r));
+	r = NLMSG_DATA(nlh);
+	r->ifi_family = AF_UNSPEC;
+	r->ifi_type = dev->type;
+	r->ifi_index = dev->ifindex;
+	r->ifi_flags = dev->flags;
+	r->ifi_change = 0;	/* Wireless changes don't affect those flags */
+
+	/* Add the wireless events in the netlink packet */
+	RTA_PUT(skb, IFLA_WIRELESS,
+		event_len, event);
+
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static inline int rtnetlink_fill_iwinfo(struct sk_buff *	skb,
+					struct net_device *	dev,
+					int			type,
+					char *			event,
+					int			event_len)
+{
+	struct ifinfomsg *r;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+
+	nlh = NLMSG_PUT(skb, 0, 0, type, sizeof(*r));
+	r = NLMSG_DATA(nlh);
+	r->ifi_family = AF_UNSPEC;
+	r->__ifi_pad = 0;
+	r->ifi_type = dev->type;
+	r->ifi_index = dev->ifindex;
+	r->ifi_flags = dev->flags;
+	r->ifi_change = 0;	/* Wireless changes don't affect those flags */
+
+	/* Add the wireless events in the netlink packet */
+	RTA_PUT(skb, IFLA_WIRELESS,
+		event_len, event);
+
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2505,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491235,3.9412605510804166e+37,30.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"tcf_fill_node(struct sk_buff *skb, struct tcf_proto *tp, unsigned long fh,
+	      u32 pid, u32 seq, u16 flags, int event)
+{
+	struct tcmsg *tcm;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*tcm), flags);
+	tcm = NLMSG_DATA(nlh);
+	tcm->tcm_family = AF_UNSPEC;
+	tcm->tcm_ifindex = tp->q->dev->ifindex;
+	tcm->tcm_parent = tp->classid;
+	tcm->tcm_info = TC_H_MAKE(tp->prio, tp->protocol);
+	RTA_PUT(skb, TCA_KIND, IFNAMSIZ, tp->ops->kind);
+	tcm->tcm_handle = fh;
+	if (RTM_DELTFILTER != event) {
+		tcm->tcm_handle = 0;
+		if (tp->ops->dump && tp->ops->dump(tp, fh, skb, tcm) < 0)
+			goto rtattr_failure;
+	}
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","tcf_fill_node(struct sk_buff *skb, struct tcf_proto *tp, unsigned long fh,
+	      u32 pid, u32 seq, u16 flags, int event)
+{
+	struct tcmsg *tcm;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*tcm), flags);
+	tcm = NLMSG_DATA(nlh);
+	tcm->tcm_family = AF_UNSPEC;
+	tcm->tcm__pad1 = 0;
+	tcm->tcm__pad1 = 0;
+	tcm->tcm_ifindex = tp->q->dev->ifindex;
+	tcm->tcm_parent = tp->classid;
+	tcm->tcm_info = TC_H_MAKE(tp->prio, tp->protocol);
+	RTA_PUT(skb, TCA_KIND, IFNAMSIZ, tp->ops->kind);
+	tcm->tcm_handle = fh;
+	if (RTM_DELTFILTER != event) {
+		tcm->tcm_handle = 0;
+		if (tp->ops->dump && tp->ops->dump(tp, fh, skb, tcm) < 0)
+			goto rtattr_failure;
+	}
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2506,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491404,2.556212821312026e+38,47.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
+			 u32 pid, u32 seq, u16 flags, int event)
+{
+	struct tcmsg *tcm;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+	struct gnet_dump d;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*tcm), flags);
+	tcm = NLMSG_DATA(nlh);
+	tcm->tcm_family = AF_UNSPEC;
+	tcm->tcm_ifindex = q->dev->ifindex;
+	tcm->tcm_parent = clid;
+	tcm->tcm_handle = q->handle;
+	tcm->tcm_info = atomic_read(&q->refcnt);
+	RTA_PUT(skb, TCA_KIND, IFNAMSIZ, q->ops->id);
+	if (q->ops->dump && q->ops->dump(q, skb) < 0)
+		goto rtattr_failure;
+	q->qstats.qlen = q->q.qlen;
+
+	if (gnet_stats_start_copy_compat(skb, TCA_STATS2, TCA_STATS,
+			TCA_XSTATS, q->stats_lock, &d) < 0)
+		goto rtattr_failure;
+
+	if (q->ops->dump_stats && q->ops->dump_stats(q, &d) < 0)
+		goto rtattr_failure;
+
+	if (gnet_stats_copy_basic(&d, &q->bstats) < 0 ||
+#ifdef CONFIG_NET_ESTIMATOR
+	    gnet_stats_copy_rate_est(&d, &q->rate_est) < 0 ||
+#endif
+	    gnet_stats_copy_queue(&d, &q->qstats) < 0)
+		goto rtattr_failure;
+	
+	if (gnet_stats_finish_copy(&d) < 0)
+		goto rtattr_failure;
+	
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}","static int tc_fill_qdisc(struct sk_buff *skb, struct Qdisc *q, u32 clid,
+			 u32 pid, u32 seq, u16 flags, int event)
+{
+	struct tcmsg *tcm;
+	struct nlmsghdr  *nlh;
+	unsigned char	 *b = skb->tail;
+	struct gnet_dump d;
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*tcm), flags);
+	tcm = NLMSG_DATA(nlh);
+	tcm->tcm_family = AF_UNSPEC;
+	tcm->tcm__pad1 = 0;
+	tcm->tcm__pad2 = 0;
+	tcm->tcm_ifindex = q->dev->ifindex;
+	tcm->tcm_parent = clid;
+	tcm->tcm_handle = q->handle;
+	tcm->tcm_info = atomic_read(&q->refcnt);
+	RTA_PUT(skb, TCA_KIND, IFNAMSIZ, q->ops->id);
+	if (q->ops->dump && q->ops->dump(q, skb) < 0)
+		goto rtattr_failure;
+	q->qstats.qlen = q->q.qlen;
+
+	if (gnet_stats_start_copy_compat(skb, TCA_STATS2, TCA_STATS,
+			TCA_XSTATS, q->stats_lock, &d) < 0)
+		goto rtattr_failure;
+
+	if (q->ops->dump_stats && q->ops->dump_stats(q, &d) < 0)
+		goto rtattr_failure;
+
+	if (gnet_stats_copy_basic(&d, &q->bstats) < 0 ||
+#ifdef CONFIG_NET_ESTIMATOR
+	    gnet_stats_copy_rate_est(&d, &q->rate_est) < 0 ||
+#endif
+	    gnet_stats_copy_queue(&d, &q->qstats) < 0)
+		goto rtattr_failure;
+	
+	if (gnet_stats_finish_copy(&d) < 0)
+		goto rtattr_failure;
+	
+	nlh->nlmsg_len = skb->tail - b;
+	return skb->len;
+
+nlmsg_failure:
+rtattr_failure:
+	skb_trim(skb, b - skb->data);
+	return -1;
+}",
+2507,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491353,2.2754156269422912e+38,32.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int neightbl_fill_param_info(struct neigh_table *tbl,
+				    struct neigh_parms *parms,
+				    struct sk_buff *skb,
+				    struct netlink_callback *cb)
+{
+	struct ndtmsg *ndtmsg;
+	struct nlmsghdr *nlh;
+
+	nlh = NLMSG_NEW_ANSWER(skb, cb, RTM_NEWNEIGHTBL, sizeof(struct ndtmsg),
+			       NLM_F_MULTI);
+
+	ndtmsg = NLMSG_DATA(nlh);
+
+	read_lock_bh(&tbl->lock);
+	ndtmsg->ndtm_family = tbl->family;
+	RTA_PUT_STRING(skb, NDTA_NAME, tbl->id);
+
+	if (neightbl_fill_parms(skb, parms) < 0)
+		goto rtattr_failure;
+
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_END(skb, nlh);
+
+rtattr_failure:
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_CANCEL(skb, nlh);
+
+nlmsg_failure:
+	return -1;
+}","static int neightbl_fill_param_info(struct neigh_table *tbl,
+				    struct neigh_parms *parms,
+				    struct sk_buff *skb,
+				    struct netlink_callback *cb)
+{
+	struct ndtmsg *ndtmsg;
+	struct nlmsghdr *nlh;
+
+	nlh = NLMSG_NEW_ANSWER(skb, cb, RTM_NEWNEIGHTBL, sizeof(struct ndtmsg),
+			       NLM_F_MULTI);
+
+	ndtmsg = NLMSG_DATA(nlh);
+
+	read_lock_bh(&tbl->lock);
+	ndtmsg->ndtm_family = tbl->family;
+	ndtmsg->ndtm_pad1   = 0;
+	ndtmsg->ndtm_pad2   = 0;
+	RTA_PUT_STRING(skb, NDTA_NAME, tbl->id);
+
+	if (neightbl_fill_parms(skb, parms) < 0)
+		goto rtattr_failure;
+
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_END(skb, nlh);
+
+rtattr_failure:
+	read_unlock_bh(&tbl->lock);
+	return NLMSG_CANCEL(skb, nlh);
+
+nlmsg_failure:
+	return -1;
+}",
+2508,"[""CWE-200""]",linux-2.6,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8,0,491386,2.5069979251807855e+38,68.0,"[NETLINK]: Missing initializations in dumped data
+
+Mostly missing initialization of padding fields of 1 or 2 bytes length,
+two instances of uninitialized nlmsgerr->msg of 16 bytes length.
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int tca_action_flush(struct rtattr *rta, struct nlmsghdr *n, u32 pid)
+{
+	struct sk_buff *skb;
+	unsigned char *b;
+	struct nlmsghdr *nlh;
+	struct tcamsg *t;
+	struct netlink_callback dcb;
+	struct rtattr *x;
+	struct rtattr *tb[TCA_ACT_MAX+1];
+	struct rtattr *kind;
+	struct tc_action *a = create_a(0);
+	int err = -EINVAL;
+
+	if (a == NULL) {
+		printk(""tca_action_flush: couldnt create tc_action\n"");
+		return err;
+	}
+
+	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!skb) {
+		printk(""tca_action_flush: failed skb alloc\n"");
+		kfree(a);
+		return -ENOBUFS;
+	}
+
+	b = (unsigned char *)skb->tail;
+
+	if (rtattr_parse_nested(tb, TCA_ACT_MAX, rta) < 0)
+		goto err_out;
+
+	kind = tb[TCA_ACT_KIND-1];
+	a->ops = tc_lookup_action(kind);
+	if (a->ops == NULL)
+		goto err_out;
+
+	nlh = NLMSG_PUT(skb, pid, n->nlmsg_seq, RTM_DELACTION, sizeof(*t));
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+
+	x = (struct rtattr *) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	err = a->ops->walk(skb, &dcb, RTM_DELACTION, a);
+	if (err < 0)
+		goto rtattr_failure;
+
+	x->rta_len = skb->tail - (u8 *) x;
+
+	nlh->nlmsg_len = skb->tail - b;
+	nlh->nlmsg_flags |= NLM_F_ROOT;
+	module_put(a->ops->owner);
+	kfree(a);
+	err = rtnetlink_send(skb, pid, RTMGRP_TC, n->nlmsg_flags&NLM_F_ECHO);
+	if (err > 0)
+		return 0;
+
+	return err;
+
+rtattr_failure:
+	module_put(a->ops->owner);
+nlmsg_failure:
+err_out:
+	kfree_skb(skb);
+	kfree(a);
+	return err;
+}","static int tca_action_flush(struct rtattr *rta, struct nlmsghdr *n, u32 pid)
+{
+	struct sk_buff *skb;
+	unsigned char *b;
+	struct nlmsghdr *nlh;
+	struct tcamsg *t;
+	struct netlink_callback dcb;
+	struct rtattr *x;
+	struct rtattr *tb[TCA_ACT_MAX+1];
+	struct rtattr *kind;
+	struct tc_action *a = create_a(0);
+	int err = -EINVAL;
+
+	if (a == NULL) {
+		printk(""tca_action_flush: couldnt create tc_action\n"");
+		return err;
+	}
+
+	skb = alloc_skb(NLMSG_GOODSIZE, GFP_KERNEL);
+	if (!skb) {
+		printk(""tca_action_flush: failed skb alloc\n"");
+		kfree(a);
+		return -ENOBUFS;
+	}
+
+	b = (unsigned char *)skb->tail;
+
+	if (rtattr_parse_nested(tb, TCA_ACT_MAX, rta) < 0)
+		goto err_out;
+
+	kind = tb[TCA_ACT_KIND-1];
+	a->ops = tc_lookup_action(kind);
+	if (a->ops == NULL)
+		goto err_out;
+
+	nlh = NLMSG_PUT(skb, pid, n->nlmsg_seq, RTM_DELACTION, sizeof(*t));
+	t = NLMSG_DATA(nlh);
+	t->tca_family = AF_UNSPEC;
+	t->tca__pad1 = 0;
+	t->tca__pad2 = 0;
+
+	x = (struct rtattr *) skb->tail;
+	RTA_PUT(skb, TCA_ACT_TAB, 0, NULL);
+
+	err = a->ops->walk(skb, &dcb, RTM_DELACTION, a);
+	if (err < 0)
+		goto rtattr_failure;
+
+	x->rta_len = skb->tail - (u8 *) x;
+
+	nlh->nlmsg_len = skb->tail - b;
+	nlh->nlmsg_flags |= NLM_F_ROOT;
+	module_put(a->ops->owner);
+	kfree(a);
+	err = rtnetlink_send(skb, pid, RTMGRP_TC, n->nlmsg_flags&NLM_F_ECHO);
+	if (err > 0)
+		return 0;
+
+	return err;
+
+rtattr_failure:
+	module_put(a->ops->owner);
+nlmsg_failure:
+err_out:
+	kfree_skb(skb);
+	kfree(a);
+	return err;
+}",
+2509,"[""CWE-200""]",linux-2.6,b3563c4fbff906991a1b4ef4609f99cca2a0de6a,b3563c4fbff906991a1b4ef4609f99cca2a0de6a,0,491434,1.8393773918809546e+38,11.0,"[NETLINK]: Clear padding in netlink messages
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"__rta_reserve(struct sk_buff *skb, int attrtype, int attrlen)
+{
+	struct rtattr *rta;
+	int size = RTA_LENGTH(attrlen);
+
+	rta = (struct rtattr*)skb_put(skb, RTA_ALIGN(size));
+	rta->rta_type = attrtype;
+	rta->rta_len = size;
+	return rta;
+}","__rta_reserve(struct sk_buff *skb, int attrtype, int attrlen)
+{
+	struct rtattr *rta;
+	int size = RTA_LENGTH(attrlen);
+
+	rta = (struct rtattr*)skb_put(skb, RTA_ALIGN(size));
+	rta->rta_type = attrtype;
+	rta->rta_len = size;
+	memset(RTA_DATA(rta) + attrlen, 0, RTA_ALIGN(size) - size);
+	return rta;
+}",
+2510,"[""CWE-200""]",linux-2.6,b3563c4fbff906991a1b4ef4609f99cca2a0de6a,b3563c4fbff906991a1b4ef4609f99cca2a0de6a,0,491434,1.8393773918809546e+38,11.0,"[NETLINK]: Clear padding in netlink messages
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"void __rta_fill(struct sk_buff *skb, int attrtype, int attrlen, const void *data)
+{
+	struct rtattr *rta;
+	int size = RTA_LENGTH(attrlen);
+
+	rta = (struct rtattr*)skb_put(skb, RTA_ALIGN(size));
+	rta->rta_type = attrtype;
+	rta->rta_len = size;
+	memcpy(RTA_DATA(rta), data, attrlen);
+}","__rta_reserve(struct sk_buff *skb, int attrtype, int attrlen)
+{
+	struct rtattr *rta;
+	int size = RTA_LENGTH(attrlen);
+
+	rta = (struct rtattr*)skb_put(skb, RTA_ALIGN(size));
+	rta->rta_type = attrtype;
+	rta->rta_len = size;
+	memset(RTA_DATA(rta) + attrlen, 0, RTA_ALIGN(size) - size);
+	return rta;
+}",
+2511,"[""CWE-200""]",linux-2.6,b3563c4fbff906991a1b4ef4609f99cca2a0de6a,b3563c4fbff906991a1b4ef4609f99cca2a0de6a,0,491433,2.635685610375417e+38,14.0,"[NETLINK]: Clear padding in netlink messages
+
+Signed-off-by: Patrick McHardy <kaber@trash.net>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"__nlmsg_put(struct sk_buff *skb, u32 pid, u32 seq, int type, int len, int flags)
+{
+	struct nlmsghdr *nlh;
+	int size = NLMSG_LENGTH(len);
+
+	nlh = (struct nlmsghdr*)skb_put(skb, NLMSG_ALIGN(size));
+	nlh->nlmsg_type = type;
+	nlh->nlmsg_len = size;
+	nlh->nlmsg_flags = flags;
+	nlh->nlmsg_pid = pid;
+	nlh->nlmsg_seq = seq;
+	return nlh;
+}","__nlmsg_put(struct sk_buff *skb, u32 pid, u32 seq, int type, int len, int flags)
+{
+	struct nlmsghdr *nlh;
+	int size = NLMSG_LENGTH(len);
+
+	nlh = (struct nlmsghdr*)skb_put(skb, NLMSG_ALIGN(size));
+	nlh->nlmsg_type = type;
+	nlh->nlmsg_len = size;
+	nlh->nlmsg_flags = flags;
+	nlh->nlmsg_pid = pid;
+	nlh->nlmsg_seq = seq;
+	memset(NLMSG_DATA(nlh) + len, 0, NLMSG_ALIGN(size) - size);
+	return nlh;
+}",
+2512,"[""CWE-200""]",linux-2.6,ad61df918c44316940404891d5082c63e79c256a,ad61df918c44316940404891d5082c63e79c256a,0,491444,2.6328247819873312e+38,30.0,"netlink: fix typo in initialization
+
+Commit 9ef1d4c7c7aca1cd436612b6ca785b726ffb8ed8 (""[NETLINK]: Missing
+initializations in dumped data"") introduced a typo in
+initialization. This patch fixes this.
+
+Signed-off-by: Jiri Pirko <jpirko@redhat.com>
+Signed-off-by: David S. Miller <davem@davemloft.net>",other,"static int tcf_fill_node(struct sk_buff *skb, struct tcf_proto *tp,
+			 unsigned long fh, u32 pid, u32 seq, u16 flags, int event)
+{
+	struct tcmsg *tcm;
+	struct nlmsghdr  *nlh;
+	unsigned char *b = skb_tail_pointer(skb);
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*tcm), flags);
+	tcm = NLMSG_DATA(nlh);
+	tcm->tcm_family = AF_UNSPEC;
+	tcm->tcm__pad1 = 0;
+	tcm->tcm__pad1 = 0;
+	tcm->tcm_ifindex = qdisc_dev(tp->q)->ifindex;
+	tcm->tcm_parent = tp->classid;
+	tcm->tcm_info = TC_H_MAKE(tp->prio, tp->protocol);
+	NLA_PUT_STRING(skb, TCA_KIND, tp->ops->kind);
+	tcm->tcm_handle = fh;
+	if (RTM_DELTFILTER != event) {
+		tcm->tcm_handle = 0;
+		if (tp->ops->dump && tp->ops->dump(tp, fh, skb, tcm) < 0)
+			goto nla_put_failure;
+	}
+	nlh->nlmsg_len = skb_tail_pointer(skb) - b;
+	return skb->len;
+
+nlmsg_failure:
+nla_put_failure:
+	nlmsg_trim(skb, b);
+	return -1;
+}","static int tcf_fill_node(struct sk_buff *skb, struct tcf_proto *tp,
+			 unsigned long fh, u32 pid, u32 seq, u16 flags, int event)
+{
+	struct tcmsg *tcm;
+	struct nlmsghdr  *nlh;
+	unsigned char *b = skb_tail_pointer(skb);
+
+	nlh = NLMSG_NEW(skb, pid, seq, event, sizeof(*tcm), flags);
+	tcm = NLMSG_DATA(nlh);
+	tcm->tcm_family = AF_UNSPEC;
+	tcm->tcm__pad1 = 0;
+	tcm->tcm__pad2 = 0;
+	tcm->tcm_ifindex = qdisc_dev(tp->q)->ifindex;
+	tcm->tcm_parent = tp->classid;
+	tcm->tcm_info = TC_H_MAKE(tp->prio, tp->protocol);
+	NLA_PUT_STRING(skb, TCA_KIND, tp->ops->kind);
+	tcm->tcm_handle = fh;
+	if (RTM_DELTFILTER != event) {
+		tcm->tcm_handle = 0;
+		if (tp->ops->dump && tp->ops->dump(tp, fh, skb, tcm) < 0)
+			goto nla_put_failure;
+	}
+	nlh->nlmsg_len = skb_tail_pointer(skb) - b;
+	return skb->len;
+
+nlmsg_failure:
+nla_put_failure:
+	nlmsg_trim(skb, b);
+	return -1;
+}",
+2521,"[""CWE-200""]",linux-2.6,af24ee9ea8d532e16883251a6684dfa1be8eec29,af24ee9ea8d532e16883251a6684dfa1be8eec29,0,493211,4.405314549215637e+37,15.0,"xfs: zero proper structure size for geometry calls
+
+Commit 493f3358cb289ccf716c5a14fa5bb52ab75943e5 added this call to
+xfs_fs_geometry() in order to avoid passing kernel stack data back
+to user space:
+
++       memset(geo, 0, sizeof(*geo));
+
+Unfortunately, one of the callers of that function passes the
+address of a smaller data type, cast to fit the type that
+xfs_fs_geometry() requires.  As a result, this can happen:
+
+Kernel panic - not syncing: stack-protector: Kernel stack is corrupted
+in: f87aca93
+
+Pid: 262, comm: xfs_fsr Not tainted 2.6.38-rc6-493f3358cb2+ #1
+Call Trace:
+
+[<c12991ac>] ? panic+0x50/0x150
+[<c102ed71>] ? __stack_chk_fail+0x10/0x18
+[<f87aca93>] ? xfs_ioc_fsgeometry_v1+0x56/0x5d [xfs]
+
+Fix this by fixing that one caller to pass the right type and then
+copy out the subset it is interested in.
+
+Note: This patch is an alternative to one originally proposed by
+Eric Sandeen.
+
+Reported-by: Jeffrey Hundstad <jeffrey.hundstad@mnsu.edu>
+Signed-off-by: Alex Elder <aelder@sgi.com>
+Reviewed-by: Eric Sandeen <sandeen@redhat.com>
+Tested-by: Jeffrey Hundstad <jeffrey.hundstad@mnsu.edu>",other,"xfs_ioc_fsgeometry_v1(
+	xfs_mount_t		*mp,
+	void			__user *arg)
+{
+	xfs_fsop_geom_v1_t	fsgeo;
+	int			error;
+
+	error = xfs_fs_geometry(mp, (xfs_fsop_geom_t *)&fsgeo, 3);
+	if (error)
+		return -error;
+
+	if (copy_to_user(arg, &fsgeo, sizeof(fsgeo)))
+		return -XFS_ERROR(EFAULT);
+	return 0;
+}","xfs_ioc_fsgeometry(
+	xfs_mount_t		*mp,
+	void			__user *arg)
+{
+	xfs_fsop_geom_t		fsgeo;
+	int			error;
+
+	error = xfs_fs_geometry(mp, &fsgeo, 4);
+	if (error)
+		return -error;
+
+	if (copy_to_user(arg, &fsgeo, sizeof(fsgeo)))
+		return -XFS_ERROR(EFAULT);
+	return 0;
+}",
+2536,"[""CWE-200""]",vino,9c8b9f81205203db6c31068babbfb8a734acacdb,9c8b9f81205203db6c31068babbfb8a734acacdb,0,496220,2.633599115443502e+38,27.0,"Do not leak clipboard to unauthenticated clients
+
+vino_server_clipboard_cb() in vino-server.c is the callback which is
+triggered when a clipboard copy event is fired.
+
+After doing some initial checks, (1. If there are any connected clients,
+2. If the server is on hold etc), it converts the text to UTF-8 and then
+passes it on to rfbSendServerCutText(). Here data is pasted to each
+client, without verifying if the client is authenticated.
+
+The patch checks if the client is authenticated and only then it allows
+the clipboard text to be sent to it.
+
+Fixes bug 678434. This is a security issue, and has been assigned
+CVE-2012-4429:
+http://www.openwall.com/lists/oss-security/2012/09/14/1",other,"rfbSendServerCutText(rfbScreenInfoPtr rfbScreen,char *str, int len)
+{
+    rfbClientPtr cl;
+    rfbServerCutTextMsg sct;
+    rfbClientIteratorPtr iterator;
+
+    iterator = rfbGetClientIterator(rfbScreen);
+    while ((cl = rfbClientIteratorNext(iterator)) != NULL) {
+        sct.type = rfbServerCutText;
+        sct.length = Swap32IfLE(len);
+        if (WriteExact(cl, (char *)&sct,
+                       sz_rfbServerCutTextMsg) < 0) {
+            rfbLogPerror(""rfbSendServerCutText: write"");
+            rfbCloseClient(cl);
+            continue;
+        }
+        if (WriteExact(cl, str, len) < 0) {
+            rfbLogPerror(""rfbSendServerCutText: write"");
+            rfbCloseClient(cl);
+        }
+    }
+    rfbReleaseClientIterator(iterator);
+}","rfbSendServerCutText(rfbScreenInfoPtr rfbScreen,char *str, int len)
+{
+    rfbClientPtr cl;
+    rfbServerCutTextMsg sct;
+    rfbClientIteratorPtr iterator;
+
+    iterator = rfbGetClientIterator(rfbScreen);
+    while ((cl = rfbClientIteratorNext(iterator)) != NULL) {
+        /* Client is not authenticated, ignore. See GNOME bug 678434. */
+        if (cl->state != RFB_NORMAL)
+            continue;
+
+        sct.type = rfbServerCutText;
+        sct.length = Swap32IfLE(len);
+        if (WriteExact(cl, (char *)&sct,
+                       sz_rfbServerCutTextMsg) < 0) {
+            rfbLogPerror(""rfbSendServerCutText: write"");
+            rfbCloseClient(cl);
+            continue;
+        }
+        if (WriteExact(cl, str, len) < 0) {
+            rfbLogPerror(""rfbSendServerCutText: write"");
+            rfbCloseClient(cl);
+        }
+    }
+    rfbReleaseClientIterator(iterator);
+}",
+2567,"[""CWE-200""]",wget,3cdfb594cf75f11cdbb9702ac5e856c332ccacfa,3cdfb594cf75f11cdbb9702ac5e856c332ccacfa,0,498864,2.592572656197211e+38,35.0,"Don't save user/pw with --xattr
+
+Also the Referer info is reduced to scheme+host+port.
+
+* src/ftp.c (getftp): Change params of set_file_metadata()
+* src/http.c (gethttp): Change params of set_file_metadata()
+* src/xattr.c (set_file_metadata): Remove user/password from origin URL,
+  reduce Referer value to scheme/host/port.
+* src/xattr.h: Change prototype of set_file_metadata()",other,"set_file_metadata (const char *origin_url, const char *referrer_url, FILE *fp)
+{
+  /* Save metadata about where the file came from (requested, final URLs) to
+   * user POSIX Extended Attributes of retrieved file.
+   *
+   * For more details about the user namespace see
+   * [http://freedesktop.org/wiki/CommonExtendedAttributes] and
+   * [http://0pointer.de/lennart/projects/mod_mime_xattr/].
+   */
+  int retval = -1;
+
+  if (!origin_url || !fp)
+    return retval;
+
+  retval = write_xattr_metadata (""user.xdg.origin.url"", escnonprint_uri (origin_url), fp);
+  if ((!retval) && referrer_url)
+    retval = write_xattr_metadata (""user.xdg.referrer.url"", escnonprint_uri (referrer_url), fp);
+
+  return retval;
+}","set_file_metadata (const struct url *origin_url, const struct url *referrer_url, FILE *fp)
+{
+  /* Save metadata about where the file came from (requested, final URLs) to
+   * user POSIX Extended Attributes of retrieved file.
+   *
+   * For more details about the user namespace see
+   * [http://freedesktop.org/wiki/CommonExtendedAttributes] and
+   * [http://0pointer.de/lennart/projects/mod_mime_xattr/].
+   */
+  int retval = -1;
+  char *value;
+
+  if (!origin_url || !fp)
+    return retval;
+
+  value = url_string (origin_url, URL_AUTH_HIDE);
+  retval = write_xattr_metadata (""user.xdg.origin.url"", escnonprint_uri (value), fp);
+  xfree (value);
+
+  if (!retval && referrer_url)
+    {
+	  struct url u;
+
+	  memset(&u, 0, sizeof(u));
+      u.scheme = referrer_url->scheme;
+      u.host = referrer_url->host;
+      u.port = referrer_url->port;
+
+      value = url_string (&u, 0);
+      retval = write_xattr_metadata (""user.xdg.referrer.url"", escnonprint_uri (value), fp);
+      xfree (value);
+    }
+
+  return retval;
+}",
+2601,"[""CWE-200""]",openssl,cf432b3b1bd7caa22943b41b94ec2472ae497dc6,cf432b3b1bd7caa22943b41b94ec2472ae497dc6,0,502828,1.5717888359193115e+38,349.0,"Fix leak with ASN.1 combine.
+
+When parsing a combined structure pass a flag to the decode routine
+so on error a pointer to the parent structure is not zeroed as
+this will leak any additional components in the parent.
+
+This can leak memory in any application parsing PKCS#7 or CMS structures.
+
+CVE-2015-3195.
+
+Thanks to Adam Langley (Google/BoringSSL) for discovering this bug using
+libFuzzer.
+
+PR#4131
+
+Reviewed-by: Richard Levitte <levitte@openssl.org>",other,"int ASN1_item_ex_d2i(ASN1_VALUE **pval, const unsigned char **in, long len,
+                     const ASN1_ITEM *it,
+                     int tag, int aclass, char opt, ASN1_TLC *ctx)
+{
+    const ASN1_TEMPLATE *tt, *errtt = NULL;
+    const ASN1_COMPAT_FUNCS *cf;
+    const ASN1_EXTERN_FUNCS *ef;
+    const ASN1_AUX *aux = it->funcs;
+    ASN1_aux_cb *asn1_cb;
+    const unsigned char *p = NULL, *q;
+    unsigned char *wp = NULL;   /* BIG FAT WARNING! BREAKS CONST WHERE USED */
+    unsigned char imphack = 0, oclass;
+    char seq_eoc, seq_nolen, cst, isopt;
+    long tmplen;
+    int i;
+    int otag;
+    int ret = 0;
+    ASN1_VALUE **pchptr, *ptmpval;
+    if (!pval)
+        return 0;
+    if (aux && aux->asn1_cb)
+        asn1_cb = aux->asn1_cb;
+    else
+        asn1_cb = 0;
+
+    switch (it->itype) {
+    case ASN1_ITYPE_PRIMITIVE:
+        if (it->templates) {
+            /*
+             * tagging or OPTIONAL is currently illegal on an item template
+             * because the flags can't get passed down. In practice this
+             * isn't a problem: we include the relevant flags from the item
+             * template in the template itself.
+             */
+            if ((tag != -1) || opt) {
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I,
+                        ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE);
+                goto err;
+            }
+            return asn1_template_ex_d2i(pval, in, len,
+                                        it->templates, opt, ctx);
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it,
+                                     tag, aclass, opt, ctx);
+        break;
+
+    case ASN1_ITYPE_MSTRING:
+        p = *in;
+        /* Just read in tag and class */
+        ret = asn1_check_tlen(NULL, &otag, &oclass, NULL, NULL,
+                              &p, len, -1, 0, 1, ctx);
+        if (!ret) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Must be UNIVERSAL class */
+        if (oclass != V_ASN1_UNIVERSAL) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_MSTRING_NOT_UNIVERSAL);
+            goto err;
+        }
+        /* Check tag matches bit map */
+        if (!(ASN1_tag2bit(otag) & it->utype)) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_MSTRING_WRONG_TAG);
+            goto err;
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it, otag, 0, 0, ctx);
+
+    case ASN1_ITYPE_EXTERN:
+        /* Use new style d2i */
+        ef = it->funcs;
+        return ef->asn1_ex_d2i(pval, in, len, it, tag, aclass, opt, ctx);
+
+    case ASN1_ITYPE_COMPAT:
+        /* we must resort to old style evil hackery */
+        cf = it->funcs;
+
+        /* If OPTIONAL see if it is there */
+        if (opt) {
+            int exptag;
+            p = *in;
+            if (tag == -1)
+                exptag = it->utype;
+            else
+                exptag = tag;
+            /*
+             * Don't care about anything other than presence of expected tag
+             */
+
+            ret = asn1_check_tlen(NULL, NULL, NULL, NULL, NULL,
+                                  &p, len, exptag, aclass, 1, ctx);
+            if (!ret) {
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+                goto err;
+            }
+            if (ret == -1)
+                return -1;
+        }
+
+        /*
+         * This is the old style evil hack IMPLICIT handling: since the
+         * underlying code is expecting a tag and class other than the one
+         * present we change the buffer temporarily then change it back
+         * afterwards. This doesn't and never did work for tags > 30. Yes
+         * this is *horrible* but it is only needed for old style d2i which
+         * will hopefully not be around for much longer. FIXME: should copy
+         * the buffer then modify it so the input buffer can be const: we
+         * should *always* copy because the old style d2i might modify the
+         * buffer.
+         */
+
+        if (tag != -1) {
+            wp = *(unsigned char **)in;
+            imphack = *wp;
+            if (p == NULL) {
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+                goto err;
+            }
+            *wp = (unsigned char)((*p & V_ASN1_CONSTRUCTED)
+                                  | it->utype);
+        }
+
+        ptmpval = cf->asn1_d2i(pval, in, len);
+
+        if (tag != -1)
+            *wp = imphack;
+
+        if (ptmpval)
+            return 1;
+
+        ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+        goto err;
+
+    case ASN1_ITYPE_CHOICE:
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+        if (*pval) {
+            /* Free up and zero CHOICE value if initialised */
+            i = asn1_get_choice_selector(pval, it);
+            if ((i >= 0) && (i < it->tcount)) {
+                tt = it->templates + i;
+                pchptr = asn1_get_field_ptr(pval, tt);
+                ASN1_template_free(pchptr, tt);
+                asn1_set_choice_selector(pval, -1, it);
+            }
+        } else if (!ASN1_item_ex_new(pval, it)) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+        /* CHOICE type, try each possibility in turn */
+        p = *in;
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            pchptr = asn1_get_field_ptr(pval, tt);
+            /*
+             * We mark field as OPTIONAL so its absence can be recognised.
+             */
+            ret = asn1_template_ex_d2i(pchptr, &p, len, tt, 1, ctx);
+            /* If field not present, try the next one */
+            if (ret == -1)
+                continue;
+            /* If positive return, read OK, break loop */
+            if (ret > 0)
+                break;
+            /* Otherwise must be an ASN1 parsing error */
+            errtt = tt;
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Did we fall off the end without reading anything? */
+        if (i == it->tcount) {
+            /* If OPTIONAL, this is OK */
+            if (opt) {
+                /* Free and zero it */
+                ASN1_item_ex_free(pval, it);
+                return -1;
+            }
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_NO_MATCHING_CHOICE_TYPE);
+            goto err;
+        }
+
+        asn1_set_choice_selector(pval, i, it);
+        *in = p;
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        return 1;
+
+    case ASN1_ITYPE_NDEF_SEQUENCE:
+    case ASN1_ITYPE_SEQUENCE:
+        p = *in;
+        tmplen = len;
+
+        /* If no IMPLICIT tagging set to SEQUENCE, UNIVERSAL */
+        if (tag == -1) {
+            tag = V_ASN1_SEQUENCE;
+            aclass = V_ASN1_UNIVERSAL;
+        }
+        /* Get SEQUENCE length and update len, p */
+        ret = asn1_check_tlen(&len, NULL, NULL, &seq_eoc, &cst,
+                              &p, len, tag, aclass, opt, ctx);
+        if (!ret) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        } else if (ret == -1)
+            return -1;
+        if (aux && (aux->flags & ASN1_AFLG_BROKEN)) {
+            len = tmplen - (p - *in);
+            seq_nolen = 1;
+        }
+        /* If indefinite we don't do a length check */
+        else
+            seq_nolen = seq_eoc;
+        if (!cst) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_SEQUENCE_NOT_CONSTRUCTED);
+            goto err;
+        }
+
+        if (!*pval && !ASN1_item_ex_new(pval, it)) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+
+        /* Free up and zero any ADB found */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            if (tt->flags & ASN1_TFLG_ADB_MASK) {
+                const ASN1_TEMPLATE *seqtt;
+                ASN1_VALUE **pseqval;
+                seqtt = asn1_do_adb(pval, tt, 1);
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                ASN1_template_free(pseqval, seqtt);
+            }
+        }
+
+        /* Get each field entry */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            const ASN1_TEMPLATE *seqtt;
+            ASN1_VALUE **pseqval;
+            seqtt = asn1_do_adb(pval, tt, 1);
+            if (!seqtt)
+                goto err;
+            pseqval = asn1_get_field_ptr(pval, seqtt);
+            /* Have we ran out of data? */
+            if (!len)
+                break;
+            q = p;
+            if (asn1_check_eoc(&p, len)) {
+                if (!seq_eoc) {
+                    ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_UNEXPECTED_EOC);
+                    goto err;
+                }
+                len -= p - q;
+                seq_eoc = 0;
+                q = p;
+                break;
+            }
+            /*
+             * This determines the OPTIONAL flag value. The field cannot be
+             * omitted if it is the last of a SEQUENCE and there is still
+             * data to be read. This isn't strictly necessary but it
+             * increases efficiency in some cases.
+             */
+            if (i == (it->tcount - 1))
+                isopt = 0;
+            else
+                isopt = (char)(seqtt->flags & ASN1_TFLG_OPTIONAL);
+            /*
+             * attempt to read in field, allowing each to be OPTIONAL
+             */
+
+            ret = asn1_template_ex_d2i(pseqval, &p, len, seqtt, isopt, ctx);
+            if (!ret) {
+                errtt = seqtt;
+                goto err;
+            } else if (ret == -1) {
+                /*
+                 * OPTIONAL component absent. Free and zero the field.
+                 */
+                ASN1_template_free(pseqval, seqtt);
+                continue;
+            }
+            /* Update length */
+            len -= p - q;
+        }
+
+        /* Check for EOC if expecting one */
+        if (seq_eoc && !asn1_check_eoc(&p, len)) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_MISSING_EOC);
+            goto err;
+        }
+        /* Check all data read */
+        if (!seq_nolen && len) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_SEQUENCE_LENGTH_MISMATCH);
+            goto err;
+        }
+
+        /*
+         * If we get here we've got no more data in the SEQUENCE, however we
+         * may not have read all fields so check all remaining are OPTIONAL
+         * and clear any that are.
+         */
+        for (; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            seqtt = asn1_do_adb(pval, tt, 1);
+            if (!seqtt)
+                goto err;
+            if (seqtt->flags & ASN1_TFLG_OPTIONAL) {
+                ASN1_VALUE **pseqval;
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                ASN1_template_free(pseqval, seqtt);
+            } else {
+                errtt = seqtt;
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_FIELD_MISSING);
+                goto err;
+            }
+        }
+        /* Save encoding */
+        if (!asn1_enc_save(pval, *in, p - *in, it))
+            goto auxerr;
+        *in = p;
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        return 1;
+
+    default:
+        return 0;
+    }
+ auxerr:
+    ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_AUX_ERROR);
+ err:
+    ASN1_item_ex_free(pval, it);
+    if (errtt)
+        ERR_add_error_data(4, ""Field="", errtt->field_name,
+                           "", Type="", it->sname);
+    else
+        ERR_add_error_data(2, ""Type="", it->sname);
+    return 0;
+}","int ASN1_item_ex_d2i(ASN1_VALUE **pval, const unsigned char **in, long len,
+                     const ASN1_ITEM *it,
+                     int tag, int aclass, char opt, ASN1_TLC *ctx)
+{
+    const ASN1_TEMPLATE *tt, *errtt = NULL;
+    const ASN1_COMPAT_FUNCS *cf;
+    const ASN1_EXTERN_FUNCS *ef;
+    const ASN1_AUX *aux = it->funcs;
+    ASN1_aux_cb *asn1_cb;
+    const unsigned char *p = NULL, *q;
+    unsigned char *wp = NULL;   /* BIG FAT WARNING! BREAKS CONST WHERE USED */
+    unsigned char imphack = 0, oclass;
+    char seq_eoc, seq_nolen, cst, isopt;
+    long tmplen;
+    int i;
+    int otag;
+    int ret = 0;
+    ASN1_VALUE **pchptr, *ptmpval;
+    int combine = aclass & ASN1_TFLG_COMBINE;
+    aclass &= ~ASN1_TFLG_COMBINE;
+    if (!pval)
+        return 0;
+    if (aux && aux->asn1_cb)
+        asn1_cb = aux->asn1_cb;
+    else
+        asn1_cb = 0;
+
+    switch (it->itype) {
+    case ASN1_ITYPE_PRIMITIVE:
+        if (it->templates) {
+            /*
+             * tagging or OPTIONAL is currently illegal on an item template
+             * because the flags can't get passed down. In practice this
+             * isn't a problem: we include the relevant flags from the item
+             * template in the template itself.
+             */
+            if ((tag != -1) || opt) {
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I,
+                        ASN1_R_ILLEGAL_OPTIONS_ON_ITEM_TEMPLATE);
+                goto err;
+            }
+            return asn1_template_ex_d2i(pval, in, len,
+                                        it->templates, opt, ctx);
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it,
+                                     tag, aclass, opt, ctx);
+        break;
+
+    case ASN1_ITYPE_MSTRING:
+        p = *in;
+        /* Just read in tag and class */
+        ret = asn1_check_tlen(NULL, &otag, &oclass, NULL, NULL,
+                              &p, len, -1, 0, 1, ctx);
+        if (!ret) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Must be UNIVERSAL class */
+        if (oclass != V_ASN1_UNIVERSAL) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_MSTRING_NOT_UNIVERSAL);
+            goto err;
+        }
+        /* Check tag matches bit map */
+        if (!(ASN1_tag2bit(otag) & it->utype)) {
+            /* If OPTIONAL, assume this is OK */
+            if (opt)
+                return -1;
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_MSTRING_WRONG_TAG);
+            goto err;
+        }
+        return asn1_d2i_ex_primitive(pval, in, len, it, otag, 0, 0, ctx);
+
+    case ASN1_ITYPE_EXTERN:
+        /* Use new style d2i */
+        ef = it->funcs;
+        return ef->asn1_ex_d2i(pval, in, len, it, tag, aclass, opt, ctx);
+
+    case ASN1_ITYPE_COMPAT:
+        /* we must resort to old style evil hackery */
+        cf = it->funcs;
+
+        /* If OPTIONAL see if it is there */
+        if (opt) {
+            int exptag;
+            p = *in;
+            if (tag == -1)
+                exptag = it->utype;
+            else
+                exptag = tag;
+            /*
+             * Don't care about anything other than presence of expected tag
+             */
+
+            ret = asn1_check_tlen(NULL, NULL, NULL, NULL, NULL,
+                                  &p, len, exptag, aclass, 1, ctx);
+            if (!ret) {
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+                goto err;
+            }
+            if (ret == -1)
+                return -1;
+        }
+
+        /*
+         * This is the old style evil hack IMPLICIT handling: since the
+         * underlying code is expecting a tag and class other than the one
+         * present we change the buffer temporarily then change it back
+         * afterwards. This doesn't and never did work for tags > 30. Yes
+         * this is *horrible* but it is only needed for old style d2i which
+         * will hopefully not be around for much longer. FIXME: should copy
+         * the buffer then modify it so the input buffer can be const: we
+         * should *always* copy because the old style d2i might modify the
+         * buffer.
+         */
+
+        if (tag != -1) {
+            wp = *(unsigned char **)in;
+            imphack = *wp;
+            if (p == NULL) {
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+                goto err;
+            }
+            *wp = (unsigned char)((*p & V_ASN1_CONSTRUCTED)
+                                  | it->utype);
+        }
+
+        ptmpval = cf->asn1_d2i(pval, in, len);
+
+        if (tag != -1)
+            *wp = imphack;
+
+        if (ptmpval)
+            return 1;
+
+        ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+        goto err;
+
+    case ASN1_ITYPE_CHOICE:
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+        if (*pval) {
+            /* Free up and zero CHOICE value if initialised */
+            i = asn1_get_choice_selector(pval, it);
+            if ((i >= 0) && (i < it->tcount)) {
+                tt = it->templates + i;
+                pchptr = asn1_get_field_ptr(pval, tt);
+                ASN1_template_free(pchptr, tt);
+                asn1_set_choice_selector(pval, -1, it);
+            }
+        } else if (!ASN1_item_ex_new(pval, it)) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+        /* CHOICE type, try each possibility in turn */
+        p = *in;
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            pchptr = asn1_get_field_ptr(pval, tt);
+            /*
+             * We mark field as OPTIONAL so its absence can be recognised.
+             */
+            ret = asn1_template_ex_d2i(pchptr, &p, len, tt, 1, ctx);
+            /* If field not present, try the next one */
+            if (ret == -1)
+                continue;
+            /* If positive return, read OK, break loop */
+            if (ret > 0)
+                break;
+            /* Otherwise must be an ASN1 parsing error */
+            errtt = tt;
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        /* Did we fall off the end without reading anything? */
+        if (i == it->tcount) {
+            /* If OPTIONAL, this is OK */
+            if (opt) {
+                /* Free and zero it */
+                ASN1_item_ex_free(pval, it);
+                return -1;
+            }
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_NO_MATCHING_CHOICE_TYPE);
+            goto err;
+        }
+
+        asn1_set_choice_selector(pval, i, it);
+        *in = p;
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        return 1;
+
+    case ASN1_ITYPE_NDEF_SEQUENCE:
+    case ASN1_ITYPE_SEQUENCE:
+        p = *in;
+        tmplen = len;
+
+        /* If no IMPLICIT tagging set to SEQUENCE, UNIVERSAL */
+        if (tag == -1) {
+            tag = V_ASN1_SEQUENCE;
+            aclass = V_ASN1_UNIVERSAL;
+        }
+        /* Get SEQUENCE length and update len, p */
+        ret = asn1_check_tlen(&len, NULL, NULL, &seq_eoc, &cst,
+                              &p, len, tag, aclass, opt, ctx);
+        if (!ret) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        } else if (ret == -1)
+            return -1;
+        if (aux && (aux->flags & ASN1_AFLG_BROKEN)) {
+            len = tmplen - (p - *in);
+            seq_nolen = 1;
+        }
+        /* If indefinite we don't do a length check */
+        else
+            seq_nolen = seq_eoc;
+        if (!cst) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_SEQUENCE_NOT_CONSTRUCTED);
+            goto err;
+        }
+
+        if (!*pval && !ASN1_item_ex_new(pval, it)) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ERR_R_NESTED_ASN1_ERROR);
+            goto err;
+        }
+
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_PRE, pval, it, NULL))
+            goto auxerr;
+
+        /* Free up and zero any ADB found */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            if (tt->flags & ASN1_TFLG_ADB_MASK) {
+                const ASN1_TEMPLATE *seqtt;
+                ASN1_VALUE **pseqval;
+                seqtt = asn1_do_adb(pval, tt, 1);
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                ASN1_template_free(pseqval, seqtt);
+            }
+        }
+
+        /* Get each field entry */
+        for (i = 0, tt = it->templates; i < it->tcount; i++, tt++) {
+            const ASN1_TEMPLATE *seqtt;
+            ASN1_VALUE **pseqval;
+            seqtt = asn1_do_adb(pval, tt, 1);
+            if (!seqtt)
+                goto err;
+            pseqval = asn1_get_field_ptr(pval, seqtt);
+            /* Have we ran out of data? */
+            if (!len)
+                break;
+            q = p;
+            if (asn1_check_eoc(&p, len)) {
+                if (!seq_eoc) {
+                    ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_UNEXPECTED_EOC);
+                    goto err;
+                }
+                len -= p - q;
+                seq_eoc = 0;
+                q = p;
+                break;
+            }
+            /*
+             * This determines the OPTIONAL flag value. The field cannot be
+             * omitted if it is the last of a SEQUENCE and there is still
+             * data to be read. This isn't strictly necessary but it
+             * increases efficiency in some cases.
+             */
+            if (i == (it->tcount - 1))
+                isopt = 0;
+            else
+                isopt = (char)(seqtt->flags & ASN1_TFLG_OPTIONAL);
+            /*
+             * attempt to read in field, allowing each to be OPTIONAL
+             */
+
+            ret = asn1_template_ex_d2i(pseqval, &p, len, seqtt, isopt, ctx);
+            if (!ret) {
+                errtt = seqtt;
+                goto err;
+            } else if (ret == -1) {
+                /*
+                 * OPTIONAL component absent. Free and zero the field.
+                 */
+                ASN1_template_free(pseqval, seqtt);
+                continue;
+            }
+            /* Update length */
+            len -= p - q;
+        }
+
+        /* Check for EOC if expecting one */
+        if (seq_eoc && !asn1_check_eoc(&p, len)) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_MISSING_EOC);
+            goto err;
+        }
+        /* Check all data read */
+        if (!seq_nolen && len) {
+            ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_SEQUENCE_LENGTH_MISMATCH);
+            goto err;
+        }
+
+        /*
+         * If we get here we've got no more data in the SEQUENCE, however we
+         * may not have read all fields so check all remaining are OPTIONAL
+         * and clear any that are.
+         */
+        for (; i < it->tcount; tt++, i++) {
+            const ASN1_TEMPLATE *seqtt;
+            seqtt = asn1_do_adb(pval, tt, 1);
+            if (!seqtt)
+                goto err;
+            if (seqtt->flags & ASN1_TFLG_OPTIONAL) {
+                ASN1_VALUE **pseqval;
+                pseqval = asn1_get_field_ptr(pval, seqtt);
+                ASN1_template_free(pseqval, seqtt);
+            } else {
+                errtt = seqtt;
+                ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_FIELD_MISSING);
+                goto err;
+            }
+        }
+        /* Save encoding */
+        if (!asn1_enc_save(pval, *in, p - *in, it))
+            goto auxerr;
+        *in = p;
+        if (asn1_cb && !asn1_cb(ASN1_OP_D2I_POST, pval, it, NULL))
+            goto auxerr;
+        return 1;
+
+    default:
+        return 0;
+    }
+ auxerr:
+    ASN1err(ASN1_F_ASN1_ITEM_EX_D2I, ASN1_R_AUX_ERROR);
+ err:
+    if (combine == 0)
+        ASN1_item_ex_free(pval, it);
+    if (errtt)
+        ERR_add_error_data(4, ""Field="", errtt->field_name,
+                           "", Type="", it->sname);
+    else
+        ERR_add_error_data(2, ""Type="", it->sname);
+    return 0;
+}",
+2608,"[""CWE-200""]",openssl,8fc8f486f7fa098c9fbb6a6ae399e3c6856e0d87,8fc8f486f7fa098c9fbb6a6ae399e3c6856e0d87,0,503357,2.055902675012308e+38,496.0,"crypto/bn/x86_64-mont5.pl: constant-time gather procedure.
+
+At the same time remove miniscule bias in final subtraction.
+Performance penalty varies from platform to platform, and even with
+key length. For rsa2048 sign it was observed to be 4% for Sandy
+Bridge and 7% on Broadwell.
+
+CVE-2016-0702
+
+Reviewed-by: Richard Levitte <levitte@openssl.org>
+Reviewed-by: Rich Salz <rsalz@openssl.org>",other,"int BN_mod_exp_mont_consttime(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
+                              const BIGNUM *m, BN_CTX *ctx,
+                              BN_MONT_CTX *in_mont)
+{
+    int i, bits, ret = 0, window, wvalue;
+    int top;
+    BN_MONT_CTX *mont = NULL;
+
+    int numPowers;
+    unsigned char *powerbufFree = NULL;
+    int powerbufLen = 0;
+    unsigned char *powerbuf = NULL;
+    BIGNUM tmp, am;
+#if defined(SPARC_T4_MONT)
+    unsigned int t4 = 0;
+#endif
+
+    bn_check_top(a);
+    bn_check_top(p);
+    bn_check_top(m);
+
+    if (!BN_is_odd(m)) {
+        BNerr(BN_F_BN_MOD_EXP_MONT_CONSTTIME, BN_R_CALLED_WITH_EVEN_MODULUS);
+        return (0);
+    }
+
+    top = m->top;
+
+    bits = BN_num_bits(p);
+    if (bits == 0) {
+        /* x**0 mod 1 is still zero. */
+        if (BN_is_one(m)) {
+            ret = 1;
+            BN_zero(rr);
+        } else {
+            ret = BN_one(rr);
+        }
+        return ret;
+    }
+
+    BN_CTX_start(ctx);
+
+    /*
+     * Allocate a montgomery context if it was not supplied by the caller. If
+     * this is not done, things will break in the montgomery part.
+     */
+    if (in_mont != NULL)
+        mont = in_mont;
+    else {
+        if ((mont = BN_MONT_CTX_new()) == NULL)
+            goto err;
+        if (!BN_MONT_CTX_set(mont, m, ctx))
+            goto err;
+    }
+
+#ifdef RSAZ_ENABLED
+    /*
+     * If the size of the operands allow it, perform the optimized
+     * RSAZ exponentiation. For further information see
+     * crypto/bn/rsaz_exp.c and accompanying assembly modules.
+     */
+    if ((16 == a->top) && (16 == p->top) && (BN_num_bits(m) == 1024)
+        && rsaz_avx2_eligible()) {
+        if (NULL == bn_wexpand(rr, 16))
+            goto err;
+        RSAZ_1024_mod_exp_avx2(rr->d, a->d, p->d, m->d, mont->RR.d,
+                               mont->n0[0]);
+        rr->top = 16;
+        rr->neg = 0;
+        bn_correct_top(rr);
+        ret = 1;
+        goto err;
+    } else if ((8 == a->top) && (8 == p->top) && (BN_num_bits(m) == 512)) {
+        if (NULL == bn_wexpand(rr, 8))
+            goto err;
+        RSAZ_512_mod_exp(rr->d, a->d, p->d, m->d, mont->n0[0], mont->RR.d);
+        rr->top = 8;
+        rr->neg = 0;
+        bn_correct_top(rr);
+        ret = 1;
+        goto err;
+    }
+#endif
+
+    /* Get the window size to use with size of p. */
+    window = BN_window_bits_for_ctime_exponent_size(bits);
+#if defined(SPARC_T4_MONT)
+    if (window >= 5 && (top & 15) == 0 && top <= 64 &&
+        (OPENSSL_sparcv9cap_P[1] & (CFR_MONTMUL | CFR_MONTSQR)) ==
+        (CFR_MONTMUL | CFR_MONTSQR) && (t4 = OPENSSL_sparcv9cap_P[0]))
+        window = 5;
+    else
+#endif
+#if defined(OPENSSL_BN_ASM_MONT5)
+    if (window >= 5) {
+        window = 5;             /* ~5% improvement for RSA2048 sign, and even
+                                 * for RSA4096 */
+        if ((top & 7) == 0)
+            powerbufLen += 2 * top * sizeof(m->d[0]);
+    }
+#endif
+    (void)0;
+
+    /*
+     * Allocate a buffer large enough to hold all of the pre-computed powers
+     * of am, am itself and tmp.
+     */
+    numPowers = 1 << window;
+    powerbufLen += sizeof(m->d[0]) * (top * numPowers +
+                                      ((2 * top) >
+                                       numPowers ? (2 * top) : numPowers));
+#ifdef alloca
+    if (powerbufLen < 3072)
+        powerbufFree =
+            alloca(powerbufLen + MOD_EXP_CTIME_MIN_CACHE_LINE_WIDTH);
+    else
+#endif
+        if ((powerbufFree =
+             OPENSSL_malloc(powerbufLen + MOD_EXP_CTIME_MIN_CACHE_LINE_WIDTH))
+            == NULL)
+        goto err;
+
+    powerbuf = MOD_EXP_CTIME_ALIGN(powerbufFree);
+    memset(powerbuf, 0, powerbufLen);
+
+#ifdef alloca
+    if (powerbufLen < 3072)
+        powerbufFree = NULL;
+#endif
+
+    /* lay down tmp and am right after powers table */
+    tmp.d = (BN_ULONG *)(powerbuf + sizeof(m->d[0]) * top * numPowers);
+    am.d = tmp.d + top;
+    tmp.top = am.top = 0;
+    tmp.dmax = am.dmax = top;
+    tmp.neg = am.neg = 0;
+    tmp.flags = am.flags = BN_FLG_STATIC_DATA;
+
+    /* prepare a^0 in Montgomery domain */
+#if 1                           /* by Shay Gueron's suggestion */
+    if (m->d[top - 1] & (((BN_ULONG)1) << (BN_BITS2 - 1))) {
+        /* 2^(top*BN_BITS2) - m */
+        tmp.d[0] = (0 - m->d[0]) & BN_MASK2;
+        for (i = 1; i < top; i++)
+            tmp.d[i] = (~m->d[i]) & BN_MASK2;
+        tmp.top = top;
+    } else
+#endif
+    if (!BN_to_montgomery(&tmp, BN_value_one(), mont, ctx))
+        goto err;
+
+    /* prepare a^1 in Montgomery domain */
+    if (a->neg || BN_ucmp(a, m) >= 0) {
+        if (!BN_mod(&am, a, m, ctx))
+            goto err;
+        if (!BN_to_montgomery(&am, &am, mont, ctx))
+            goto err;
+    } else if (!BN_to_montgomery(&am, a, mont, ctx))
+        goto err;
+
+#if defined(SPARC_T4_MONT)
+    if (t4) {
+        typedef int (*bn_pwr5_mont_f) (BN_ULONG *tp, const BN_ULONG *np,
+                                       const BN_ULONG *n0, const void *table,
+                                       int power, int bits);
+        int bn_pwr5_mont_t4_8(BN_ULONG *tp, const BN_ULONG *np,
+                              const BN_ULONG *n0, const void *table,
+                              int power, int bits);
+        int bn_pwr5_mont_t4_16(BN_ULONG *tp, const BN_ULONG *np,
+                               const BN_ULONG *n0, const void *table,
+                               int power, int bits);
+        int bn_pwr5_mont_t4_24(BN_ULONG *tp, const BN_ULONG *np,
+                               const BN_ULONG *n0, const void *table,
+                               int power, int bits);
+        int bn_pwr5_mont_t4_32(BN_ULONG *tp, const BN_ULONG *np,
+                               const BN_ULONG *n0, const void *table,
+                               int power, int bits);
+        static const bn_pwr5_mont_f pwr5_funcs[4] = {
+            bn_pwr5_mont_t4_8, bn_pwr5_mont_t4_16,
+            bn_pwr5_mont_t4_24, bn_pwr5_mont_t4_32
+        };
+        bn_pwr5_mont_f pwr5_worker = pwr5_funcs[top / 16 - 1];
+
+        typedef int (*bn_mul_mont_f) (BN_ULONG *rp, const BN_ULONG *ap,
+                                      const void *bp, const BN_ULONG *np,
+                                      const BN_ULONG *n0);
+        int bn_mul_mont_t4_8(BN_ULONG *rp, const BN_ULONG *ap, const void *bp,
+                             const BN_ULONG *np, const BN_ULONG *n0);
+        int bn_mul_mont_t4_16(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0);
+        int bn_mul_mont_t4_24(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0);
+        int bn_mul_mont_t4_32(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0);
+        static const bn_mul_mont_f mul_funcs[4] = {
+            bn_mul_mont_t4_8, bn_mul_mont_t4_16,
+            bn_mul_mont_t4_24, bn_mul_mont_t4_32
+        };
+        bn_mul_mont_f mul_worker = mul_funcs[top / 16 - 1];
+
+        void bn_mul_mont_vis3(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0, int num);
+        void bn_mul_mont_t4(BN_ULONG *rp, const BN_ULONG *ap,
+                            const void *bp, const BN_ULONG *np,
+                            const BN_ULONG *n0, int num);
+        void bn_mul_mont_gather5_t4(BN_ULONG *rp, const BN_ULONG *ap,
+                                    const void *table, const BN_ULONG *np,
+                                    const BN_ULONG *n0, int num, int power);
+        void bn_flip_n_scatter5_t4(const BN_ULONG *inp, size_t num,
+                                   void *table, size_t power);
+        void bn_gather5_t4(BN_ULONG *out, size_t num,
+                           void *table, size_t power);
+        void bn_flip_t4(BN_ULONG *dst, BN_ULONG *src, size_t num);
+
+        BN_ULONG *np = mont->N.d, *n0 = mont->n0;
+        int stride = 5 * (6 - (top / 16 - 1)); /* multiple of 5, but less
+                                                * than 32 */
+
+        /*
+         * BN_to_montgomery can contaminate words above .top [in
+         * BN_DEBUG[_DEBUG] build]...
+         */
+        for (i = am.top; i < top; i++)
+            am.d[i] = 0;
+        for (i = tmp.top; i < top; i++)
+            tmp.d[i] = 0;
+
+        bn_flip_n_scatter5_t4(tmp.d, top, powerbuf, 0);
+        bn_flip_n_scatter5_t4(am.d, top, powerbuf, 1);
+        if (!(*mul_worker) (tmp.d, am.d, am.d, np, n0) &&
+            !(*mul_worker) (tmp.d, am.d, am.d, np, n0))
+            bn_mul_mont_vis3(tmp.d, am.d, am.d, np, n0, top);
+        bn_flip_n_scatter5_t4(tmp.d, top, powerbuf, 2);
+
+        for (i = 3; i < 32; i++) {
+            /* Calculate a^i = a^(i-1) * a */
+            if (!(*mul_worker) (tmp.d, tmp.d, am.d, np, n0) &&
+                !(*mul_worker) (tmp.d, tmp.d, am.d, np, n0))
+                bn_mul_mont_vis3(tmp.d, tmp.d, am.d, np, n0, top);
+            bn_flip_n_scatter5_t4(tmp.d, top, powerbuf, i);
+        }
+
+        /* switch to 64-bit domain */
+        np = alloca(top * sizeof(BN_ULONG));
+        top /= 2;
+        bn_flip_t4(np, mont->N.d, top);
+
+        bits--;
+        for (wvalue = 0, i = bits % 5; i >= 0; i--, bits--)
+            wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+        bn_gather5_t4(tmp.d, top, powerbuf, wvalue);
+
+        /*
+         * Scan the exponent one window at a time starting from the most
+         * significant bits.
+         */
+        while (bits >= 0) {
+            if (bits < stride)
+                stride = bits + 1;
+            bits -= stride;
+            wvalue = bn_get_bits(p, bits + 1);
+
+            if ((*pwr5_worker) (tmp.d, np, n0, powerbuf, wvalue, stride))
+                continue;
+            /* retry once and fall back */
+            if ((*pwr5_worker) (tmp.d, np, n0, powerbuf, wvalue, stride))
+                continue;
+
+            bits += stride - 5;
+            wvalue >>= stride - 5;
+            wvalue &= 31;
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_gather5_t4(tmp.d, tmp.d, powerbuf, np, n0, top,
+                                   wvalue);
+        }
+
+        bn_flip_t4(tmp.d, tmp.d, top);
+        top *= 2;
+        /* back to 32-bit domain */
+        tmp.top = top;
+        bn_correct_top(&tmp);
+        OPENSSL_cleanse(np, top * sizeof(BN_ULONG));
+    } else
+#endif
+#if defined(OPENSSL_BN_ASM_MONT5)
+    if (window == 5 && top > 1) {
+        /*
+         * This optimization uses ideas from http://eprint.iacr.org/2011/239,
+         * specifically optimization of cache-timing attack countermeasures
+         * and pre-computation optimization.
+         */
+
+        /*
+         * Dedicated window==4 case improves 512-bit RSA sign by ~15%, but as
+         * 512-bit RSA is hardly relevant, we omit it to spare size...
+         */
+        void bn_mul_mont_gather5(BN_ULONG *rp, const BN_ULONG *ap,
+                                 const void *table, const BN_ULONG *np,
+                                 const BN_ULONG *n0, int num, int power);
+        void bn_scatter5(const BN_ULONG *inp, size_t num,
+                         void *table, size_t power);
+        void bn_gather5(BN_ULONG *out, size_t num, void *table, size_t power);
+        void bn_power5(BN_ULONG *rp, const BN_ULONG *ap,
+                       const void *table, const BN_ULONG *np,
+                       const BN_ULONG *n0, int num, int power);
+        int bn_get_bits5(const BN_ULONG *ap, int off);
+        int bn_from_montgomery(BN_ULONG *rp, const BN_ULONG *ap,
+                               const BN_ULONG *not_used, const BN_ULONG *np,
+                               const BN_ULONG *n0, int num);
+
+        BN_ULONG *np = mont->N.d, *n0 = mont->n0, *np2;
+
+        /*
+         * BN_to_montgomery can contaminate words above .top [in
+         * BN_DEBUG[_DEBUG] build]...
+         */
+        for (i = am.top; i < top; i++)
+            am.d[i] = 0;
+        for (i = tmp.top; i < top; i++)
+            tmp.d[i] = 0;
+
+        if (top & 7)
+            np2 = np;
+        else
+            for (np2 = am.d + top, i = 0; i < top; i++)
+                np2[2 * i] = np[i];
+
+        bn_scatter5(tmp.d, top, powerbuf, 0);
+        bn_scatter5(am.d, am.top, powerbuf, 1);
+        bn_mul_mont(tmp.d, am.d, am.d, np, n0, top);
+        bn_scatter5(tmp.d, top, powerbuf, 2);
+
+# if 0
+        for (i = 3; i < 32; i++) {
+            /* Calculate a^i = a^(i-1) * a */
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np2, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+        }
+# else
+        /* same as above, but uses squaring for 1/2 of operations */
+        for (i = 4; i < 32; i *= 2) {
+            bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+        }
+        for (i = 3; i < 8; i += 2) {
+            int j;
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np2, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+            for (j = 2 * i; j < 32; j *= 2) {
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_scatter5(tmp.d, top, powerbuf, j);
+            }
+        }
+        for (; i < 16; i += 2) {
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np2, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+            bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_scatter5(tmp.d, top, powerbuf, 2 * i);
+        }
+        for (; i < 32; i += 2) {
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np2, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+        }
+# endif
+        bits--;
+        for (wvalue = 0, i = bits % 5; i >= 0; i--, bits--)
+            wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+        bn_gather5(tmp.d, top, powerbuf, wvalue);
+
+        /*
+         * Scan the exponent one window at a time starting from the most
+         * significant bits.
+         */
+        if (top & 7)
+            while (bits >= 0) {
+                for (wvalue = 0, i = 0; i < 5; i++, bits--)
+                    wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont_gather5(tmp.d, tmp.d, powerbuf, np, n0, top,
+                                    wvalue);
+        } else {
+            while (bits >= 0) {
+                wvalue = bn_get_bits5(p->d, bits - 4);
+                bits -= 5;
+                bn_power5(tmp.d, tmp.d, powerbuf, np2, n0, top, wvalue);
+            }
+        }
+
+        ret = bn_from_montgomery(tmp.d, tmp.d, NULL, np2, n0, top);
+        tmp.top = top;
+        bn_correct_top(&tmp);
+        if (ret) {
+            if (!BN_copy(rr, &tmp))
+                ret = 0;
+            goto err;           /* non-zero ret means it's not error */
+        }
+    } else
+#endif
+    {
+        if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&tmp, top, powerbuf, 0, window))
+            goto err;
+        if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&am, top, powerbuf, 1, window))
+            goto err;
+
+        /*
+         * If the window size is greater than 1, then calculate
+         * val[i=2..2^winsize-1]. Powers are computed as a*a^(i-1) (even
+         * powers could instead be computed as (a^(i/2))^2 to use the slight
+         * performance advantage of sqr over mul).
+         */
+        if (window > 1) {
+            if (!BN_mod_mul_montgomery(&tmp, &am, &am, mont, ctx))
+                goto err;
+            if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&tmp, top, powerbuf, 2,
+                                              window))
+                goto err;
+            for (i = 3; i < numPowers; i++) {
+                /* Calculate a^i = a^(i-1) * a */
+                if (!BN_mod_mul_montgomery(&tmp, &am, &tmp, mont, ctx))
+                    goto err;
+                if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&tmp, top, powerbuf, i,
+                                                  window))
+                    goto err;
+            }
+        }
+
+        bits--;
+        for (wvalue = 0, i = bits % window; i >= 0; i--, bits--)
+            wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+        if (!MOD_EXP_CTIME_COPY_FROM_PREBUF(&tmp, top, powerbuf, wvalue,
+                                            window))
+            goto err;
+
+        /*
+         * Scan the exponent one window at a time starting from the most
+         * significant bits.
+         */
+        while (bits >= 0) {
+            wvalue = 0;         /* The 'value' of the window */
+
+            /* Scan the window, squaring the result as we go */
+            for (i = 0; i < window; i++, bits--) {
+                if (!BN_mod_mul_montgomery(&tmp, &tmp, &tmp, mont, ctx))
+                    goto err;
+                wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+            }
+
+            /*
+             * Fetch the appropriate pre-computed value from the pre-buf
+             */
+            if (!MOD_EXP_CTIME_COPY_FROM_PREBUF(&am, top, powerbuf, wvalue,
+                                                window))
+                goto err;
+
+            /* Multiply the result into the intermediate result */
+            if (!BN_mod_mul_montgomery(&tmp, &tmp, &am, mont, ctx))
+                goto err;
+        }
+    }
+
+    /* Convert the final result from montgomery to standard format */
+#if defined(SPARC_T4_MONT)
+    if (OPENSSL_sparcv9cap_P[0] & (SPARCV9_VIS3 | SPARCV9_PREFER_FPU)) {
+        am.d[0] = 1;            /* borrow am */
+        for (i = 1; i < top; i++)
+            am.d[i] = 0;
+        if (!BN_mod_mul_montgomery(rr, &tmp, &am, mont, ctx))
+            goto err;
+    } else
+#endif
+    if (!BN_from_montgomery(rr, &tmp, mont, ctx))
+        goto err;
+    ret = 1;
+ err:
+    if (in_mont == NULL)
+        BN_MONT_CTX_free(mont);
+    if (powerbuf != NULL) {
+        OPENSSL_cleanse(powerbuf, powerbufLen);
+        OPENSSL_free(powerbufFree);
+    }
+    BN_CTX_end(ctx);
+    return (ret);
+}","int BN_mod_exp_mont_consttime(BIGNUM *rr, const BIGNUM *a, const BIGNUM *p,
+                              const BIGNUM *m, BN_CTX *ctx,
+                              BN_MONT_CTX *in_mont)
+{
+    int i, bits, ret = 0, window, wvalue;
+    int top;
+    BN_MONT_CTX *mont = NULL;
+
+    int numPowers;
+    unsigned char *powerbufFree = NULL;
+    int powerbufLen = 0;
+    unsigned char *powerbuf = NULL;
+    BIGNUM tmp, am;
+#if defined(SPARC_T4_MONT)
+    unsigned int t4 = 0;
+#endif
+
+    bn_check_top(a);
+    bn_check_top(p);
+    bn_check_top(m);
+
+    if (!BN_is_odd(m)) {
+        BNerr(BN_F_BN_MOD_EXP_MONT_CONSTTIME, BN_R_CALLED_WITH_EVEN_MODULUS);
+        return (0);
+    }
+
+    top = m->top;
+
+    bits = BN_num_bits(p);
+    if (bits == 0) {
+        /* x**0 mod 1 is still zero. */
+        if (BN_is_one(m)) {
+            ret = 1;
+            BN_zero(rr);
+        } else {
+            ret = BN_one(rr);
+        }
+        return ret;
+    }
+
+    BN_CTX_start(ctx);
+
+    /*
+     * Allocate a montgomery context if it was not supplied by the caller. If
+     * this is not done, things will break in the montgomery part.
+     */
+    if (in_mont != NULL)
+        mont = in_mont;
+    else {
+        if ((mont = BN_MONT_CTX_new()) == NULL)
+            goto err;
+        if (!BN_MONT_CTX_set(mont, m, ctx))
+            goto err;
+    }
+
+#ifdef RSAZ_ENABLED
+    /*
+     * If the size of the operands allow it, perform the optimized
+     * RSAZ exponentiation. For further information see
+     * crypto/bn/rsaz_exp.c and accompanying assembly modules.
+     */
+    if ((16 == a->top) && (16 == p->top) && (BN_num_bits(m) == 1024)
+        && rsaz_avx2_eligible()) {
+        if (NULL == bn_wexpand(rr, 16))
+            goto err;
+        RSAZ_1024_mod_exp_avx2(rr->d, a->d, p->d, m->d, mont->RR.d,
+                               mont->n0[0]);
+        rr->top = 16;
+        rr->neg = 0;
+        bn_correct_top(rr);
+        ret = 1;
+        goto err;
+    } else if ((8 == a->top) && (8 == p->top) && (BN_num_bits(m) == 512)) {
+        if (NULL == bn_wexpand(rr, 8))
+            goto err;
+        RSAZ_512_mod_exp(rr->d, a->d, p->d, m->d, mont->n0[0], mont->RR.d);
+        rr->top = 8;
+        rr->neg = 0;
+        bn_correct_top(rr);
+        ret = 1;
+        goto err;
+    }
+#endif
+
+    /* Get the window size to use with size of p. */
+    window = BN_window_bits_for_ctime_exponent_size(bits);
+#if defined(SPARC_T4_MONT)
+    if (window >= 5 && (top & 15) == 0 && top <= 64 &&
+        (OPENSSL_sparcv9cap_P[1] & (CFR_MONTMUL | CFR_MONTSQR)) ==
+        (CFR_MONTMUL | CFR_MONTSQR) && (t4 = OPENSSL_sparcv9cap_P[0]))
+        window = 5;
+    else
+#endif
+#if defined(OPENSSL_BN_ASM_MONT5)
+    if (window >= 5) {
+        window = 5;             /* ~5% improvement for RSA2048 sign, and even
+                                 * for RSA4096 */
+        /* reserve space for mont->N.d[] copy */
+        powerbufLen += top * sizeof(mont->N.d[0]);
+    }
+#endif
+    (void)0;
+
+    /*
+     * Allocate a buffer large enough to hold all of the pre-computed powers
+     * of am, am itself and tmp.
+     */
+    numPowers = 1 << window;
+    powerbufLen += sizeof(m->d[0]) * (top * numPowers +
+                                      ((2 * top) >
+                                       numPowers ? (2 * top) : numPowers));
+#ifdef alloca
+    if (powerbufLen < 3072)
+        powerbufFree =
+            alloca(powerbufLen + MOD_EXP_CTIME_MIN_CACHE_LINE_WIDTH);
+    else
+#endif
+        if ((powerbufFree =
+             OPENSSL_malloc(powerbufLen + MOD_EXP_CTIME_MIN_CACHE_LINE_WIDTH))
+            == NULL)
+        goto err;
+
+    powerbuf = MOD_EXP_CTIME_ALIGN(powerbufFree);
+    memset(powerbuf, 0, powerbufLen);
+
+#ifdef alloca
+    if (powerbufLen < 3072)
+        powerbufFree = NULL;
+#endif
+
+    /* lay down tmp and am right after powers table */
+    tmp.d = (BN_ULONG *)(powerbuf + sizeof(m->d[0]) * top * numPowers);
+    am.d = tmp.d + top;
+    tmp.top = am.top = 0;
+    tmp.dmax = am.dmax = top;
+    tmp.neg = am.neg = 0;
+    tmp.flags = am.flags = BN_FLG_STATIC_DATA;
+
+    /* prepare a^0 in Montgomery domain */
+#if 1                           /* by Shay Gueron's suggestion */
+    if (m->d[top - 1] & (((BN_ULONG)1) << (BN_BITS2 - 1))) {
+        /* 2^(top*BN_BITS2) - m */
+        tmp.d[0] = (0 - m->d[0]) & BN_MASK2;
+        for (i = 1; i < top; i++)
+            tmp.d[i] = (~m->d[i]) & BN_MASK2;
+        tmp.top = top;
+    } else
+#endif
+    if (!BN_to_montgomery(&tmp, BN_value_one(), mont, ctx))
+        goto err;
+
+    /* prepare a^1 in Montgomery domain */
+    if (a->neg || BN_ucmp(a, m) >= 0) {
+        if (!BN_mod(&am, a, m, ctx))
+            goto err;
+        if (!BN_to_montgomery(&am, &am, mont, ctx))
+            goto err;
+    } else if (!BN_to_montgomery(&am, a, mont, ctx))
+        goto err;
+
+#if defined(SPARC_T4_MONT)
+    if (t4) {
+        typedef int (*bn_pwr5_mont_f) (BN_ULONG *tp, const BN_ULONG *np,
+                                       const BN_ULONG *n0, const void *table,
+                                       int power, int bits);
+        int bn_pwr5_mont_t4_8(BN_ULONG *tp, const BN_ULONG *np,
+                              const BN_ULONG *n0, const void *table,
+                              int power, int bits);
+        int bn_pwr5_mont_t4_16(BN_ULONG *tp, const BN_ULONG *np,
+                               const BN_ULONG *n0, const void *table,
+                               int power, int bits);
+        int bn_pwr5_mont_t4_24(BN_ULONG *tp, const BN_ULONG *np,
+                               const BN_ULONG *n0, const void *table,
+                               int power, int bits);
+        int bn_pwr5_mont_t4_32(BN_ULONG *tp, const BN_ULONG *np,
+                               const BN_ULONG *n0, const void *table,
+                               int power, int bits);
+        static const bn_pwr5_mont_f pwr5_funcs[4] = {
+            bn_pwr5_mont_t4_8, bn_pwr5_mont_t4_16,
+            bn_pwr5_mont_t4_24, bn_pwr5_mont_t4_32
+        };
+        bn_pwr5_mont_f pwr5_worker = pwr5_funcs[top / 16 - 1];
+
+        typedef int (*bn_mul_mont_f) (BN_ULONG *rp, const BN_ULONG *ap,
+                                      const void *bp, const BN_ULONG *np,
+                                      const BN_ULONG *n0);
+        int bn_mul_mont_t4_8(BN_ULONG *rp, const BN_ULONG *ap, const void *bp,
+                             const BN_ULONG *np, const BN_ULONG *n0);
+        int bn_mul_mont_t4_16(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0);
+        int bn_mul_mont_t4_24(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0);
+        int bn_mul_mont_t4_32(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0);
+        static const bn_mul_mont_f mul_funcs[4] = {
+            bn_mul_mont_t4_8, bn_mul_mont_t4_16,
+            bn_mul_mont_t4_24, bn_mul_mont_t4_32
+        };
+        bn_mul_mont_f mul_worker = mul_funcs[top / 16 - 1];
+
+        void bn_mul_mont_vis3(BN_ULONG *rp, const BN_ULONG *ap,
+                              const void *bp, const BN_ULONG *np,
+                              const BN_ULONG *n0, int num);
+        void bn_mul_mont_t4(BN_ULONG *rp, const BN_ULONG *ap,
+                            const void *bp, const BN_ULONG *np,
+                            const BN_ULONG *n0, int num);
+        void bn_mul_mont_gather5_t4(BN_ULONG *rp, const BN_ULONG *ap,
+                                    const void *table, const BN_ULONG *np,
+                                    const BN_ULONG *n0, int num, int power);
+        void bn_flip_n_scatter5_t4(const BN_ULONG *inp, size_t num,
+                                   void *table, size_t power);
+        void bn_gather5_t4(BN_ULONG *out, size_t num,
+                           void *table, size_t power);
+        void bn_flip_t4(BN_ULONG *dst, BN_ULONG *src, size_t num);
+
+        BN_ULONG *np = mont->N.d, *n0 = mont->n0;
+        int stride = 5 * (6 - (top / 16 - 1)); /* multiple of 5, but less
+                                                * than 32 */
+
+        /*
+         * BN_to_montgomery can contaminate words above .top [in
+         * BN_DEBUG[_DEBUG] build]...
+         */
+        for (i = am.top; i < top; i++)
+            am.d[i] = 0;
+        for (i = tmp.top; i < top; i++)
+            tmp.d[i] = 0;
+
+        bn_flip_n_scatter5_t4(tmp.d, top, powerbuf, 0);
+        bn_flip_n_scatter5_t4(am.d, top, powerbuf, 1);
+        if (!(*mul_worker) (tmp.d, am.d, am.d, np, n0) &&
+            !(*mul_worker) (tmp.d, am.d, am.d, np, n0))
+            bn_mul_mont_vis3(tmp.d, am.d, am.d, np, n0, top);
+        bn_flip_n_scatter5_t4(tmp.d, top, powerbuf, 2);
+
+        for (i = 3; i < 32; i++) {
+            /* Calculate a^i = a^(i-1) * a */
+            if (!(*mul_worker) (tmp.d, tmp.d, am.d, np, n0) &&
+                !(*mul_worker) (tmp.d, tmp.d, am.d, np, n0))
+                bn_mul_mont_vis3(tmp.d, tmp.d, am.d, np, n0, top);
+            bn_flip_n_scatter5_t4(tmp.d, top, powerbuf, i);
+        }
+
+        /* switch to 64-bit domain */
+        np = alloca(top * sizeof(BN_ULONG));
+        top /= 2;
+        bn_flip_t4(np, mont->N.d, top);
+
+        bits--;
+        for (wvalue = 0, i = bits % 5; i >= 0; i--, bits--)
+            wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+        bn_gather5_t4(tmp.d, top, powerbuf, wvalue);
+
+        /*
+         * Scan the exponent one window at a time starting from the most
+         * significant bits.
+         */
+        while (bits >= 0) {
+            if (bits < stride)
+                stride = bits + 1;
+            bits -= stride;
+            wvalue = bn_get_bits(p, bits + 1);
+
+            if ((*pwr5_worker) (tmp.d, np, n0, powerbuf, wvalue, stride))
+                continue;
+            /* retry once and fall back */
+            if ((*pwr5_worker) (tmp.d, np, n0, powerbuf, wvalue, stride))
+                continue;
+
+            bits += stride - 5;
+            wvalue >>= stride - 5;
+            wvalue &= 31;
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_t4(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_mul_mont_gather5_t4(tmp.d, tmp.d, powerbuf, np, n0, top,
+                                   wvalue);
+        }
+
+        bn_flip_t4(tmp.d, tmp.d, top);
+        top *= 2;
+        /* back to 32-bit domain */
+        tmp.top = top;
+        bn_correct_top(&tmp);
+        OPENSSL_cleanse(np, top * sizeof(BN_ULONG));
+    } else
+#endif
+#if defined(OPENSSL_BN_ASM_MONT5)
+    if (window == 5 && top > 1) {
+        /*
+         * This optimization uses ideas from http://eprint.iacr.org/2011/239,
+         * specifically optimization of cache-timing attack countermeasures
+         * and pre-computation optimization.
+         */
+
+        /*
+         * Dedicated window==4 case improves 512-bit RSA sign by ~15%, but as
+         * 512-bit RSA is hardly relevant, we omit it to spare size...
+         */
+        void bn_mul_mont_gather5(BN_ULONG *rp, const BN_ULONG *ap,
+                                 const void *table, const BN_ULONG *np,
+                                 const BN_ULONG *n0, int num, int power);
+        void bn_scatter5(const BN_ULONG *inp, size_t num,
+                         void *table, size_t power);
+        void bn_gather5(BN_ULONG *out, size_t num, void *table, size_t power);
+        void bn_power5(BN_ULONG *rp, const BN_ULONG *ap,
+                       const void *table, const BN_ULONG *np,
+                       const BN_ULONG *n0, int num, int power);
+        int bn_get_bits5(const BN_ULONG *ap, int off);
+        int bn_from_montgomery(BN_ULONG *rp, const BN_ULONG *ap,
+                               const BN_ULONG *not_used, const BN_ULONG *np,
+                               const BN_ULONG *n0, int num);
+
+        BN_ULONG *n0 = mont->n0, *np;
+
+        /*
+         * BN_to_montgomery can contaminate words above .top [in
+         * BN_DEBUG[_DEBUG] build]...
+         */
+        for (i = am.top; i < top; i++)
+            am.d[i] = 0;
+        for (i = tmp.top; i < top; i++)
+            tmp.d[i] = 0;
+
+        /*
+         * copy mont->N.d[] to improve cache locality
+         */
+        for (np = am.d + top, i = 0; i < top; i++)
+            np[i] = mont->N.d[i];
+
+        bn_scatter5(tmp.d, top, powerbuf, 0);
+        bn_scatter5(am.d, am.top, powerbuf, 1);
+        bn_mul_mont(tmp.d, am.d, am.d, np, n0, top);
+        bn_scatter5(tmp.d, top, powerbuf, 2);
+
+# if 0
+        for (i = 3; i < 32; i++) {
+            /* Calculate a^i = a^(i-1) * a */
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+        }
+# else
+        /* same as above, but uses squaring for 1/2 of operations */
+        for (i = 4; i < 32; i *= 2) {
+            bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+        }
+        for (i = 3; i < 8; i += 2) {
+            int j;
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+            for (j = 2 * i; j < 32; j *= 2) {
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_scatter5(tmp.d, top, powerbuf, j);
+            }
+        }
+        for (; i < 16; i += 2) {
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+            bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+            bn_scatter5(tmp.d, top, powerbuf, 2 * i);
+        }
+        for (; i < 32; i += 2) {
+            bn_mul_mont_gather5(tmp.d, am.d, powerbuf, np, n0, top, i - 1);
+            bn_scatter5(tmp.d, top, powerbuf, i);
+        }
+# endif
+        bits--;
+        for (wvalue = 0, i = bits % 5; i >= 0; i--, bits--)
+            wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+        bn_gather5(tmp.d, top, powerbuf, wvalue);
+
+        /*
+         * Scan the exponent one window at a time starting from the most
+         * significant bits.
+         */
+        if (top & 7)
+            while (bits >= 0) {
+                for (wvalue = 0, i = 0; i < 5; i++, bits--)
+                    wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont(tmp.d, tmp.d, tmp.d, np, n0, top);
+                bn_mul_mont_gather5(tmp.d, tmp.d, powerbuf, np, n0, top,
+                                    wvalue);
+        } else {
+            while (bits >= 0) {
+                wvalue = bn_get_bits5(p->d, bits - 4);
+                bits -= 5;
+                bn_power5(tmp.d, tmp.d, powerbuf, np, n0, top, wvalue);
+            }
+        }
+
+        ret = bn_from_montgomery(tmp.d, tmp.d, NULL, np, n0, top);
+        tmp.top = top;
+        bn_correct_top(&tmp);
+        if (ret) {
+            if (!BN_copy(rr, &tmp))
+                ret = 0;
+            goto err;           /* non-zero ret means it's not error */
+        }
+    } else
+#endif
+    {
+        if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&tmp, top, powerbuf, 0, window))
+            goto err;
+        if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&am, top, powerbuf, 1, window))
+            goto err;
+
+        /*
+         * If the window size is greater than 1, then calculate
+         * val[i=2..2^winsize-1]. Powers are computed as a*a^(i-1) (even
+         * powers could instead be computed as (a^(i/2))^2 to use the slight
+         * performance advantage of sqr over mul).
+         */
+        if (window > 1) {
+            if (!BN_mod_mul_montgomery(&tmp, &am, &am, mont, ctx))
+                goto err;
+            if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&tmp, top, powerbuf, 2,
+                                              window))
+                goto err;
+            for (i = 3; i < numPowers; i++) {
+                /* Calculate a^i = a^(i-1) * a */
+                if (!BN_mod_mul_montgomery(&tmp, &am, &tmp, mont, ctx))
+                    goto err;
+                if (!MOD_EXP_CTIME_COPY_TO_PREBUF(&tmp, top, powerbuf, i,
+                                                  window))
+                    goto err;
+            }
+        }
+
+        bits--;
+        for (wvalue = 0, i = bits % window; i >= 0; i--, bits--)
+            wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+        if (!MOD_EXP_CTIME_COPY_FROM_PREBUF(&tmp, top, powerbuf, wvalue,
+                                            window))
+            goto err;
+
+        /*
+         * Scan the exponent one window at a time starting from the most
+         * significant bits.
+         */
+        while (bits >= 0) {
+            wvalue = 0;         /* The 'value' of the window */
+
+            /* Scan the window, squaring the result as we go */
+            for (i = 0; i < window; i++, bits--) {
+                if (!BN_mod_mul_montgomery(&tmp, &tmp, &tmp, mont, ctx))
+                    goto err;
+                wvalue = (wvalue << 1) + BN_is_bit_set(p, bits);
+            }
+
+            /*
+             * Fetch the appropriate pre-computed value from the pre-buf
+             */
+            if (!MOD_EXP_CTIME_COPY_FROM_PREBUF(&am, top, powerbuf, wvalue,
+                                                window))
+                goto err;
+
+            /* Multiply the result into the intermediate result */
+            if (!BN_mod_mul_montgomery(&tmp, &tmp, &am, mont, ctx))
+                goto err;
+        }
+    }
+
+    /* Convert the final result from montgomery to standard format */
+#if defined(SPARC_T4_MONT)
+    if (OPENSSL_sparcv9cap_P[0] & (SPARCV9_VIS3 | SPARCV9_PREFER_FPU)) {
+        am.d[0] = 1;            /* borrow am */
+        for (i = 1; i < top; i++)
+            am.d[i] = 0;
+        if (!BN_mod_mul_montgomery(rr, &tmp, &am, mont, ctx))
+            goto err;
+    } else
+#endif
+    if (!BN_from_montgomery(rr, &tmp, mont, ctx))
+        goto err;
+    ret = 1;
+ err:
+    if (in_mont == NULL)
+        BN_MONT_CTX_free(mont);
+    if (powerbuf != NULL) {
+        OPENSSL_cleanse(powerbuf, powerbufLen);
+        OPENSSL_free(powerbufFree);
+    }
+    BN_CTX_end(ctx);
+    return (ret);
+}",

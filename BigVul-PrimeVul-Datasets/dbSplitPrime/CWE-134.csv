@@ -1,0 +1,103 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix,idx,primevul_func_before_fix,primevul_func_after_fix
+180703,180703,,Remote,Not required,Complete,CVE-2015-8617,https://www.cvedetails.com/cve/CVE-2015-8617/,CWE-134,Low,Complete,Complete,,2016-01-19,10.0,"Format string vulnerability in the zend_throw_or_error function in Zend/zend_execute_API.c in PHP 7.x before 7.0.1 allows remote attackers to execute arbitrary code via format string specifiers in a string that is misused as a class name, leading to incorrect error handling.",2017-09-09,Exec Code ,1,https://github.com/php/php-src/commit/b101a6bbd4f2181c360bd38e7683df4a03cba83e,b101a6bbd4f2181c360bd38e7683df4a03cba83e,Use format string,1,Zend/zend_execute_API.c,"{""sha"": ""fdffed34b275775084eeaf943a12c992edac2e0c"", ""filename"": ""Zend/zend_execute_API.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/php/php-src/blob/b101a6bbd4f2181c360bd38e7683df4a03cba83e/Zend/zend_execute_API.c"", ""raw_url"": ""https://github.com/php/php-src/raw/b101a6bbd4f2181c360bd38e7683df4a03cba83e/Zend/zend_execute_API.c"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/Zend/zend_execute_API.c?ref=b101a6bbd4f2181c360bd38e7683df4a03cba83e"", ""patch"": ""@@ -218,7 +218,7 @@ static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce,\n \tzend_vspprintf(&message, 0, format, va);\n \n \tif (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {\n-\t\tzend_throw_error(exception_ce, message);\n+\t\tzend_throw_error(exception_ce, \""%s\"", message);\n \t} else {\n \t\tzend_error(E_ERROR, \""%s\"", message);\n \t}""}","static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+","static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+",C,"		zend_throw_error(exception_ce, ""%s"", message);
+","		zend_throw_error(exception_ce, message);
+",,"@@ -218,7 +218,7 @@ static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce,
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+-		zend_throw_error(exception_ce, message);
++		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}",php-src,b101a6bbd4f2181c360bd38e7683df4a03cba83e,e0691d27d5b83122c78b9a3c4e2cd0aadf57fcb7,1,"static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+//flaw_line_below:
+		zend_throw_error(exception_ce, message);
+//fix_flaw_line_below:
+//		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+",180703,"static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+	zend_vspprintf(&message, 0, format, va);
+
+	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, message);
+	} else {
+		zend_error(E_ERROR, ""%s"", message);
+	}
+
+	efree(message);
+	va_end(va);
+}","static void zend_throw_or_error(int fetch_type, zend_class_entry *exception_ce, const char *format, ...) /* {{{ */
+{
+	va_list va;
+	char *message = NULL;
+
+	va_start(va, format);
+ 	zend_vspprintf(&message, 0, format, va);
+ 
+ 	if (fetch_type & ZEND_FETCH_CLASS_EXCEPTION) {
+		zend_throw_error(exception_ce, ""%s"", message);
+ 	} else {
+ 		zend_error(E_ERROR, ""%s"", message);
+ 	}
+
+	efree(message);
+	va_end(va);
+}
+/* }}} */
+"

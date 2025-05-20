@@ -1,0 +1,573 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+3625,181361,,Local,Not required,,CVE-2017-8924,https://www.cvedetails.com/cve/CVE-2017-8924/,CWE-191,Low,Partial,,,2017-05-12,2.1,The edge_bulk_in_callback function in drivers/usb/serial/io_ti.c in the Linux kernel before 4.10.4 allows local users to obtain sensitive information (in the dmesg ringbuffer and syslog) from uninitialized kernel memory by using a crafted USB device (posing as an io_ti USB serial device) to trigger an integer underflow.,2019-04-16,+Info ,1,https://github.com/torvalds/linux/commit/654b404f2a222f918af9b0cd18ad469d0c941a8e,654b404f2a222f918af9b0cd18ad469d0c941a8e,"USB: serial: io_ti: fix information leak in completion handler
+
+Add missing sanity check to the bulk-in completion handler to avoid an
+integer underflow that can be triggered by a malicious device.
+
+This avoids leaking 128 kB of memory content from after the URB transfer
+buffer to user space.
+
+Fixes: 8c209e6782ca (""USB: make actual_length in struct urb field u32"")
+Fixes: 1da177e4c3f4 (""Linux-2.6.12-rc2"")
+Cc: stable <stable@vger.kernel.org>	# 2.6.30
+Signed-off-by: Johan Hovold <johan@kernel.org>",1,drivers/usb/serial/io_ti.c,"{""sha"": ""a76b95d32157871f5e2964b629784a7642da8480"", ""filename"": ""drivers/usb/serial/io_ti.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/torvalds/linux/blob/654b404f2a222f918af9b0cd18ad469d0c941a8e/drivers/usb/serial/io_ti.c"", ""raw_url"": ""https://github.com/torvalds/linux/raw/654b404f2a222f918af9b0cd18ad469d0c941a8e/drivers/usb/serial/io_ti.c"", ""contents_url"": ""https://api.github.com/repos/torvalds/linux/contents/drivers/usb/serial/io_ti.c?ref=654b404f2a222f918af9b0cd18ad469d0c941a8e"", ""patch"": ""@@ -1761,7 +1761,7 @@ static void edge_bulk_in_callback(struct urb *urb)\n \n \tport_number = edge_port->port->port_number;\n \n-\tif (edge_port->lsr_event) {\n+\tif (urb->actual_length > 0 && edge_port->lsr_event) {\n \t\tedge_port->lsr_event = 0;\n \t\tdev_dbg(dev, \""%s ===== Port %u LSR Status = %02x, Data = %02x ======\\n\"",\n \t\t\t__func__, port_number, edge_port->lsr_mask, *data);""}","static void edge_bulk_in_callback(struct urb *urb)
+{
+	struct edgeport_port *edge_port = urb->context;
+	struct device *dev = &edge_port->port->dev;
+	unsigned char *data = urb->transfer_buffer;
+	int retval = 0;
+	int port_number;
+	int status = urb->status;
+
+	switch (status) {
+	case 0:
+		/* success */
+		break;
+	case -ECONNRESET:
+	case -ENOENT:
+	case -ESHUTDOWN:
+		/* this urb is terminated, clean up */
+		dev_dbg(&urb->dev->dev, ""%s - urb shutting down with status: %d\n"", __func__, status);
+		return;
+	default:
+		dev_err(&urb->dev->dev, ""%s - nonzero read bulk status received: %d\n"", __func__, status);
+	}
+
+	if (status == -EPIPE)
+		goto exit;
+
+	if (status) {
+		dev_err(&urb->dev->dev, ""%s - stopping read!\n"", __func__);
+		return;
+	}
+ 
+ 	port_number = edge_port->port->port_number;
+ 
+	if (urb->actual_length > 0 && edge_port->lsr_event) {
+ 		edge_port->lsr_event = 0;
+ 		dev_dbg(dev, ""%s ===== Port %u LSR Status = %02x, Data = %02x ======\n"",
+ 			__func__, port_number, edge_port->lsr_mask, *data);
+		handle_new_lsr(edge_port, 1, edge_port->lsr_mask, *data);
+		/* Adjust buffer length/pointer */
+		--urb->actual_length;
+		++data;
+	}
+
+	if (urb->actual_length) {
+		usb_serial_debug_data(dev, __func__, urb->actual_length, data);
+		if (edge_port->close_pending)
+			dev_dbg(dev, ""%s - close pending, dropping data on the floor\n"",
+								__func__);
+		else
+			edge_tty_recv(edge_port->port, data,
+					urb->actual_length);
+		edge_port->port->icount.rx += urb->actual_length;
+	}
+
+exit:
+	/* continue read unless stopped */
+	spin_lock(&edge_port->ep_lock);
+	if (edge_port->ep_read_urb_state == EDGE_READ_URB_RUNNING)
+		retval = usb_submit_urb(urb, GFP_ATOMIC);
+	else if (edge_port->ep_read_urb_state == EDGE_READ_URB_STOPPING)
+		edge_port->ep_read_urb_state = EDGE_READ_URB_STOPPED;
+
+	spin_unlock(&edge_port->ep_lock);
+	if (retval)
+		dev_err(dev, ""%s - usb_submit_urb failed with result %d\n"", __func__, retval);
+}
+","static void edge_bulk_in_callback(struct urb *urb)
+{
+	struct edgeport_port *edge_port = urb->context;
+	struct device *dev = &edge_port->port->dev;
+	unsigned char *data = urb->transfer_buffer;
+	int retval = 0;
+	int port_number;
+	int status = urb->status;
+
+	switch (status) {
+	case 0:
+		/* success */
+		break;
+	case -ECONNRESET:
+	case -ENOENT:
+	case -ESHUTDOWN:
+		/* this urb is terminated, clean up */
+		dev_dbg(&urb->dev->dev, ""%s - urb shutting down with status: %d\n"", __func__, status);
+		return;
+	default:
+		dev_err(&urb->dev->dev, ""%s - nonzero read bulk status received: %d\n"", __func__, status);
+	}
+
+	if (status == -EPIPE)
+		goto exit;
+
+	if (status) {
+		dev_err(&urb->dev->dev, ""%s - stopping read!\n"", __func__);
+		return;
+	}
+ 
+ 	port_number = edge_port->port->port_number;
+ 
+	if (edge_port->lsr_event) {
+ 		edge_port->lsr_event = 0;
+ 		dev_dbg(dev, ""%s ===== Port %u LSR Status = %02x, Data = %02x ======\n"",
+ 			__func__, port_number, edge_port->lsr_mask, *data);
+		handle_new_lsr(edge_port, 1, edge_port->lsr_mask, *data);
+		/* Adjust buffer length/pointer */
+		--urb->actual_length;
+		++data;
+	}
+
+	if (urb->actual_length) {
+		usb_serial_debug_data(dev, __func__, urb->actual_length, data);
+		if (edge_port->close_pending)
+			dev_dbg(dev, ""%s - close pending, dropping data on the floor\n"",
+								__func__);
+		else
+			edge_tty_recv(edge_port->port, data,
+					urb->actual_length);
+		edge_port->port->icount.rx += urb->actual_length;
+	}
+
+exit:
+	/* continue read unless stopped */
+	spin_lock(&edge_port->ep_lock);
+	if (edge_port->ep_read_urb_state == EDGE_READ_URB_RUNNING)
+		retval = usb_submit_urb(urb, GFP_ATOMIC);
+	else if (edge_port->ep_read_urb_state == EDGE_READ_URB_STOPPING)
+		edge_port->ep_read_urb_state = EDGE_READ_URB_STOPPED;
+
+	spin_unlock(&edge_port->ep_lock);
+	if (retval)
+		dev_err(dev, ""%s - usb_submit_urb failed with result %d\n"", __func__, retval);
+}
+",C,"	if (urb->actual_length > 0 && edge_port->lsr_event) {
+","	if (edge_port->lsr_event) {
+",,"@@ -1761,7 +1761,7 @@ static void edge_bulk_in_callback(struct urb *urb)
+ 
+ 	port_number = edge_port->port->port_number;
+ 
+-	if (edge_port->lsr_event) {
++	if (urb->actual_length > 0 && edge_port->lsr_event) {
+ 		edge_port->lsr_event = 0;
+ 		dev_dbg(dev, ""%s ===== Port %u LSR Status = %02x, Data = %02x ======\n"",
+ 			__func__, port_number, edge_port->lsr_mask, *data);",linux,654b404f2a222f918af9b0cd18ad469d0c941a8e,367ec1706745912702c187722065285cd4d2aee7,1,"static void edge_bulk_in_callback(struct urb *urb)
+{
+	struct edgeport_port *edge_port = urb->context;
+	struct device *dev = &edge_port->port->dev;
+	unsigned char *data = urb->transfer_buffer;
+	int retval = 0;
+	int port_number;
+	int status = urb->status;
+
+	switch (status) {
+	case 0:
+		/* success */
+		break;
+	case -ECONNRESET:
+	case -ENOENT:
+	case -ESHUTDOWN:
+		/* this urb is terminated, clean up */
+		dev_dbg(&urb->dev->dev, ""%s - urb shutting down with status: %d\n"", __func__, status);
+		return;
+	default:
+		dev_err(&urb->dev->dev, ""%s - nonzero read bulk status received: %d\n"", __func__, status);
+	}
+
+	if (status == -EPIPE)
+		goto exit;
+
+	if (status) {
+		dev_err(&urb->dev->dev, ""%s - stopping read!\n"", __func__);
+		return;
+	}
+ 
+ 	port_number = edge_port->port->port_number;
+ 
+//flaw_line_below:
+	if (edge_port->lsr_event) {
+//fix_flaw_line_below:
+//	if (urb->actual_length > 0 && edge_port->lsr_event) {
+ 		edge_port->lsr_event = 0;
+ 		dev_dbg(dev, ""%s ===== Port %u LSR Status = %02x, Data = %02x ======\n"",
+ 			__func__, port_number, edge_port->lsr_mask, *data);
+		handle_new_lsr(edge_port, 1, edge_port->lsr_mask, *data);
+		/* Adjust buffer length/pointer */
+		--urb->actual_length;
+		++data;
+	}
+
+	if (urb->actual_length) {
+		usb_serial_debug_data(dev, __func__, urb->actual_length, data);
+		if (edge_port->close_pending)
+			dev_dbg(dev, ""%s - close pending, dropping data on the floor\n"",
+								__func__);
+		else
+			edge_tty_recv(edge_port->port, data,
+					urb->actual_length);
+		edge_port->port->icount.rx += urb->actual_length;
+	}
+
+exit:
+	/* continue read unless stopped */
+	spin_lock(&edge_port->ep_lock);
+	if (edge_port->ep_read_urb_state == EDGE_READ_URB_RUNNING)
+		retval = usb_submit_urb(urb, GFP_ATOMIC);
+	else if (edge_port->ep_read_urb_state == EDGE_READ_URB_STOPPING)
+		edge_port->ep_read_urb_state = EDGE_READ_URB_STOPPED;
+
+	spin_unlock(&edge_port->ep_lock);
+	if (retval)
+		dev_err(dev, ""%s - usb_submit_urb failed with result %d\n"", __func__, retval);
+}
+"
+3903,181639,,Remote,Not required,Partial,CVE-2016-10268,https://www.cvedetails.com/cve/CVE-2016-10268/,CWE-191,Medium,Partial,Partial,,2017-03-24,6.8,"tools/tiffcp.c in LibTIFF 4.0.7 allows remote attackers to cause a denial of service (integer underflow and heap-based buffer under-read) or possibly have unspecified other impact via a crafted TIFF image, related to *READ of size 78490* and libtiff/tif_unix.c:115:23.",2018-03-21,DoS ,1,https://github.com/vadz/libtiff/commit/5397a417e61258c69209904e652a1f409ec3b9df,5397a417e61258c69209904e652a1f409ec3b9df,"* tools/tiffcp.c: avoid uint32 underflow in cpDecodedStrips that
+can cause various issues, such as buffer overflows in the library.
+Reported by Agostino Sarubbo.
+Fixes http://bugzilla.maptools.org/show_bug.cgi?id=2598",1,tools/tiffcp.c,"{""sha"": ""0f154d66245de17fb6b67bff5f307864de9c8fec"", ""filename"": ""ChangeLog"", ""status"": ""modified"", ""additions"": 7, ""deletions"": 0, ""changes"": 7, ""blob_url"": ""https://github.com/vadz/libtiff/blob/5397a417e61258c69209904e652a1f409ec3b9df/ChangeLog"", ""raw_url"": ""https://github.com/vadz/libtiff/raw/5397a417e61258c69209904e652a1f409ec3b9df/ChangeLog"", ""contents_url"": ""https://api.github.com/repos/vadz/libtiff/contents/ChangeLog?ref=5397a417e61258c69209904e652a1f409ec3b9df"", ""patch"": ""@@ -1,3 +1,10 @@\n+2016-12-02 Even Rouault <even.rouault at spatialys.com>\n+\n+\t* tools/tiffcp.c: avoid uint32 underflow in cpDecodedStrips that \n+\tcan cause various issues, such as buffer overflows in the library.\n+\tReported by Agostino Sarubbo.\n+\tFixes http://bugzilla.maptools.org/show_bug.cgi?id=2598\n+\n 2016-12-02 Even Rouault <even.rouault at spatialys.com>\n \n \t* libtiff/tif_read.c, libtiff/tiffiop.h: fix uint32 overflow in""}<_**next**_>{""sha"": ""f294ed104e8ce93404ecca28ed437615630c4258"", ""filename"": ""tools/tiffcp.c"", ""status"": ""modified"", ""additions"": 1, ""deletions"": 1, ""changes"": 2, ""blob_url"": ""https://github.com/vadz/libtiff/blob/5397a417e61258c69209904e652a1f409ec3b9df/tools/tiffcp.c"", ""raw_url"": ""https://github.com/vadz/libtiff/raw/5397a417e61258c69209904e652a1f409ec3b9df/tools/tiffcp.c"", ""contents_url"": ""https://api.github.com/repos/vadz/libtiff/contents/tools/tiffcp.c?ref=5397a417e61258c69209904e652a1f409ec3b9df"", ""patch"": ""@@ -985,7 +985,7 @@ DECLAREcpFunc(cpDecodedStrips)\n \t\ttstrip_t s, ns = TIFFNumberOfStrips(in);\n \t\tuint32 row = 0;\n \t\t_TIFFmemset(buf, 0, stripsize);\n-\t\tfor (s = 0; s < ns; s++) {\n+\t\tfor (s = 0; s < ns && row < imagelength; s++) {\n \t\t\ttsize_t cc = (row + rowsperstrip > imagelength) ?\n \t\t\t    TIFFVStripSize(in, imagelength - row) : stripsize;\n \t\t\tif (TIFFReadEncodedStrip(in, s, buf, cc) < 0""}","DECLAREcpFunc(cpDecodedStrips)
+{
+	tsize_t stripsize  = TIFFStripSize(in);
+	tdata_t buf = _TIFFmalloc(stripsize);
+
+	(void) imagewidth; (void) spp;
+	if (buf) {
+ 		tstrip_t s, ns = TIFFNumberOfStrips(in);
+ 		uint32 row = 0;
+ 		_TIFFmemset(buf, 0, stripsize);
+		for (s = 0; s < ns && row < imagelength; s++) {
+ 			tsize_t cc = (row + rowsperstrip > imagelength) ?
+ 			    TIFFVStripSize(in, imagelength - row) : stripsize;
+ 			if (TIFFReadEncodedStrip(in, s, buf, cc) < 0
+			    && !ignore) {
+				TIFFError(TIFFFileName(in),
+				    ""Error, can't read strip %lu"",
+				    (unsigned long) s);
+				goto bad;
+			}
+			if (TIFFWriteEncodedStrip(out, s, buf, cc) < 0) {
+				TIFFError(TIFFFileName(out),
+				    ""Error, can't write strip %lu"",
+				    (unsigned long) s);
+				goto bad;
+			}
+			row += rowsperstrip;
+		}
+		_TIFFfree(buf);
+		return 1;
+	} else {
+		TIFFError(TIFFFileName(in),
+		    ""Error, can't allocate memory buffer of size %lu ""
+		    ""to read strips"", (unsigned long) stripsize);
+		return 0;
+	}
+
+bad:
+	_TIFFfree(buf);
+	return 0;
+}
+","DECLAREcpFunc(cpDecodedStrips)
+{
+	tsize_t stripsize  = TIFFStripSize(in);
+	tdata_t buf = _TIFFmalloc(stripsize);
+
+	(void) imagewidth; (void) spp;
+	if (buf) {
+ 		tstrip_t s, ns = TIFFNumberOfStrips(in);
+ 		uint32 row = 0;
+ 		_TIFFmemset(buf, 0, stripsize);
+		for (s = 0; s < ns; s++) {
+ 			tsize_t cc = (row + rowsperstrip > imagelength) ?
+ 			    TIFFVStripSize(in, imagelength - row) : stripsize;
+ 			if (TIFFReadEncodedStrip(in, s, buf, cc) < 0
+			    && !ignore) {
+				TIFFError(TIFFFileName(in),
+				    ""Error, can't read strip %lu"",
+				    (unsigned long) s);
+				goto bad;
+			}
+			if (TIFFWriteEncodedStrip(out, s, buf, cc) < 0) {
+				TIFFError(TIFFFileName(out),
+				    ""Error, can't write strip %lu"",
+				    (unsigned long) s);
+				goto bad;
+			}
+			row += rowsperstrip;
+		}
+		_TIFFfree(buf);
+		return 1;
+	} else {
+		TIFFError(TIFFFileName(in),
+		    ""Error, can't allocate memory buffer of size %lu ""
+		    ""to read strips"", (unsigned long) stripsize);
+		return 0;
+	}
+
+bad:
+	_TIFFfree(buf);
+	return 0;
+}
+",C,"		for (s = 0; s < ns && row < imagelength; s++) {
+","		for (s = 0; s < ns; s++) {
+",,"@@ -985,7 +985,7 @@ DECLAREcpFunc(cpDecodedStrips)
+ 		tstrip_t s, ns = TIFFNumberOfStrips(in);
+ 		uint32 row = 0;
+ 		_TIFFmemset(buf, 0, stripsize);
+-		for (s = 0; s < ns; s++) {
++		for (s = 0; s < ns && row < imagelength; s++) {
+ 			tsize_t cc = (row + rowsperstrip > imagelength) ?
+ 			    TIFFVStripSize(in, imagelength - row) : stripsize;
+ 			if (TIFFReadEncodedStrip(in, s, buf, cc) < 0",libtiff,5397a417e61258c69209904e652a1f409ec3b9df,438274f938e046d33cb0e1230b41da32ffe223e1,1,"DECLAREcpFunc(cpDecodedStrips)
+{
+	tsize_t stripsize  = TIFFStripSize(in);
+	tdata_t buf = _TIFFmalloc(stripsize);
+
+	(void) imagewidth; (void) spp;
+	if (buf) {
+ 		tstrip_t s, ns = TIFFNumberOfStrips(in);
+ 		uint32 row = 0;
+ 		_TIFFmemset(buf, 0, stripsize);
+//flaw_line_below:
+		for (s = 0; s < ns; s++) {
+//fix_flaw_line_below:
+//		for (s = 0; s < ns && row < imagelength; s++) {
+ 			tsize_t cc = (row + rowsperstrip > imagelength) ?
+ 			    TIFFVStripSize(in, imagelength - row) : stripsize;
+ 			if (TIFFReadEncodedStrip(in, s, buf, cc) < 0
+			    && !ignore) {
+				TIFFError(TIFFFileName(in),
+				    ""Error, can't read strip %lu"",
+				    (unsigned long) s);
+				goto bad;
+			}
+			if (TIFFWriteEncodedStrip(out, s, buf, cc) < 0) {
+				TIFFError(TIFFFileName(out),
+				    ""Error, can't write strip %lu"",
+				    (unsigned long) s);
+				goto bad;
+			}
+			row += rowsperstrip;
+		}
+		_TIFFfree(buf);
+		return 1;
+	} else {
+		TIFFError(TIFFFileName(in),
+		    ""Error, can't allocate memory buffer of size %lu ""
+		    ""to read strips"", (unsigned long) stripsize);
+		return 0;
+	}
+
+bad:
+	_TIFFfree(buf);
+	return 0;
+}
+"
+3947,181683,,Remote,Not required,Partial,CVE-2016-10166,https://www.cvedetails.com/cve/CVE-2016-10166/,CWE-191,Low,Partial,Partial,,2017-03-15,7.5,Integer underflow in the _gdContributionsAlloc function in gd_interpolation.c in the GD Graphics Library (aka libgd) before 2.2.4 allows remote attackers to have unspecified impact via vectors related to decrementing the u variable.,2017-11-03,,10,https://github.com/libgd/libgd/commit/60bfb401ad5a4a8ae995dcd36372fe15c71e1a35,60bfb401ad5a4a8ae995dcd36372fe15c71e1a35,"Fix potential unsigned underflow
+
+No need to decrease `u`, so we don't do it. While we're at it, we also factor
+out the overflow check of the loop, what improves performance and readability.
+
+This issue has been reported by Stefan Esser to security@libgd.org.",9,src/gd_interpolation.c,"{""sha"": ""b9a206551dc5366a2eb4b53d22b429c9893b5236"", ""filename"": ""src/gd_interpolation.c"", ""status"": ""modified"", ""additions"": 10, ""deletions"": 9, ""changes"": 19, ""blob_url"": ""https://github.com/libgd/libgd/blob/60bfb401ad5a4a8ae995dcd36372fe15c71e1a35/src/gd_interpolation.c"", ""raw_url"": ""https://github.com/libgd/libgd/raw/60bfb401ad5a4a8ae995dcd36372fe15c71e1a35/src/gd_interpolation.c"", ""contents_url"": ""https://api.github.com/repos/libgd/libgd/contents/src/gd_interpolation.c?ref=60bfb401ad5a4a8ae995dcd36372fe15c71e1a35"", ""patch"": ""@@ -829,8 +829,13 @@ static inline LineContribType * _gdContributionsAlloc(unsigned int line_length,\n {\n \tunsigned int u = 0;\n \tLineContribType *res;\n-\tint overflow_error = 0;\n+\tsize_t weights_size;\n \n+\tif (overflow2(windows_size, sizeof(double))) {\n+\t\treturn NULL;\n+\t} else {\n+\t\tweights_size = windows_size * sizeof(double);\n+\t}\n \tres = (LineContribType *) gdMalloc(sizeof(LineContribType));\n \tif (!res) {\n \t\treturn NULL;\n@@ -847,15 +852,11 @@ static inline LineContribType * _gdContributionsAlloc(unsigned int line_length,\n \t\treturn NULL;\n \t}\n \tfor (u = 0 ; u < line_length ; u++) {\n-\t\tif (overflow2(windows_size, sizeof(double))) {\n-\t\t\toverflow_error = 1;\n-\t\t} else {\n-\t\t\tres->ContribRow[u].Weights = (double *) gdMalloc(windows_size * sizeof(double));\n-\t\t}\n-\t\tif (overflow_error == 1 || res->ContribRow[u].Weights == NULL) {\n+\t\tres->ContribRow[u].Weights = (double *) gdMalloc(weights_size);\n+\t\tif (res->ContribRow[u].Weights == NULL) {\n \t\t\tunsigned int i;\n-\t\t\tu--;\n-\t\t\tfor (i=0;i<=u;i++) {\n+\n+\t\t\tfor (i=0;i<u;i++) {\n \t\t\t\tgdFree(res->ContribRow[i].Weights);\n \t\t\t}\n \t\t\tgdFree(res->ContribRow);""}","static inline LineContribType * _gdContributionsAlloc(unsigned int line_length, unsigned int windows_size)
+ {
+ 	unsigned int u = 0;
+ 	LineContribType *res;
+	size_t weights_size;
+ 
+	if (overflow2(windows_size, sizeof(double))) {
+		return NULL;
+	} else {
+		weights_size = windows_size * sizeof(double);
+	}
+ 	res = (LineContribType *) gdMalloc(sizeof(LineContribType));
+ 	if (!res) {
+ 		return NULL;
+	}
+	res->WindowSize = windows_size;
+	res->LineLength = line_length;
+	if (overflow2(line_length, sizeof(ContributionType))) {
+		gdFree(res);
+		return NULL;
+	}
+	res->ContribRow = (ContributionType *) gdMalloc(line_length * sizeof(ContributionType));
+	if (res->ContribRow == NULL) {
+		gdFree(res);
+ 		return NULL;
+ 	}
+ 	for (u = 0 ; u < line_length ; u++) {
+		res->ContribRow[u].Weights = (double *) gdMalloc(weights_size);
+		if (res->ContribRow[u].Weights == NULL) {
+ 			unsigned int i;
+
+			for (i=0;i<u;i++) {
+ 				gdFree(res->ContribRow[i].Weights);
+ 			}
+ 			gdFree(res->ContribRow);
+			gdFree(res);
+			return NULL;
+		}
+	}
+	return res;
+}
+","static inline LineContribType * _gdContributionsAlloc(unsigned int line_length, unsigned int windows_size)
+ {
+ 	unsigned int u = 0;
+ 	LineContribType *res;
+	int overflow_error = 0;
+ 
+ 	res = (LineContribType *) gdMalloc(sizeof(LineContribType));
+ 	if (!res) {
+ 		return NULL;
+	}
+	res->WindowSize = windows_size;
+	res->LineLength = line_length;
+	if (overflow2(line_length, sizeof(ContributionType))) {
+		gdFree(res);
+		return NULL;
+	}
+	res->ContribRow = (ContributionType *) gdMalloc(line_length * sizeof(ContributionType));
+	if (res->ContribRow == NULL) {
+		gdFree(res);
+ 		return NULL;
+ 	}
+ 	for (u = 0 ; u < line_length ; u++) {
+		if (overflow2(windows_size, sizeof(double))) {
+			overflow_error = 1;
+		} else {
+			res->ContribRow[u].Weights = (double *) gdMalloc(windows_size * sizeof(double));
+		}
+		if (overflow_error == 1 || res->ContribRow[u].Weights == NULL) {
+ 			unsigned int i;
+			u--;
+			for (i=0;i<=u;i++) {
+ 				gdFree(res->ContribRow[i].Weights);
+ 			}
+ 			gdFree(res->ContribRow);
+			gdFree(res);
+			return NULL;
+		}
+	}
+	return res;
+}
+",C,"	size_t weights_size;
+	if (overflow2(windows_size, sizeof(double))) {
+		return NULL;
+	} else {
+		weights_size = windows_size * sizeof(double);
+	}
+		res->ContribRow[u].Weights = (double *) gdMalloc(weights_size);
+		if (res->ContribRow[u].Weights == NULL) {
+
+			for (i=0;i<u;i++) {
+","	int overflow_error = 0;
+		if (overflow2(windows_size, sizeof(double))) {
+			overflow_error = 1;
+		} else {
+			res->ContribRow[u].Weights = (double *) gdMalloc(windows_size * sizeof(double));
+		}
+		if (overflow_error == 1 || res->ContribRow[u].Weights == NULL) {
+			u--;
+			for (i=0;i<=u;i++) {
+",,"@@ -829,8 +829,13 @@ static inline LineContribType * _gdContributionsAlloc(unsigned int line_length,
+ {
+ 	unsigned int u = 0;
+ 	LineContribType *res;
+-	int overflow_error = 0;
++	size_t weights_size;
+ 
++	if (overflow2(windows_size, sizeof(double))) {
++		return NULL;
++	} else {
++		weights_size = windows_size * sizeof(double);
++	}
+ 	res = (LineContribType *) gdMalloc(sizeof(LineContribType));
+ 	if (!res) {
+ 		return NULL;
+@@ -847,15 +852,11 @@ static inline LineContribType * _gdContributionsAlloc(unsigned int line_length,
+ 		return NULL;
+ 	}
+ 	for (u = 0 ; u < line_length ; u++) {
+-		if (overflow2(windows_size, sizeof(double))) {
+-			overflow_error = 1;
+-		} else {
+-			res->ContribRow[u].Weights = (double *) gdMalloc(windows_size * sizeof(double));
+-		}
+-		if (overflow_error == 1 || res->ContribRow[u].Weights == NULL) {
++		res->ContribRow[u].Weights = (double *) gdMalloc(weights_size);
++		if (res->ContribRow[u].Weights == NULL) {
+ 			unsigned int i;
+-			u--;
+-			for (i=0;i<=u;i++) {
++
++			for (i=0;i<u;i++) {
+ 				gdFree(res->ContribRow[i].Weights);
+ 			}
+ 			gdFree(res->ContribRow);",libgd,60bfb401ad5a4a8ae995dcd36372fe15c71e1a35,a49feeae76d41959d85ee733925a4cf40bac61b2,1,"static inline LineContribType * _gdContributionsAlloc(unsigned int line_length, unsigned int windows_size)
+ {
+ 	unsigned int u = 0;
+ 	LineContribType *res;
+//flaw_line_below:
+	int overflow_error = 0;
+//fix_flaw_line_below:
+//	size_t weights_size;
+ 
+//fix_flaw_line_below:
+//	if (overflow2(windows_size, sizeof(double))) {
+//fix_flaw_line_below:
+//		return NULL;
+//fix_flaw_line_below:
+//	} else {
+//fix_flaw_line_below:
+//		weights_size = windows_size * sizeof(double);
+//fix_flaw_line_below:
+//	}
+ 	res = (LineContribType *) gdMalloc(sizeof(LineContribType));
+ 	if (!res) {
+ 		return NULL;
+	}
+	res->WindowSize = windows_size;
+	res->LineLength = line_length;
+	if (overflow2(line_length, sizeof(ContributionType))) {
+		gdFree(res);
+		return NULL;
+	}
+	res->ContribRow = (ContributionType *) gdMalloc(line_length * sizeof(ContributionType));
+	if (res->ContribRow == NULL) {
+		gdFree(res);
+ 		return NULL;
+ 	}
+ 	for (u = 0 ; u < line_length ; u++) {
+//flaw_line_below:
+		if (overflow2(windows_size, sizeof(double))) {
+//flaw_line_below:
+			overflow_error = 1;
+//flaw_line_below:
+		} else {
+//flaw_line_below:
+			res->ContribRow[u].Weights = (double *) gdMalloc(windows_size * sizeof(double));
+//flaw_line_below:
+		}
+//flaw_line_below:
+		if (overflow_error == 1 || res->ContribRow[u].Weights == NULL) {
+//fix_flaw_line_below:
+//		res->ContribRow[u].Weights = (double *) gdMalloc(weights_size);
+//fix_flaw_line_below:
+//		if (res->ContribRow[u].Weights == NULL) {
+ 			unsigned int i;
+//flaw_line_below:
+			u--;
+//flaw_line_below:
+			for (i=0;i<=u;i++) {
+//fix_flaw_line_below:
+//
+//fix_flaw_line_below:
+//			for (i=0;i<u;i++) {
+ 				gdFree(res->ContribRow[i].Weights);
+ 			}
+ 			gdFree(res->ContribRow);
+			gdFree(res);
+			return NULL;
+		}
+	}
+	return res;
+}
+"

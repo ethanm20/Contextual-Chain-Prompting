@@ -1,0 +1,465 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+549,"[""CWE-617""]",server,807945f2eb5fa22e6f233cc17b85a2e141efe2c8,807945f2eb5fa22e6f233cc17b85a2e141efe2c8,0,512825,3.1432472749129267e+38,68.0,"MDEV-26402: A SEGV in Item_field::used_tables/update_depend_map_for_order...
+
+When doing condition pushdown from HAVING into WHERE,
+Item_equal::create_pushable_equalities() calls
+item->set_extraction_flag(IMMUTABLE_FL) for constant items.
+Then, Item::cleanup_excluding_immutables_processor() checks for this flag
+to see if it should call item->cleanup() or leave the item as-is.
+
+The failure happens when a constant item has a non-constant one inside it,
+like:
+
+   (tbl.col=0 AND impossible_cond)
+
+item->walk(cleanup_excluding_immutables_processor) works in a bottom-up
+way so it
+1. will call Item_func_eq(tbl.col=0)->cleanup()
+2. will not call Item_cond_and->cleanup (as the AND is constant)
+
+This creates an item tree where a fixed Item has an un-fixed Item inside
+it which eventually causes an assertion failure.
+
+Fixed by introducing this rule: instead of just calling
+
+  item->set_extraction_flag(IMMUTABLE_FL);
+
+we call Item::walk() to set the flag for all sub-items of the item.",other,"bool Item_equal::create_pushable_equalities(THD *thd,
+                                            List<Item> *equalities,
+                                            Pushdown_checker checker,
+                                            uchar *arg,
+                                            bool clone_const)
+{
+  Item *item;
+  Item *left_item= NULL;
+  Item *right_item = get_const();
+  Item_equal_fields_iterator it(*this);
+
+  while ((item=it++))
+  {
+    left_item= item;
+    if (checker && !((item->*checker) (arg)))
+      continue;
+    break;
+  }
+
+  if (!left_item)
+    return false;
+
+  if (right_item)
+  {
+    Item_func_eq *eq= 0;
+    Item *left_item_clone= left_item->build_clone(thd);
+    Item *right_item_clone= !clone_const ?
+                            right_item : right_item->build_clone(thd);
+    if (!left_item_clone || !right_item_clone)
+      return true;
+    eq= new (thd->mem_root) Item_func_eq(thd,
+                                         left_item_clone,
+                                         right_item_clone);
+    if (!eq ||  equalities->push_back(eq, thd->mem_root))
+      return true;
+    if (!clone_const)
+      right_item->set_extraction_flag(IMMUTABLE_FL);
+  }
+
+  while ((item=it++))
+  {
+    if (checker && !((item->*checker) (arg)))
+      continue;
+    Item_func_eq *eq= 0;
+    Item *left_item_clone= left_item->build_clone(thd);
+    Item *right_item_clone= item->build_clone(thd);
+    if (!(left_item_clone && right_item_clone))
+      return true;
+    left_item_clone->set_item_equal(NULL);
+    right_item_clone->set_item_equal(NULL);
+    eq= new (thd->mem_root) Item_func_eq(thd,
+                                         right_item_clone,
+                                         left_item_clone);
+    if (!eq || equalities->push_back(eq, thd->mem_root))
+      return true;
+  }
+  return false;
+}","bool Item_equal::create_pushable_equalities(THD *thd,
+                                            List<Item> *equalities,
+                                            Pushdown_checker checker,
+                                            uchar *arg,
+                                            bool clone_const)
+{
+  Item *item;
+  Item *left_item= NULL;
+  Item *right_item = get_const();
+  Item_equal_fields_iterator it(*this);
+
+  while ((item=it++))
+  {
+    left_item= item;
+    if (checker && !((item->*checker) (arg)))
+      continue;
+    break;
+  }
+
+  if (!left_item)
+    return false;
+
+  if (right_item)
+  {
+    Item_func_eq *eq= 0;
+    Item *left_item_clone= left_item->build_clone(thd);
+    Item *right_item_clone= !clone_const ?
+                            right_item : right_item->build_clone(thd);
+    if (!left_item_clone || !right_item_clone)
+      return true;
+    eq= new (thd->mem_root) Item_func_eq(thd,
+                                         left_item_clone,
+                                         right_item_clone);
+    if (!eq ||  equalities->push_back(eq, thd->mem_root))
+      return true;
+    if (!clone_const)
+    {
+      /*
+        Also set IMMUTABLE_FL for any sub-items of the right_item.
+        This is needed to prevent Item::cleanup_excluding_immutables_processor
+        from peforming cleanup of the sub-items and so creating an item tree
+        where a fixed item has non-fixed items inside it.
+      */
+      int new_flag= IMMUTABLE_FL;
+      right_item->walk(&Item::set_extraction_flag_processor, false,
+                       (void*)&new_flag);
+    }
+  }
+
+  while ((item=it++))
+  {
+    if (checker && !((item->*checker) (arg)))
+      continue;
+    Item_func_eq *eq= 0;
+    Item *left_item_clone= left_item->build_clone(thd);
+    Item *right_item_clone= item->build_clone(thd);
+    if (!(left_item_clone && right_item_clone))
+      return true;
+    left_item_clone->set_item_equal(NULL);
+    right_item_clone->set_item_equal(NULL);
+    eq= new (thd->mem_root) Item_func_eq(thd,
+                                         right_item_clone,
+                                         left_item_clone);
+    if (!eq || equalities->push_back(eq, thd->mem_root))
+      return true;
+  }
+  return false;
+}",
+551,"[""CWE-617""]",server,ecb6f9c894d3ebafeff1c6eb3b65cd248062296f,ecb6f9c894d3ebafeff1c6eb3b65cd248062296f,0,514292,2.3435972347192177e+36,151.0,"MDEV-28095 crash in multi-update and implicit grouping
+
+disallow implicit grouping in multi-update.
+explicit GROUP BY is not allowed by the grammar.",other,"multi_update::initialize_tables(JOIN *join)
+{
+  TABLE_LIST *table_ref;
+  DBUG_ENTER(""initialize_tables"");
+
+  if (unlikely((thd->variables.option_bits & OPTION_SAFE_UPDATES) &&
+               error_if_full_join(join)))
+    DBUG_RETURN(1);
+  main_table=join->join_tab->table;
+  table_to_update= 0;
+
+  /* Any update has at least one pair (field, value) */
+  DBUG_ASSERT(fields->elements);
+  /*
+   Only one table may be modified by UPDATE of an updatable view.
+   For an updatable view first_table_for_update indicates this
+   table.
+   For a regular multi-update it refers to some updated table.
+  */ 
+  TABLE *first_table_for_update= ((Item_field *) fields->head())->field->table;
+
+  /* Create a temporary table for keys to all tables, except main table */
+  for (table_ref= update_tables; table_ref; table_ref= table_ref->next_local)
+  {
+    TABLE *table=table_ref->table;
+    uint cnt= table_ref->shared;
+    List<Item> temp_fields;
+    ORDER     group;
+    TMP_TABLE_PARAM *tmp_param;
+
+    if (ignore)
+      table->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+    if (table == main_table)			// First table in join
+    {
+      if (safe_update_on_fly(thd, join->join_tab, table_ref, all_tables))
+      {
+	table_to_update= table;			// Update table on the fly
+        has_vers_fields= table->vers_check_update(*fields);
+	continue;
+      }
+    }
+    table->prepare_for_position();
+    join->map2table[table->tablenr]->keep_current_rowid= true;
+
+    /*
+      enable uncacheable flag if we update a view with check option
+      and check option has a subselect, otherwise, the check option
+      can be evaluated after the subselect was freed as independent
+      (See full_local in JOIN::join_free()).
+    */
+    if (table_ref->check_option && !join->select_lex->uncacheable)
+    {
+      SELECT_LEX_UNIT *tmp_unit;
+      SELECT_LEX *sl;
+      for (tmp_unit= join->select_lex->first_inner_unit();
+           tmp_unit;
+           tmp_unit= tmp_unit->next_unit())
+      {
+        for (sl= tmp_unit->first_select(); sl; sl= sl->next_select())
+        {
+          if (sl->master_unit()->item)
+          {
+            join->select_lex->uncacheable|= UNCACHEABLE_CHECKOPTION;
+            goto loop_end;
+          }
+        }
+      }
+    }
+loop_end:
+
+    if (table == first_table_for_update && table_ref->check_option)
+    {
+      table_map unupdated_tables= table_ref->check_option->used_tables() &
+                                  ~first_table_for_update->map;
+      List_iterator<TABLE_LIST> ti(*leaves);
+      TABLE_LIST *tbl_ref;
+      while ((tbl_ref= ti++) && unupdated_tables)
+      {
+        if (unupdated_tables & tbl_ref->table->map)
+          unupdated_tables&= ~tbl_ref->table->map;
+        else
+          continue;
+        if (unupdated_check_opt_tables.push_back(tbl_ref->table))
+          DBUG_RETURN(1);
+      }
+    }
+
+    tmp_param= tmp_table_param+cnt;
+
+    /*
+      Create a temporary table to store all fields that are changed for this
+      table. The first field in the temporary table is a pointer to the
+      original row so that we can find and update it. For the updatable
+      VIEW a few following fields are rowids of tables used in the CHECK
+      OPTION condition.
+    */
+
+    List_iterator_fast<TABLE> tbl_it(unupdated_check_opt_tables);
+    TABLE *tbl= table;
+    do
+    {
+      LEX_CSTRING field_name;
+      field_name.str= tbl->alias.c_ptr();
+      field_name.length= strlen(field_name.str);
+      /*
+        Signal each table (including tables referenced by WITH CHECK OPTION
+        clause) for which we will store row position in the temporary table
+        that we need a position to be read first.
+      */
+      tbl->prepare_for_position();
+      join->map2table[tbl->tablenr]->keep_current_rowid= true;
+
+      Item_temptable_rowid *item=
+        new (thd->mem_root) Item_temptable_rowid(tbl);
+      if (!item)
+         DBUG_RETURN(1);
+      item->fix_fields(thd, 0);
+      if (temp_fields.push_back(item, thd->mem_root))
+        DBUG_RETURN(1);
+    } while ((tbl= tbl_it++));
+
+    temp_fields.append(fields_for_table[cnt]);
+
+    /* Make an unique key over the first field to avoid duplicated updates */
+    bzero((char*) &group, sizeof(group));
+    group.direction= ORDER::ORDER_ASC;
+    group.item= (Item**) temp_fields.head_ref();
+
+    tmp_param->quick_group= 1;
+    tmp_param->field_count= temp_fields.elements;
+    tmp_param->func_count=  temp_fields.elements - 1;
+    calc_group_buffer(tmp_param, &group);
+    /* small table, ignore SQL_BIG_TABLES */
+    my_bool save_big_tables= thd->variables.big_tables; 
+    thd->variables.big_tables= FALSE;
+    tmp_tables[cnt]=create_tmp_table(thd, tmp_param, temp_fields,
+                                     (ORDER*) &group, 0, 0,
+                                     TMP_TABLE_ALL_COLUMNS, HA_POS_ERROR, &empty_clex_str);
+    thd->variables.big_tables= save_big_tables;
+    if (!tmp_tables[cnt])
+      DBUG_RETURN(1);
+    tmp_tables[cnt]->file->extra(HA_EXTRA_WRITE_CACHE);
+  }
+  join->tmp_table_keep_current_rowid= TRUE;
+  DBUG_RETURN(0);
+}","multi_update::initialize_tables(JOIN *join)
+{
+  TABLE_LIST *table_ref;
+  DBUG_ENTER(""initialize_tables"");
+
+  if (unlikely((thd->variables.option_bits & OPTION_SAFE_UPDATES) &&
+               error_if_full_join(join)))
+    DBUG_RETURN(1);
+  if (join->implicit_grouping)
+  {
+    my_error(ER_INVALID_GROUP_FUNC_USE, MYF(0));
+    DBUG_RETURN(1);
+  }
+  main_table=join->join_tab->table;
+  table_to_update= 0;
+
+  /* Any update has at least one pair (field, value) */
+  DBUG_ASSERT(fields->elements);
+  /*
+   Only one table may be modified by UPDATE of an updatable view.
+   For an updatable view first_table_for_update indicates this
+   table.
+   For a regular multi-update it refers to some updated table.
+  */ 
+  TABLE *first_table_for_update= ((Item_field *) fields->head())->field->table;
+
+  /* Create a temporary table for keys to all tables, except main table */
+  for (table_ref= update_tables; table_ref; table_ref= table_ref->next_local)
+  {
+    TABLE *table=table_ref->table;
+    uint cnt= table_ref->shared;
+    List<Item> temp_fields;
+    ORDER     group;
+    TMP_TABLE_PARAM *tmp_param;
+
+    if (ignore)
+      table->file->extra(HA_EXTRA_IGNORE_DUP_KEY);
+    if (table == main_table)			// First table in join
+    {
+      if (safe_update_on_fly(thd, join->join_tab, table_ref, all_tables))
+      {
+	table_to_update= table;			// Update table on the fly
+        has_vers_fields= table->vers_check_update(*fields);
+	continue;
+      }
+    }
+    table->prepare_for_position();
+    join->map2table[table->tablenr]->keep_current_rowid= true;
+
+    /*
+      enable uncacheable flag if we update a view with check option
+      and check option has a subselect, otherwise, the check option
+      can be evaluated after the subselect was freed as independent
+      (See full_local in JOIN::join_free()).
+    */
+    if (table_ref->check_option && !join->select_lex->uncacheable)
+    {
+      SELECT_LEX_UNIT *tmp_unit;
+      SELECT_LEX *sl;
+      for (tmp_unit= join->select_lex->first_inner_unit();
+           tmp_unit;
+           tmp_unit= tmp_unit->next_unit())
+      {
+        for (sl= tmp_unit->first_select(); sl; sl= sl->next_select())
+        {
+          if (sl->master_unit()->item)
+          {
+            join->select_lex->uncacheable|= UNCACHEABLE_CHECKOPTION;
+            goto loop_end;
+          }
+        }
+      }
+    }
+loop_end:
+
+    if (table == first_table_for_update && table_ref->check_option)
+    {
+      table_map unupdated_tables= table_ref->check_option->used_tables() &
+                                  ~first_table_for_update->map;
+      List_iterator<TABLE_LIST> ti(*leaves);
+      TABLE_LIST *tbl_ref;
+      while ((tbl_ref= ti++) && unupdated_tables)
+      {
+        if (unupdated_tables & tbl_ref->table->map)
+          unupdated_tables&= ~tbl_ref->table->map;
+        else
+          continue;
+        if (unupdated_check_opt_tables.push_back(tbl_ref->table))
+          DBUG_RETURN(1);
+      }
+    }
+
+    tmp_param= tmp_table_param+cnt;
+
+    /*
+      Create a temporary table to store all fields that are changed for this
+      table. The first field in the temporary table is a pointer to the
+      original row so that we can find and update it. For the updatable
+      VIEW a few following fields are rowids of tables used in the CHECK
+      OPTION condition.
+    */
+
+    List_iterator_fast<TABLE> tbl_it(unupdated_check_opt_tables);
+    TABLE *tbl= table;
+    do
+    {
+      LEX_CSTRING field_name;
+      field_name.str= tbl->alias.c_ptr();
+      field_name.length= strlen(field_name.str);
+      /*
+        Signal each table (including tables referenced by WITH CHECK OPTION
+        clause) for which we will store row position in the temporary table
+        that we need a position to be read first.
+      */
+      tbl->prepare_for_position();
+      join->map2table[tbl->tablenr]->keep_current_rowid= true;
+
+      Item_temptable_rowid *item=
+        new (thd->mem_root) Item_temptable_rowid(tbl);
+      if (!item)
+         DBUG_RETURN(1);
+      item->fix_fields(thd, 0);
+      if (temp_fields.push_back(item, thd->mem_root))
+        DBUG_RETURN(1);
+    } while ((tbl= tbl_it++));
+
+    temp_fields.append(fields_for_table[cnt]);
+
+    /* Make an unique key over the first field to avoid duplicated updates */
+    bzero((char*) &group, sizeof(group));
+    group.direction= ORDER::ORDER_ASC;
+    group.item= (Item**) temp_fields.head_ref();
+
+    tmp_param->quick_group= 1;
+    tmp_param->field_count= temp_fields.elements;
+    tmp_param->func_count=  temp_fields.elements - 1;
+    calc_group_buffer(tmp_param, &group);
+    /* small table, ignore SQL_BIG_TABLES */
+    my_bool save_big_tables= thd->variables.big_tables; 
+    thd->variables.big_tables= FALSE;
+    tmp_tables[cnt]=create_tmp_table(thd, tmp_param, temp_fields,
+                                     (ORDER*) &group, 0, 0,
+                                     TMP_TABLE_ALL_COLUMNS, HA_POS_ERROR, &empty_clex_str);
+    thd->variables.big_tables= save_big_tables;
+    if (!tmp_tables[cnt])
+      DBUG_RETURN(1);
+    tmp_tables[cnt]->file->extra(HA_EXTRA_WRITE_CACHE);
+  }
+  join->tmp_table_keep_current_rowid= TRUE;
+  DBUG_RETURN(0);
+}",
+3249,"[""CWE-617""]",server,2e7891080667c59ac80f788eef4d59d447595772,2e7891080667c59ac80f788eef4d59d447595772,0,509429,1.5958446345072042e+38,1.0,"MDEV-25635 Assertion failure when pushing from HAVING into WHERE of view
+
+This bug could manifest itself after pushing a where condition over a
+mergeable derived table / view / CTE DT into a grouping view / derived
+table / CTE V whose item list contained set functions with constant
+arguments such as MIN(2), SUM(1) etc. In such cases the field references
+used in the condition pushed into the view V that correspond set functions
+are wrapped into Item_direct_view_ref wrappers. Due to a wrong implementation
+of the virtual method const_item() for the class Item_direct_view_ref the
+wrapped set functions with constant arguments could be erroneously taken
+for constant items. This could lead to a wrong result set returned by the
+main select query in 10.2. In 10.4 where a possibility of pushing condition
+from HAVING into WHERE had been added this could cause a crash.
+
+Approved by Sergey Petrunya <sergey.petrunya@mariadb.com>",other,  bool const_item() const { return used_tables() == 0; },  bool const_item() const { return true; },

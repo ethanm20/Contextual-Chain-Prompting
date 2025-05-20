@@ -1,0 +1,721 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2604,"[""CWE-254""]",server,f0d774d48416bb06063184380b684380ca005a41,f0d774d48416bb06063184380b684380ca005a41,0,503134,5.901369329385015e+37,70.0,"MDEV-9212 ssl-validate-cert incorrect hostname check
+
+Reimplement ssl_verify_server_cert() using the logic
+from https://wiki.openssl.org/index.php/Hostname_validation
+
+The bug was discovered by Alex Gaynor.",other,"static int ssl_verify_server_cert(Vio *vio, const char* server_hostname, const char **errptr)
+{
+  SSL *ssl;
+  X509 *server_cert;
+  char *cp1, *cp2;
+  char *buf;
+  DBUG_ENTER(""ssl_verify_server_cert"");
+  DBUG_PRINT(""enter"", (""server_hostname: %s"", server_hostname));
+
+  if (!(ssl= (SSL*)vio->ssl_arg))
+  {
+    *errptr= ""No SSL pointer found"";
+    DBUG_RETURN(1);
+  }
+
+  if (!server_hostname)
+  {
+    *errptr= ""No server hostname supplied"";
+    DBUG_RETURN(1);
+  }
+
+  if (!(server_cert= SSL_get_peer_certificate(ssl)))
+  {
+    *errptr= ""Could not get server certificate"";
+    DBUG_RETURN(1);
+  }
+
+  if (X509_V_OK != SSL_get_verify_result(ssl))
+  {
+    *errptr= ""Failed to verify the server certificate"";
+    X509_free(server_cert);
+    DBUG_RETURN(1);
+  }
+  /*
+    We already know that the certificate exchanged was valid; the SSL library
+    handled that. Now we need to verify that the contents of the certificate
+    are what we expect.
+  */
+
+  buf= X509_NAME_oneline(X509_get_subject_name(server_cert), 0, 0);
+  X509_free (server_cert);
+
+  if (!buf)
+  {
+    *errptr= ""Out of memory"";
+    DBUG_RETURN(1);
+  }
+
+  DBUG_PRINT(""info"", (""hostname in cert: %s"", buf));
+  cp1= strstr(buf, ""/CN="");
+  if (cp1)
+  {
+    cp1+= 4; /* Skip the ""/CN="" that we found */
+    /* Search for next / which might be the delimiter for email */
+    cp2= strchr(cp1, '/');
+    if (cp2)
+      *cp2= '\0';
+    DBUG_PRINT(""info"", (""Server hostname in cert: %s"", cp1));
+    if (!strcmp(cp1, server_hostname))
+    {
+      free(buf);
+      /* Success */
+      DBUG_RETURN(0);
+    }
+  }
+  *errptr= ""SSL certificate validation failure"";
+  free(buf);
+  DBUG_RETURN(1);
+}","static int ssl_verify_server_cert(Vio *vio, const char* server_hostname, const char **errptr)
+{
+  SSL *ssl;
+  X509 *server_cert;
+  X509_NAME *x509sn;
+  int cn_pos;
+  X509_NAME_ENTRY *cn_entry;
+  ASN1_STRING *cn_asn1;
+  const char *cn_str;
+  DBUG_ENTER(""ssl_verify_server_cert"");
+  DBUG_PRINT(""enter"", (""server_hostname: %s"", server_hostname));
+
+  if (!(ssl= (SSL*)vio->ssl_arg))
+  {
+    *errptr= ""No SSL pointer found"";
+    DBUG_RETURN(1);
+  }
+
+  if (!server_hostname)
+  {
+    *errptr= ""No server hostname supplied"";
+    DBUG_RETURN(1);
+  }
+
+  if (!(server_cert= SSL_get_peer_certificate(ssl)))
+  {
+    *errptr= ""Could not get server certificate"";
+    DBUG_RETURN(1);
+  }
+
+  if (X509_V_OK != SSL_get_verify_result(ssl))
+  {
+    *errptr= ""Failed to verify the server certificate"";
+    X509_free(server_cert);
+    DBUG_RETURN(1);
+  }
+  /*
+    We already know that the certificate exchanged was valid; the SSL library
+    handled that. Now we need to verify that the contents of the certificate
+    are what we expect.
+  */
+
+  x509sn= X509_get_subject_name(server_cert);
+
+  if ((cn_pos= X509_NAME_get_index_by_NID(x509sn, NID_commonName, -1)) < 0)
+    goto err;
+
+  if (!(cn_entry= X509_NAME_get_entry(x509sn, cn_pos)))
+    goto err;
+
+  if (!(cn_asn1 = X509_NAME_ENTRY_get_data(cn_entry)))
+    goto err;
+
+  cn_str = (char *)ASN1_STRING_data(cn_asn1);
+
+  /* Make sure there is no embedded \0 in the CN */
+  if ((size_t)ASN1_STRING_length(cn_asn1) != strlen(cn_str))
+    goto err;
+
+  if (strcmp(cn_str, server_hostname))
+    goto err;
+
+  X509_free (server_cert);
+  DBUG_RETURN(0);
+
+err:
+  X509_free(server_cert);
+  *errptr= ""SSL certificate validation failure"";
+  DBUG_RETURN(1);
+}",
+3239,"[""CWE-254""]",openssl,cb22d2ae5a5b6069dbf66dbcce07223ac15a16de,cb22d2ae5a5b6069dbf66dbcce07223ac15a16de,0,502765,1.4282066281560003e+38,285.0,"Fix alt chains bug
+
+This is a follow up to the alternate chains certificate forgery issue
+(CVE-2015-1793). That issue is exacerbated in 1.0.1 by a related bug which
+means that we *always* check for an alternative chain, even if we have
+already found a chain. The code is supposed to stop as soon as it has found
+one (and does do in master and 1.0.2).
+
+Reviewed-by: Stephen Henson <steve@openssl.org>",other,"int X509_verify_cert(X509_STORE_CTX *ctx)
+{
+    X509 *x, *xtmp, *xtmp2, *chain_ss = NULL;
+    int bad_chain = 0;
+    X509_VERIFY_PARAM *param = ctx->param;
+    int depth, i, ok = 0;
+    int num, j, retry;
+    int (*cb) (int xok, X509_STORE_CTX *xctx);
+    STACK_OF(X509) *sktmp = NULL;
+    if (ctx->cert == NULL) {
+        X509err(X509_F_X509_VERIFY_CERT, X509_R_NO_CERT_SET_FOR_US_TO_VERIFY);
+        return -1;
+    }
+    if (ctx->chain != NULL) {
+        /*
+         * This X509_STORE_CTX has already been used to verify a cert. We
+         * cannot do another one.
+         */
+        X509err(X509_F_X509_VERIFY_CERT, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
+        return -1;
+    }
+
+    cb = ctx->verify_cb;
+
+    /*
+     * first we make sure the chain we are going to build is present and that
+     * the first entry is in place
+     */
+    if (((ctx->chain = sk_X509_new_null()) == NULL) ||
+        (!sk_X509_push(ctx->chain, ctx->cert))) {
+        X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+        goto end;
+    }
+    CRYPTO_add(&ctx->cert->references, 1, CRYPTO_LOCK_X509);
+    ctx->last_untrusted = 1;
+
+    /* We use a temporary STACK so we can chop and hack at it */
+    if (ctx->untrusted != NULL
+        && (sktmp = sk_X509_dup(ctx->untrusted)) == NULL) {
+        X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+        goto end;
+    }
+
+    num = sk_X509_num(ctx->chain);
+    x = sk_X509_value(ctx->chain, num - 1);
+    depth = param->depth;
+
+    for (;;) {
+        /* If we have enough, we break */
+        if (depth < num)
+            break;              /* FIXME: If this happens, we should take
+                                 * note of it and, if appropriate, use the
+                                 * X509_V_ERR_CERT_CHAIN_TOO_LONG error code
+                                 * later. */
+
+        /* If we are self signed, we break */
+        if (ctx->check_issued(ctx, x, x))
+            break;
+
+        /* If we were passed a cert chain, use it first */
+        if (ctx->untrusted != NULL) {
+            xtmp = find_issuer(ctx, sktmp, x);
+            if (xtmp != NULL) {
+                if (!sk_X509_push(ctx->chain, xtmp)) {
+                    X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+                    goto end;
+                }
+                CRYPTO_add(&xtmp->references, 1, CRYPTO_LOCK_X509);
+                (void)sk_X509_delete_ptr(sktmp, xtmp);
+                ctx->last_untrusted++;
+                x = xtmp;
+                num++;
+                /*
+                 * reparse the full chain for the next one
+                 */
+                continue;
+            }
+        }
+        break;
+    }
+
+    /* Remember how many untrusted certs we have */
+    j = num;
+    /*
+     * at this point, chain should contain a list of untrusted certificates.
+     * We now need to add at least one trusted one, if possible, otherwise we
+     * complain.
+     */
+
+    do {
+        /*
+         * Examine last certificate in chain and see if it is self signed.
+         */
+        i = sk_X509_num(ctx->chain);
+        x = sk_X509_value(ctx->chain, i - 1);
+        if (ctx->check_issued(ctx, x, x)) {
+            /* we have a self signed certificate */
+            if (sk_X509_num(ctx->chain) == 1) {
+                /*
+                 * We have a single self signed certificate: see if we can
+                 * find it in the store. We must have an exact match to avoid
+                 * possible impersonation.
+                 */
+                ok = ctx->get_issuer(&xtmp, ctx, x);
+                if ((ok <= 0) || X509_cmp(x, xtmp)) {
+                    ctx->error = X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                    ctx->current_cert = x;
+                    ctx->error_depth = i - 1;
+                    if (ok == 1)
+                        X509_free(xtmp);
+                    bad_chain = 1;
+                    ok = cb(0, ctx);
+                    if (!ok)
+                        goto end;
+                } else {
+                    /*
+                     * We have a match: replace certificate with store
+                     * version so we get any trust settings.
+                     */
+                    X509_free(x);
+                    x = xtmp;
+                    (void)sk_X509_set(ctx->chain, i - 1, x);
+                    ctx->last_untrusted = 0;
+                }
+            } else {
+                /*
+                 * extract and save self signed certificate for later use
+                 */
+                chain_ss = sk_X509_pop(ctx->chain);
+                ctx->last_untrusted--;
+                num--;
+                j--;
+                x = sk_X509_value(ctx->chain, num - 1);
+            }
+        }
+        /* We now lookup certs from the certificate store */
+        for (;;) {
+            /* If we have enough, we break */
+            if (depth < num)
+                break;
+            /* If we are self signed, we break */
+            if (ctx->check_issued(ctx, x, x))
+                break;
+            ok = ctx->get_issuer(&xtmp, ctx, x);
+            if (ok < 0)
+                return ok;
+            if (ok == 0)
+                break;
+            x = xtmp;
+            if (!sk_X509_push(ctx->chain, x)) {
+                X509_free(xtmp);
+                X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+                return 0;
+            }
+            num++;
+        }
+
+        /*
+         * If we haven't got a least one certificate from our store then check
+         * if there is an alternative chain that could be used.  We only do this
+         * if the user hasn't switched off alternate chain checking
+         */
+        retry = 0;
+        if (j == ctx->last_untrusted &&
+            !(ctx->param->flags & X509_V_FLAG_NO_ALT_CHAINS)) {
+            while (j-- > 1) {
+                xtmp2 = sk_X509_value(ctx->chain, j - 1);
+                ok = ctx->get_issuer(&xtmp, ctx, xtmp2);
+                if (ok < 0)
+                    goto end;
+                /* Check if we found an alternate chain */
+                if (ok > 0) {
+                    /*
+                     * Free up the found cert we'll add it again later
+                     */
+                    X509_free(xtmp);
+
+                    /*
+                     * Dump all the certs above this point - we've found an
+                     * alternate chain
+                     */
+                    while (num > j) {
+                        xtmp = sk_X509_pop(ctx->chain);
+                        X509_free(xtmp);
+                        num--;
+                    }
+                    ctx->last_untrusted = sk_X509_num(ctx->chain);
+                    retry = 1;
+                    break;
+                }
+            }
+        }
+    } while (retry);
+
+    /* Is last certificate looked up self signed? */
+    if (!ctx->check_issued(ctx, x, x)) {
+        if ((chain_ss == NULL) || !ctx->check_issued(ctx, x, chain_ss)) {
+            if (ctx->last_untrusted >= num)
+                ctx->error = X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY;
+            else
+                ctx->error = X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT;
+            ctx->current_cert = x;
+        } else {
+
+            sk_X509_push(ctx->chain, chain_ss);
+            num++;
+            ctx->last_untrusted = num;
+            ctx->current_cert = chain_ss;
+            ctx->error = X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN;
+            chain_ss = NULL;
+        }
+
+        ctx->error_depth = num - 1;
+        bad_chain = 1;
+        ok = cb(0, ctx);
+        if (!ok)
+            goto end;
+    }
+
+    /* We have the chain complete: now we need to check its purpose */
+    ok = check_chain_extensions(ctx);
+
+    if (!ok)
+        goto end;
+
+    /* Check name constraints */
+
+    ok = check_name_constraints(ctx);
+
+    if (!ok)
+        goto end;
+
+    /* The chain extensions are OK: check trust */
+
+    if (param->trust > 0)
+        ok = check_trust(ctx);
+
+    if (!ok)
+        goto end;
+
+    /* We may as well copy down any DSA parameters that are required */
+    X509_get_pubkey_parameters(NULL, ctx->chain);
+
+    /*
+     * Check revocation status: we do this after copying parameters because
+     * they may be needed for CRL signature verification.
+     */
+
+    ok = ctx->check_revocation(ctx);
+    if (!ok)
+        goto end;
+
+    /* At this point, we have a chain and need to verify it */
+    if (ctx->verify != NULL)
+        ok = ctx->verify(ctx);
+    else
+        ok = internal_verify(ctx);
+    if (!ok)
+        goto end;
+
+#ifndef OPENSSL_NO_RFC3779
+    /* RFC 3779 path validation, now that CRL check has been done */
+    ok = v3_asid_validate_path(ctx);
+    if (!ok)
+        goto end;
+    ok = v3_addr_validate_path(ctx);
+    if (!ok)
+        goto end;
+#endif
+
+    /* If we get this far evaluate policies */
+    if (!bad_chain && (ctx->param->flags & X509_V_FLAG_POLICY_CHECK))
+        ok = ctx->check_policy(ctx);
+    if (!ok)
+        goto end;
+    if (0) {
+ end:
+        X509_get_pubkey_parameters(NULL, ctx->chain);
+    }
+    if (sktmp != NULL)
+        sk_X509_free(sktmp);
+    if (chain_ss != NULL)
+        X509_free(chain_ss);
+    return ok;
+}","int X509_verify_cert(X509_STORE_CTX *ctx)
+{
+    X509 *x, *xtmp, *xtmp2, *chain_ss = NULL;
+    int bad_chain = 0;
+    X509_VERIFY_PARAM *param = ctx->param;
+    int depth, i, ok = 0;
+    int num, j, retry;
+    int (*cb) (int xok, X509_STORE_CTX *xctx);
+    STACK_OF(X509) *sktmp = NULL;
+    if (ctx->cert == NULL) {
+        X509err(X509_F_X509_VERIFY_CERT, X509_R_NO_CERT_SET_FOR_US_TO_VERIFY);
+        return -1;
+    }
+    if (ctx->chain != NULL) {
+        /*
+         * This X509_STORE_CTX has already been used to verify a cert. We
+         * cannot do another one.
+         */
+        X509err(X509_F_X509_VERIFY_CERT, ERR_R_SHOULD_NOT_HAVE_BEEN_CALLED);
+        return -1;
+    }
+
+    cb = ctx->verify_cb;
+
+    /*
+     * first we make sure the chain we are going to build is present and that
+     * the first entry is in place
+     */
+    if (((ctx->chain = sk_X509_new_null()) == NULL) ||
+        (!sk_X509_push(ctx->chain, ctx->cert))) {
+        X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+        goto end;
+    }
+    CRYPTO_add(&ctx->cert->references, 1, CRYPTO_LOCK_X509);
+    ctx->last_untrusted = 1;
+
+    /* We use a temporary STACK so we can chop and hack at it */
+    if (ctx->untrusted != NULL
+        && (sktmp = sk_X509_dup(ctx->untrusted)) == NULL) {
+        X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+        goto end;
+    }
+
+    num = sk_X509_num(ctx->chain);
+    x = sk_X509_value(ctx->chain, num - 1);
+    depth = param->depth;
+
+    for (;;) {
+        /* If we have enough, we break */
+        if (depth < num)
+            break;              /* FIXME: If this happens, we should take
+                                 * note of it and, if appropriate, use the
+                                 * X509_V_ERR_CERT_CHAIN_TOO_LONG error code
+                                 * later. */
+
+        /* If we are self signed, we break */
+        if (ctx->check_issued(ctx, x, x))
+            break;
+
+        /* If we were passed a cert chain, use it first */
+        if (ctx->untrusted != NULL) {
+            xtmp = find_issuer(ctx, sktmp, x);
+            if (xtmp != NULL) {
+                if (!sk_X509_push(ctx->chain, xtmp)) {
+                    X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+                    goto end;
+                }
+                CRYPTO_add(&xtmp->references, 1, CRYPTO_LOCK_X509);
+                (void)sk_X509_delete_ptr(sktmp, xtmp);
+                ctx->last_untrusted++;
+                x = xtmp;
+                num++;
+                /*
+                 * reparse the full chain for the next one
+                 */
+                continue;
+            }
+        }
+        break;
+    }
+
+    /* Remember how many untrusted certs we have */
+    j = num;
+    /*
+     * at this point, chain should contain a list of untrusted certificates.
+     * We now need to add at least one trusted one, if possible, otherwise we
+     * complain.
+     */
+
+    do {
+        /*
+         * Examine last certificate in chain and see if it is self signed.
+         */
+        i = sk_X509_num(ctx->chain);
+        x = sk_X509_value(ctx->chain, i - 1);
+        if (ctx->check_issued(ctx, x, x)) {
+            /* we have a self signed certificate */
+            if (sk_X509_num(ctx->chain) == 1) {
+                /*
+                 * We have a single self signed certificate: see if we can
+                 * find it in the store. We must have an exact match to avoid
+                 * possible impersonation.
+                 */
+                ok = ctx->get_issuer(&xtmp, ctx, x);
+                if ((ok <= 0) || X509_cmp(x, xtmp)) {
+                    ctx->error = X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT;
+                    ctx->current_cert = x;
+                    ctx->error_depth = i - 1;
+                    if (ok == 1)
+                        X509_free(xtmp);
+                    bad_chain = 1;
+                    ok = cb(0, ctx);
+                    if (!ok)
+                        goto end;
+                } else {
+                    /*
+                     * We have a match: replace certificate with store
+                     * version so we get any trust settings.
+                     */
+                    X509_free(x);
+                    x = xtmp;
+                    (void)sk_X509_set(ctx->chain, i - 1, x);
+                    ctx->last_untrusted = 0;
+                }
+            } else {
+                /*
+                 * extract and save self signed certificate for later use
+                 */
+                chain_ss = sk_X509_pop(ctx->chain);
+                ctx->last_untrusted--;
+                num--;
+                j--;
+                x = sk_X509_value(ctx->chain, num - 1);
+            }
+        }
+        /* We now lookup certs from the certificate store */
+        for (;;) {
+            /* If we have enough, we break */
+            if (depth < num)
+                break;
+            /* If we are self signed, we break */
+            if (ctx->check_issued(ctx, x, x))
+                break;
+            ok = ctx->get_issuer(&xtmp, ctx, x);
+            if (ok < 0)
+                return ok;
+            if (ok == 0)
+                break;
+            x = xtmp;
+            if (!sk_X509_push(ctx->chain, x)) {
+                X509_free(xtmp);
+                X509err(X509_F_X509_VERIFY_CERT, ERR_R_MALLOC_FAILURE);
+                return 0;
+            }
+            num++;
+        }
+
+        /*
+         * If we haven't got a least one certificate from our store then check
+         * if there is an alternative chain that could be used.  We only do this
+         * if the user hasn't switched off alternate chain checking
+         */
+        retry = 0;
+        if (num == ctx->last_untrusted &&
+            !(ctx->param->flags & X509_V_FLAG_NO_ALT_CHAINS)) {
+            while (j-- > 1) {
+                xtmp2 = sk_X509_value(ctx->chain, j - 1);
+                ok = ctx->get_issuer(&xtmp, ctx, xtmp2);
+                if (ok < 0)
+                    goto end;
+                /* Check if we found an alternate chain */
+                if (ok > 0) {
+                    /*
+                     * Free up the found cert we'll add it again later
+                     */
+                    X509_free(xtmp);
+
+                    /*
+                     * Dump all the certs above this point - we've found an
+                     * alternate chain
+                     */
+                    while (num > j) {
+                        xtmp = sk_X509_pop(ctx->chain);
+                        X509_free(xtmp);
+                        num--;
+                    }
+                    ctx->last_untrusted = sk_X509_num(ctx->chain);
+                    retry = 1;
+                    break;
+                }
+            }
+        }
+    } while (retry);
+
+    /* Is last certificate looked up self signed? */
+    if (!ctx->check_issued(ctx, x, x)) {
+        if ((chain_ss == NULL) || !ctx->check_issued(ctx, x, chain_ss)) {
+            if (ctx->last_untrusted >= num)
+                ctx->error = X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY;
+            else
+                ctx->error = X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT;
+            ctx->current_cert = x;
+        } else {
+
+            sk_X509_push(ctx->chain, chain_ss);
+            num++;
+            ctx->last_untrusted = num;
+            ctx->current_cert = chain_ss;
+            ctx->error = X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN;
+            chain_ss = NULL;
+        }
+
+        ctx->error_depth = num - 1;
+        bad_chain = 1;
+        ok = cb(0, ctx);
+        if (!ok)
+            goto end;
+    }
+
+    /* We have the chain complete: now we need to check its purpose */
+    ok = check_chain_extensions(ctx);
+
+    if (!ok)
+        goto end;
+
+    /* Check name constraints */
+
+    ok = check_name_constraints(ctx);
+
+    if (!ok)
+        goto end;
+
+    /* The chain extensions are OK: check trust */
+
+    if (param->trust > 0)
+        ok = check_trust(ctx);
+
+    if (!ok)
+        goto end;
+
+    /* We may as well copy down any DSA parameters that are required */
+    X509_get_pubkey_parameters(NULL, ctx->chain);
+
+    /*
+     * Check revocation status: we do this after copying parameters because
+     * they may be needed for CRL signature verification.
+     */
+
+    ok = ctx->check_revocation(ctx);
+    if (!ok)
+        goto end;
+
+    /* At this point, we have a chain and need to verify it */
+    if (ctx->verify != NULL)
+        ok = ctx->verify(ctx);
+    else
+        ok = internal_verify(ctx);
+    if (!ok)
+        goto end;
+
+#ifndef OPENSSL_NO_RFC3779
+    /* RFC 3779 path validation, now that CRL check has been done */
+    ok = v3_asid_validate_path(ctx);
+    if (!ok)
+        goto end;
+    ok = v3_addr_validate_path(ctx);
+    if (!ok)
+        goto end;
+#endif
+
+    /* If we get this far evaluate policies */
+    if (!bad_chain && (ctx->param->flags & X509_V_FLAG_POLICY_CHECK))
+        ok = ctx->check_policy(ctx);
+    if (!ok)
+        goto end;
+    if (0) {
+ end:
+        X509_get_pubkey_parameters(NULL, ctx->chain);
+    }
+    if (sktmp != NULL)
+        sk_X509_free(sktmp);
+    if (chain_ss != NULL)
+        X509_free(chain_ss);
+    return ok;
+}",

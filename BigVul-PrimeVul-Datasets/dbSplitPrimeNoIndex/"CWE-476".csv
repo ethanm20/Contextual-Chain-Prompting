@@ -1,0 +1,645 @@
+,CWE ID,project,commit_id_before_fix,commit_id_after_fix,target,primevul_idx,hash,size,message,dataset,primevul_func_before_fix,primevul_func_after_fix,big_vul_idx
+2704,"""CWE-476""",WAVM,31d670b6489e6d708c3b04b911cdf14ac43d846d,31d670b6489e6d708c3b04b911cdf14ac43d846d,0,519050,2.0166227711299788e+38,,,other,"static int run(const CommandLineOptions& options)
+{
+	IR::Module irModule;
+
+	// Load the module.
+	if(!loadModule(options.filename, irModule)) { return EXIT_FAILURE; }
+	if(options.onlyCheck) { return EXIT_SUCCESS; }
+
+	// Compile the module.
+	Runtime::Module* module = nullptr;
+	if(!options.precompiled) { module = Runtime::compileModule(irModule); }
+	else
+	{
+		const UserSection* precompiledObjectSection = nullptr;
+		for(const UserSection& userSection : irModule.userSections)
+		{
+			if(userSection.name == ""wavm.precompiled_object"")
+			{
+				precompiledObjectSection = &userSection;
+				break;
+			}
+		}
+
+		if(!precompiledObjectSection)
+		{
+			Log::printf(Log::error, ""Input file did not contain 'wavm.precompiled_object' section"");
+			return EXIT_FAILURE;
+		}
+		else
+		{
+			module = Runtime::loadPrecompiledModule(irModule, precompiledObjectSection->data);
+		}
+	}
+
+	// Link the module with the intrinsic modules.
+	Compartment* compartment = Runtime::createCompartment();
+	Context* context = Runtime::createContext(compartment);
+	RootResolver rootResolver(compartment);
+
+	Emscripten::Instance* emscriptenInstance = nullptr;
+	if(options.enableEmscripten)
+	{
+		emscriptenInstance = Emscripten::instantiate(compartment, irModule);
+		if(emscriptenInstance)
+		{
+			rootResolver.moduleNameToInstanceMap.set(""env"", emscriptenInstance->env);
+			rootResolver.moduleNameToInstanceMap.set(""asm2wasm"", emscriptenInstance->asm2wasm);
+			rootResolver.moduleNameToInstanceMap.set(""global"", emscriptenInstance->global);
+		}
+	}
+
+	if(options.enableThreadTest)
+	{
+		ModuleInstance* threadTestInstance = ThreadTest::instantiate(compartment);
+		rootResolver.moduleNameToInstanceMap.set(""threadTest"", threadTestInstance);
+	}
+
+	LinkResult linkResult = linkModule(irModule, rootResolver);
+	if(!linkResult.success)
+	{
+		Log::printf(Log::error, ""Failed to link module:\n"");
+		for(auto& missingImport : linkResult.missingImports)
+		{
+			Log::printf(Log::error,
+						""Missing import: module=\""%s\"" export=\""%s\"" type=\""%s\""\n"",
+						missingImport.moduleName.c_str(),
+						missingImport.exportName.c_str(),
+						asString(missingImport.type).c_str());
+		}
+		return EXIT_FAILURE;
+	}
+
+	// Instantiate the module.
+	ModuleInstance* moduleInstance = instantiateModule(
+		compartment, module, std::move(linkResult.resolvedImports), options.filename);
+	if(!moduleInstance) { return EXIT_FAILURE; }
+
+	// Call the module start function, if it has one.
+	FunctionInstance* startFunction = getStartFunction(moduleInstance);
+	if(startFunction) { invokeFunctionChecked(context, startFunction, {}); }
+
+	if(options.enableEmscripten)
+	{
+		// Call the Emscripten global initalizers.
+		Emscripten::initializeGlobals(context, irModule, moduleInstance);
+	}
+
+	// Look up the function export to call.
+	FunctionInstance* functionInstance;
+	if(!options.functionName)
+	{
+		functionInstance = asFunctionNullable(getInstanceExport(moduleInstance, ""main""));
+		if(!functionInstance)
+		{ functionInstance = asFunctionNullable(getInstanceExport(moduleInstance, ""_main"")); }
+		if(!functionInstance)
+		{
+			Log::printf(Log::error, ""Module does not export main function\n"");
+			return EXIT_FAILURE;
+		}
+	}
+	else
+	{
+		functionInstance
+			= asFunctionNullable(getInstanceExport(moduleInstance, options.functionName));
+		if(!functionInstance)
+		{
+			Log::printf(Log::error, ""Module does not export '%s'\n"", options.functionName);
+			return EXIT_FAILURE;
+		}
+	}
+	FunctionType functionType = getFunctionType(functionInstance);
+
+	// Set up the arguments for the invoke.
+	std::vector<Value> invokeArgs;
+	if(!options.functionName)
+	{
+		if(functionType.params().size() == 2)
+		{
+			MemoryInstance* defaultMemory = Runtime::getDefaultMemory(moduleInstance);
+			if(!defaultMemory)
+			{
+				Log::printf(
+					Log::error,
+					""Module does not declare a default memory object to put arguments in.\n"");
+				return EXIT_FAILURE;
+			}
+
+			std::vector<const char*> argStrings;
+			argStrings.push_back(options.filename);
+			char** args = options.args;
+			while(*args) { argStrings.push_back(*args++); };
+
+			Emscripten::injectCommandArgs(emscriptenInstance, argStrings, invokeArgs);
+		}
+		else if(functionType.params().size() > 0)
+		{
+			Log::printf(Log::error,
+						""WebAssembly function requires %"" PRIu64
+						"" argument(s), but only 0 or 2 can be passed!"",
+						functionType.params().size());
+			return EXIT_FAILURE;
+		}
+	}
+	else
+	{
+		for(U32 i = 0; options.args[i]; ++i)
+		{
+			Value value;
+			switch(functionType.params()[i])
+			{
+			case ValueType::i32: value = (U32)atoi(options.args[i]); break;
+			case ValueType::i64: value = (U64)atol(options.args[i]); break;
+			case ValueType::f32: value = (F32)atof(options.args[i]); break;
+			case ValueType::f64: value = atof(options.args[i]); break;
+			case ValueType::v128:
+			case ValueType::anyref:
+			case ValueType::anyfunc:
+				Errors::fatalf(""Cannot parse command-line argument for %s function parameter"",
+							   asString(functionType.params()[i]));
+			default: Errors::unreachable();
+			}
+			invokeArgs.push_back(value);
+		}
+	}
+
+	// Invoke the function.
+	Timing::Timer executionTimer;
+	IR::ValueTuple functionResults = invokeFunctionChecked(context, functionInstance, invokeArgs);
+	Timing::logTimer(""Invoked function"", executionTimer);
+
+	if(options.functionName)
+	{
+		Log::printf(Log::debug,
+					""%s returned: %s\n"",
+					options.functionName,
+					asString(functionResults).c_str());
+		return EXIT_SUCCESS;
+	}
+	else if(functionResults.size() == 1 && functionResults[0].type == ValueType::i32)
+	{
+		return functionResults[0].i32;
+	}
+	else
+	{
+		return EXIT_SUCCESS;
+	}
+}","static int run(const CommandLineOptions& options)
+{
+	IR::Module irModule;
+
+	// Load the module.
+	if(!loadModule(options.filename, irModule)) { return EXIT_FAILURE; }
+	if(options.onlyCheck) { return EXIT_SUCCESS; }
+
+	// Compile the module.
+	Runtime::Module* module = nullptr;
+	if(!options.precompiled) { module = Runtime::compileModule(irModule); }
+	else
+	{
+		const UserSection* precompiledObjectSection = nullptr;
+		for(const UserSection& userSection : irModule.userSections)
+		{
+			if(userSection.name == ""wavm.precompiled_object"")
+			{
+				precompiledObjectSection = &userSection;
+				break;
+			}
+		}
+
+		if(!precompiledObjectSection)
+		{
+			Log::printf(Log::error, ""Input file did not contain 'wavm.precompiled_object' section"");
+			return EXIT_FAILURE;
+		}
+		else
+		{
+			module = Runtime::loadPrecompiledModule(irModule, precompiledObjectSection->data);
+		}
+	}
+
+	// Link the module with the intrinsic modules.
+	Compartment* compartment = Runtime::createCompartment();
+	Context* context = Runtime::createContext(compartment);
+	RootResolver rootResolver(compartment);
+
+	Emscripten::Instance* emscriptenInstance = nullptr;
+	if(options.enableEmscripten)
+	{
+		emscriptenInstance = Emscripten::instantiate(compartment, irModule);
+		if(emscriptenInstance)
+		{
+			rootResolver.moduleNameToInstanceMap.set(""env"", emscriptenInstance->env);
+			rootResolver.moduleNameToInstanceMap.set(""asm2wasm"", emscriptenInstance->asm2wasm);
+			rootResolver.moduleNameToInstanceMap.set(""global"", emscriptenInstance->global);
+		}
+	}
+
+	if(options.enableThreadTest)
+	{
+		ModuleInstance* threadTestInstance = ThreadTest::instantiate(compartment);
+		rootResolver.moduleNameToInstanceMap.set(""threadTest"", threadTestInstance);
+	}
+
+	LinkResult linkResult = linkModule(irModule, rootResolver);
+	if(!linkResult.success)
+	{
+		Log::printf(Log::error, ""Failed to link module:\n"");
+		for(auto& missingImport : linkResult.missingImports)
+		{
+			Log::printf(Log::error,
+						""Missing import: module=\""%s\"" export=\""%s\"" type=\""%s\""\n"",
+						missingImport.moduleName.c_str(),
+						missingImport.exportName.c_str(),
+						asString(missingImport.type).c_str());
+		}
+		return EXIT_FAILURE;
+	}
+
+	// Instantiate the module.
+	ModuleInstance* moduleInstance = instantiateModule(
+		compartment, module, std::move(linkResult.resolvedImports), options.filename);
+	if(!moduleInstance) { return EXIT_FAILURE; }
+
+	// Call the module start function, if it has one.
+	FunctionInstance* startFunction = getStartFunction(moduleInstance);
+	if(startFunction) { invokeFunctionChecked(context, startFunction, {}); }
+
+	if(options.enableEmscripten)
+	{
+		// Call the Emscripten global initalizers.
+		Emscripten::initializeGlobals(context, irModule, moduleInstance);
+	}
+
+	// Look up the function export to call.
+	FunctionInstance* functionInstance;
+	if(!options.functionName)
+	{
+		functionInstance = asFunctionNullable(getInstanceExport(moduleInstance, ""main""));
+		if(!functionInstance)
+		{ functionInstance = asFunctionNullable(getInstanceExport(moduleInstance, ""_main"")); }
+		if(!functionInstance)
+		{
+			Log::printf(Log::error, ""Module does not export main function\n"");
+			return EXIT_FAILURE;
+		}
+	}
+	else
+	{
+		functionInstance
+			= asFunctionNullable(getInstanceExport(moduleInstance, options.functionName));
+		if(!functionInstance)
+		{
+			Log::printf(Log::error, ""Module does not export '%s'\n"", options.functionName);
+			return EXIT_FAILURE;
+		}
+	}
+	FunctionType functionType = getFunctionType(functionInstance);
+
+	// Set up the arguments for the invoke.
+	std::vector<Value> invokeArgs;
+	if(!options.functionName)
+	{
+		if(functionType.params().size() == 2)
+		{
+			if(!emscriptenInstance)
+			{
+				Log::printf(
+					Log::error,
+					""Module does not declare a default memory object to put arguments in.\n"");
+				return EXIT_FAILURE;
+			}
+			else
+			{
+				std::vector<const char*> argStrings;
+				argStrings.push_back(options.filename);
+				char** args = options.args;
+				while(*args) { argStrings.push_back(*args++); };
+
+				wavmAssert(emscriptenInstance);
+				Emscripten::injectCommandArgs(emscriptenInstance, argStrings, invokeArgs);
+			}
+		}
+		else if(functionType.params().size() > 0)
+		{
+			Log::printf(Log::error,
+						""WebAssembly function requires %"" PRIu64
+						"" argument(s), but only 0 or 2 can be passed!"",
+						functionType.params().size());
+			return EXIT_FAILURE;
+		}
+	}
+	else
+	{
+		for(U32 i = 0; options.args[i]; ++i)
+		{
+			Value value;
+			switch(functionType.params()[i])
+			{
+			case ValueType::i32: value = (U32)atoi(options.args[i]); break;
+			case ValueType::i64: value = (U64)atol(options.args[i]); break;
+			case ValueType::f32: value = (F32)atof(options.args[i]); break;
+			case ValueType::f64: value = atof(options.args[i]); break;
+			case ValueType::v128:
+			case ValueType::anyref:
+			case ValueType::anyfunc:
+				Errors::fatalf(""Cannot parse command-line argument for %s function parameter"",
+							   asString(functionType.params()[i]));
+			default: Errors::unreachable();
+			}
+			invokeArgs.push_back(value);
+		}
+	}
+
+	// Invoke the function.
+	Timing::Timer executionTimer;
+	IR::ValueTuple functionResults = invokeFunctionChecked(context, functionInstance, invokeArgs);
+	Timing::logTimer(""Invoked function"", executionTimer);
+
+	if(options.functionName)
+	{
+		Log::printf(Log::debug,
+					""%s returned: %s\n"",
+					options.functionName,
+					asString(functionResults).c_str());
+		return EXIT_SUCCESS;
+	}
+	else if(functionResults.size() == 1 && functionResults[0].type == ValueType::i32)
+	{
+		return functionResults[0].i32;
+	}
+	else
+	{
+		return EXIT_SUCCESS;
+	}
+}",
+2714,"""CWE-476""",sqlcipher,cb71f53e8cea4802509f182fa5bead0ac6ab0e7f,cb71f53e8cea4802509f182fa5bead0ac6ab0e7f,0,521506,2.2620265715441667e+37,,,other,"void sqlcipher_exportFunc(sqlite3_context *context, int argc, sqlite3_value **argv) {
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  const char* targetDb, *sourceDb; 
+  int targetDb_idx = 0;
+  u64 saved_flags = db->flags;        /* Saved value of the db->flags */
+  u32 saved_mDbFlags = db->mDbFlags;        /* Saved value of the db->mDbFlags */
+  int saved_nChange = db->nChange;      /* Saved value of db->nChange */
+  int saved_nTotalChange = db->nTotalChange; /* Saved value of db->nTotalChange */
+  u8 saved_mTrace = db->mTrace;        /* Saved value of db->mTrace */
+  int rc = SQLITE_OK;     /* Return code from service routines */
+  char *zSql = NULL;         /* SQL statements */
+  char *pzErrMsg = NULL;
+
+  if(argc != 1 && argc != 2) {
+    rc = SQLITE_ERROR;
+    pzErrMsg = sqlite3_mprintf(""invalid number of arguments (%d) passed to sqlcipher_export"", argc);
+    goto end_of_export;
+  }
+
+  targetDb = (const char*) sqlite3_value_text(argv[0]);
+  sourceDb = (argc == 2) ? (char *) sqlite3_value_text(argv[1]) : ""main"";
+
+  /* if the name of the target is not main, but the index returned is zero 
+     there is a mismatch and we should not proceed */
+  targetDb_idx =  sqlcipher_find_db_index(db, targetDb);
+  if(targetDb_idx == 0 && sqlite3StrICmp(""main"", targetDb) != 0) {
+    rc = SQLITE_ERROR;
+    pzErrMsg = sqlite3_mprintf(""unknown database %s"", targetDb);
+    goto end_of_export;
+  }
+  db->init.iDb = targetDb_idx;
+
+  db->flags |= SQLITE_WriteSchema | SQLITE_IgnoreChecks; 
+  db->mDbFlags |= DBFLAG_PreferBuiltin | DBFLAG_Vacuum;
+  db->flags &= ~(u64)(SQLITE_ForeignKeys | SQLITE_ReverseOrder | SQLITE_Defensive | SQLITE_CountRows); 
+  db->mTrace = 0;
+
+  /* Query the schema of the main database. Create a mirror schema
+  ** in the temporary database.
+  */
+  zSql = sqlite3_mprintf(
+    ""SELECT sql ""
+    ""  FROM %s.sqlite_master WHERE type='table' AND name!='sqlite_sequence'""
+    ""   AND rootpage>0""
+  , sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  zSql = sqlite3_mprintf(
+    ""SELECT sql ""
+    ""  FROM %s.sqlite_master WHERE sql LIKE 'CREATE INDEX %%' ""
+  , sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  zSql = sqlite3_mprintf(
+    ""SELECT sql ""
+    ""  FROM %s.sqlite_master WHERE sql LIKE 'CREATE UNIQUE INDEX %%'""
+  , sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  /* Loop through the tables in the main database. For each, do
+  ** an ""INSERT INTO rekey_db.xxx SELECT * FROM main.xxx;"" to copy
+  ** the contents to the temporary database.
+  */
+  zSql = sqlite3_mprintf(
+    ""SELECT 'INSERT INTO %s.' || quote(name) ""
+    ""|| ' SELECT * FROM %s.' || quote(name) || ';'""
+    ""FROM %s.sqlite_master ""
+    ""WHERE type = 'table' AND name!='sqlite_sequence' ""
+    ""  AND rootpage>0""
+  , targetDb, sourceDb, sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  /* Copy over the contents of the sequence table
+  */
+  zSql = sqlite3_mprintf(
+    ""SELECT 'INSERT INTO %s.' || quote(name) ""
+    ""|| ' SELECT * FROM %s.' || quote(name) || ';' ""
+    ""FROM %s.sqlite_master WHERE name=='sqlite_sequence';""
+  , targetDb, sourceDb, targetDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  /* Copy the triggers, views, and virtual tables from the main database
+  ** over to the temporary database.  None of these objects has any
+  ** associated storage, so all we have to do is copy their entries
+  ** from the SQLITE_MASTER table.
+  */
+  zSql = sqlite3_mprintf(
+    ""INSERT INTO %s.sqlite_master ""
+    ""  SELECT type, name, tbl_name, rootpage, sql""
+    ""    FROM %s.sqlite_master""
+    ""   WHERE type='view' OR type='trigger'""
+    ""      OR (type='table' AND rootpage=0)""
+  , targetDb, sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  zSql = NULL;
+end_of_export:
+  db->init.iDb = 0;
+  db->flags = saved_flags;
+  db->mDbFlags = saved_mDbFlags;
+  db->nChange = saved_nChange;
+  db->nTotalChange = saved_nTotalChange;
+  db->mTrace = saved_mTrace;
+
+  if(zSql) sqlite3_free(zSql);
+
+  if(rc) {
+    if(pzErrMsg != NULL) {
+      sqlite3_result_error(context, pzErrMsg, -1);
+      sqlite3DbFree(db, pzErrMsg);
+    } else {
+      sqlite3_result_error(context, sqlite3ErrStr(rc), -1);
+    }
+  }
+}","void sqlcipher_exportFunc(sqlite3_context *context, int argc, sqlite3_value **argv) {
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  const char* targetDb, *sourceDb; 
+  int targetDb_idx = 0;
+  u64 saved_flags = db->flags;        /* Saved value of the db->flags */
+  u32 saved_mDbFlags = db->mDbFlags;        /* Saved value of the db->mDbFlags */
+  int saved_nChange = db->nChange;      /* Saved value of db->nChange */
+  int saved_nTotalChange = db->nTotalChange; /* Saved value of db->nTotalChange */
+  u8 saved_mTrace = db->mTrace;        /* Saved value of db->mTrace */
+  int rc = SQLITE_OK;     /* Return code from service routines */
+  char *zSql = NULL;         /* SQL statements */
+  char *pzErrMsg = NULL;
+
+  if(argc != 1 && argc != 2) {
+    rc = SQLITE_ERROR;
+    pzErrMsg = sqlite3_mprintf(""invalid number of arguments (%d) passed to sqlcipher_export"", argc);
+    goto end_of_export;
+  }
+
+  if(sqlite3_value_type(argv[0]) == SQLITE_NULL) {
+    rc = SQLITE_ERROR;
+    pzErrMsg = sqlite3_mprintf(""target database can't be NULL"");
+    goto end_of_export;
+  }
+
+  targetDb = (const char*) sqlite3_value_text(argv[0]); 
+  sourceDb = ""main"";
+
+  if(argc == 2) {
+    if(sqlite3_value_type(argv[1]) == SQLITE_NULL) {
+      rc = SQLITE_ERROR;
+      pzErrMsg = sqlite3_mprintf(""target database can't be NULL"");
+      goto end_of_export;
+    }
+    sourceDb = (char *) sqlite3_value_text(argv[1]);
+  }
+
+
+  /* if the name of the target is not main, but the index returned is zero 
+     there is a mismatch and we should not proceed */
+  targetDb_idx =  sqlcipher_find_db_index(db, targetDb);
+  if(targetDb_idx == 0 && targetDb != NULL && sqlite3StrICmp(""main"", targetDb) != 0) {
+    rc = SQLITE_ERROR;
+    pzErrMsg = sqlite3_mprintf(""unknown database %s"", targetDb);
+    goto end_of_export;
+  }
+  db->init.iDb = targetDb_idx;
+
+  db->flags |= SQLITE_WriteSchema | SQLITE_IgnoreChecks; 
+  db->mDbFlags |= DBFLAG_PreferBuiltin | DBFLAG_Vacuum;
+  db->flags &= ~(u64)(SQLITE_ForeignKeys | SQLITE_ReverseOrder | SQLITE_Defensive | SQLITE_CountRows); 
+  db->mTrace = 0;
+
+  /* Query the schema of the main database. Create a mirror schema
+  ** in the temporary database.
+  */
+  zSql = sqlite3_mprintf(
+    ""SELECT sql ""
+    ""  FROM %s.sqlite_master WHERE type='table' AND name!='sqlite_sequence'""
+    ""   AND rootpage>0""
+  , sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  zSql = sqlite3_mprintf(
+    ""SELECT sql ""
+    ""  FROM %s.sqlite_master WHERE sql LIKE 'CREATE INDEX %%' ""
+  , sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  zSql = sqlite3_mprintf(
+    ""SELECT sql ""
+    ""  FROM %s.sqlite_master WHERE sql LIKE 'CREATE UNIQUE INDEX %%'""
+  , sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  /* Loop through the tables in the main database. For each, do
+  ** an ""INSERT INTO rekey_db.xxx SELECT * FROM main.xxx;"" to copy
+  ** the contents to the temporary database.
+  */
+  zSql = sqlite3_mprintf(
+    ""SELECT 'INSERT INTO %s.' || quote(name) ""
+    ""|| ' SELECT * FROM %s.' || quote(name) || ';'""
+    ""FROM %s.sqlite_master ""
+    ""WHERE type = 'table' AND name!='sqlite_sequence' ""
+    ""  AND rootpage>0""
+  , targetDb, sourceDb, sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  /* Copy over the contents of the sequence table
+  */
+  zSql = sqlite3_mprintf(
+    ""SELECT 'INSERT INTO %s.' || quote(name) ""
+    ""|| ' SELECT * FROM %s.' || quote(name) || ';' ""
+    ""FROM %s.sqlite_master WHERE name=='sqlite_sequence';""
+  , targetDb, sourceDb, targetDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execExecSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  /* Copy the triggers, views, and virtual tables from the main database
+  ** over to the temporary database.  None of these objects has any
+  ** associated storage, so all we have to do is copy their entries
+  ** from the SQLITE_MASTER table.
+  */
+  zSql = sqlite3_mprintf(
+    ""INSERT INTO %s.sqlite_master ""
+    ""  SELECT type, name, tbl_name, rootpage, sql""
+    ""    FROM %s.sqlite_master""
+    ""   WHERE type='view' OR type='trigger'""
+    ""      OR (type='table' AND rootpage=0)""
+  , targetDb, sourceDb);
+  rc = (zSql == NULL) ? SQLITE_NOMEM : sqlcipher_execSql(db, &pzErrMsg, zSql); 
+  if( rc!=SQLITE_OK ) goto end_of_export;
+  sqlite3_free(zSql);
+
+  zSql = NULL;
+end_of_export:
+  db->init.iDb = 0;
+  db->flags = saved_flags;
+  db->mDbFlags = saved_mDbFlags;
+  db->nChange = saved_nChange;
+  db->nTotalChange = saved_nTotalChange;
+  db->mTrace = saved_mTrace;
+
+  if(zSql) sqlite3_free(zSql);
+
+  if(rc) {
+    if(pzErrMsg != NULL) {
+      sqlite3_result_error(context, pzErrMsg, -1);
+      sqlite3DbFree(db, pzErrMsg);
+    } else {
+      sqlite3_result_error(context, sqlite3ErrStr(rc), -1);
+    }
+  }
+}",

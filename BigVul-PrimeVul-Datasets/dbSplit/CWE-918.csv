@@ -1,0 +1,640 @@
+,Unnamed: 0,Access Gained,Attack Origin,Authentication Required,Availability,CVE ID,CVE Page,CWE ID,Complexity,Confidentiality,Integrity,Known Exploits,Publish Date,Score,Summary,Update Date,Vulnerability Classification,add_lines,codeLink,commit_id,commit_message,del_lines,file_name,files_changed,func_after,func_before,lang,lines_after,lines_before,parentID,patch,project,project_after,project_before,vul,vul_func_with_fix
+3725,181461,,Remote,Not required,,CVE-2017-7272,https://www.cvedetails.com/cve/CVE-2017-7272/,CWE-918,Medium,Partial,Partial,,2017-03-27,5.8,"PHP through 7.1.11 enables potential SSRF in applications that accept an fsockopen or pfsockopen hostname argument with an expectation that the port number is constrained. Because a :port syntax is recognized, fsockopen will use the port number that is specified in the hostname argument, instead of the port number in the second argument of the function.",2018-02-25,,18,https://github.com/php/php-src/commit/bab0b99f376dac9170ac81382a5ed526938d595a,bab0b99f376dac9170ac81382a5ed526938d595a,"Detect invalid port in xp_socket parse ip address
+
+For historical reasons, fsockopen() accepts the port and hostname
+separately: fsockopen('127.0.0.1', 80)
+
+However, with the introdcution of stream transports in PHP 4.3,
+it became possible to include the port in the hostname specifier:
+
+fsockopen('127.0.0.1:80')
+Or more formally: fsockopen('tcp://127.0.0.1:80')
+
+Confusing results when these two forms are combined, however.
+fsockopen('127.0.0.1:80', 443) results in fsockopen() attempting
+to connect to '127.0.0.1:80:443' which any reasonable stack would
+consider invalid.
+
+Unfortunately, PHP parses the address looking for the first colon
+(with special handling for IPv6, don't worry) and calls atoi()
+from there.  atoi() in turn, simply stops parsing at the first
+non-numeric character and returns the value so far.
+
+The end result is that the explicitly supplied port is treated
+as ignored garbage, rather than producing an error.
+
+This diff replaces atoi() with strtol() and inspects the
+stop character.  If additional ""garbage"" of any kind is found,
+it fails and returns an error.",10,main/streams/xp_socket.c,"{""sha"": ""594756db6b7cd43d0a2c6e93cb5ab2686ac1507f"", ""filename"": ""ext/standard/tests/streams/parseip-001.phpt"", ""status"": ""added"", ""additions"": 37, ""deletions"": 0, ""changes"": 37, ""blob_url"": ""https://github.com/php/php-src/blob/bab0b99f376dac9170ac81382a5ed526938d595a/ext/standard/tests/streams/parseip-001.phpt"", ""raw_url"": ""https://github.com/php/php-src/raw/bab0b99f376dac9170ac81382a5ed526938d595a/ext/standard/tests/streams/parseip-001.phpt"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/ext/standard/tests/streams/parseip-001.phpt?ref=bab0b99f376dac9170ac81382a5ed526938d595a"", ""patch"": ""@@ -0,0 +1,37 @@\n+--TEST--\n+Use of double-port in fsockopen()\n+--FILE--\n+<?php\n+\n+$try = [\n+  '127.0.0.1:80',\n+  'tcp://127.0.0.1:80',\n+  '[::1]:80',\n+  'tcp://[::1]:80',\n+  'localhost:80',\n+  'tcp://localhost:80',\n+];\n+\n+foreach ($try as $addr) {\n+  echo \""== $addr ==\\n\"";\n+  var_dump(@fsockopen($addr, 81, $errno, $errstr), $errstr);\n+}\n+--EXPECTF--\n+== 127.0.0.1:80 ==\n+bool(false)\n+string(41) \""Failed to parse address \""127.0.0.1:80:81\""\""\n+== tcp://127.0.0.1:80 ==\n+bool(false)\n+string(41) \""Failed to parse address \""127.0.0.1:80:81\""\""\n+== [::1]:80 ==\n+bool(false)\n+string(37) \""Failed to parse address \""[::1]:80:81\""\""\n+== tcp://[::1]:80 ==\n+bool(false)\n+string(37) \""Failed to parse address \""[::1]:80:81\""\""\n+== localhost:80 ==\n+bool(false)\n+string(41) \""Failed to parse address \""localhost:80:81\""\""\n+== tcp://localhost:80 ==\n+bool(false)\n+string(41) \""Failed to parse address \""localhost:80:81\""\""\n\\ No newline at end of file""}<_**next**_>{""sha"": ""3ff64787aa147968261ad03c2daf85920784be81"", ""filename"": ""main/streams/xp_socket.c"", ""status"": ""modified"", ""additions"": 18, ""deletions"": 11, ""changes"": 29, ""blob_url"": ""https://github.com/php/php-src/blob/bab0b99f376dac9170ac81382a5ed526938d595a/main/streams/xp_socket.c"", ""raw_url"": ""https://github.com/php/php-src/raw/bab0b99f376dac9170ac81382a5ed526938d595a/main/streams/xp_socket.c"", ""contents_url"": ""https://api.github.com/repos/php/php-src/contents/main/streams/xp_socket.c?ref=bab0b99f376dac9170ac81382a5ed526938d595a"", ""patch"": ""@@ -571,37 +571,44 @@ static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *po\n \tchar *host = NULL;\n \n #ifdef HAVE_IPV6\n-\tchar *p;\n-\n \tif (*(str) == '[' && str_len > 1) {\n \t\t/* IPV6 notation to specify raw address with port (i.e. [fe80::1]:80) */\n-\t\tp = memchr(str + 1, ']', str_len - 2);\n+\t\tchar *p = memchr(str + 1, ']', str_len - 2), *e = NULL;\n \t\tif (!p || *(p + 1) != ':') {\n \t\t\tif (get_err) {\n \t\t\t\t*err = strpprintf(0, \""Failed to parse IPv6 address \\\""%s\\\""\"", str);\n \t\t\t}\n \t\t\treturn NULL;\n \t\t}\n-\t\t*portno = atoi(p + 2);\n+\t\t*portno = strtol(p + 2, &e, 10);\n+\t\tif (e && *e) {\n+\t\t\tif (get_err) {\n+\t\t\t\t*err = strpprintf(0, \""Failed to parse address \\\""%s\\\""\"", str);\n+\t\t\t}\n+\t\t\treturn NULL;\n+\t\t}\n \t\treturn estrndup(str + 1, p - str - 1);\n \t}\n #endif\n+\n \tif (str_len) {\n \t\tcolon = memchr(str, ':', str_len - 1);\n \t} else {\n \t\tcolon = NULL;\n \t}\n+\n \tif (colon) {\n-\t\t*portno = atoi(colon + 1);\n-\t\thost = estrndup(str, colon - str);\n-\t} else {\n-\t\tif (get_err) {\n-\t\t\t*err = strpprintf(0, \""Failed to parse address \\\""%s\\\""\"", str);\n+\t\tchar *e = NULL;\n+\t\t*portno = strtol(colon + 1, &e, 10);\n+\t\tif (!e || !*e) {\n+\t\t\treturn estrndup(str, colon - str);\n \t\t}\n-\t\treturn NULL;\n \t}\n \n-\treturn host;\n+\tif (get_err) {\n+\t\t*err = strpprintf(0, \""Failed to parse address \\\""%s\\\""\"", str);\n+\t}\n+\treturn NULL;\n }\n \n static inline char *parse_ip_address(php_stream_xport_param *xparam, int *portno)""}","static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *portno, int get_err, zend_string **err)
+{
+	char *colon;
+ 	char *host = NULL;
+ 
+ #ifdef HAVE_IPV6
+ 	if (*(str) == '[' && str_len > 1) {
+ 		/* IPV6 notation to specify raw address with port (i.e. [fe80::1]:80) */
+		char *p = memchr(str + 1, ']', str_len - 2), *e = NULL;
+ 		if (!p || *(p + 1) != ':') {
+ 			if (get_err) {
+ 				*err = strpprintf(0, ""Failed to parse IPv6 address \""%s\"""", str);
+ 			}
+ 			return NULL;
+ 		}
+		*portno = strtol(p + 2, &e, 10);
+		if (e && *e) {
+			if (get_err) {
+				*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+			}
+			return NULL;
+		}
+ 		return estrndup(str + 1, p - str - 1);
+ 	}
+ #endif
+
+ 	if (str_len) {
+ 		colon = memchr(str, ':', str_len - 1);
+ 	} else {
+ 		colon = NULL;
+ 	}
+
+ 	if (colon) {
+		char *e = NULL;
+		*portno = strtol(colon + 1, &e, 10);
+		if (!e || !*e) {
+			return estrndup(str, colon - str);
+ 		}
+ 	}
+ 
+	if (get_err) {
+		*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+	}
+	return NULL;
+ }
+","static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *portno, int get_err, zend_string **err)
+{
+	char *colon;
+ 	char *host = NULL;
+ 
+ #ifdef HAVE_IPV6
+	char *p;
+ 	if (*(str) == '[' && str_len > 1) {
+ 		/* IPV6 notation to specify raw address with port (i.e. [fe80::1]:80) */
+		p = memchr(str + 1, ']', str_len - 2);
+ 		if (!p || *(p + 1) != ':') {
+ 			if (get_err) {
+ 				*err = strpprintf(0, ""Failed to parse IPv6 address \""%s\"""", str);
+ 			}
+ 			return NULL;
+ 		}
+		*portno = atoi(p + 2);
+ 		return estrndup(str + 1, p - str - 1);
+ 	}
+ #endif
+ 	if (str_len) {
+ 		colon = memchr(str, ':', str_len - 1);
+ 	} else {
+ 		colon = NULL;
+ 	}
+ 	if (colon) {
+		*portno = atoi(colon + 1);
+		host = estrndup(str, colon - str);
+	} else {
+		if (get_err) {
+			*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+ 		}
+		return NULL;
+ 	}
+ 
+	return host;
+ }
+",C,"		char *p = memchr(str + 1, ']', str_len - 2), *e = NULL;
+		*portno = strtol(p + 2, &e, 10);
+		if (e && *e) {
+			if (get_err) {
+				*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+			}
+			return NULL;
+		}
+
+
+		char *e = NULL;
+		*portno = strtol(colon + 1, &e, 10);
+		if (!e || !*e) {
+			return estrndup(str, colon - str);
+	if (get_err) {
+		*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+	}
+	return NULL;
+","	char *p;
+		p = memchr(str + 1, ']', str_len - 2);
+		*portno = atoi(p + 2);
+		*portno = atoi(colon + 1);
+		host = estrndup(str, colon - str);
+	} else {
+		if (get_err) {
+			*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+		return NULL;
+	return host;
+",,"@@ -571,37 +571,44 @@ static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *po
+ 	char *host = NULL;
+ 
+ #ifdef HAVE_IPV6
+-	char *p;
+-
+ 	if (*(str) == '[' && str_len > 1) {
+ 		/* IPV6 notation to specify raw address with port (i.e. [fe80::1]:80) */
+-		p = memchr(str + 1, ']', str_len - 2);
++		char *p = memchr(str + 1, ']', str_len - 2), *e = NULL;
+ 		if (!p || *(p + 1) != ':') {
+ 			if (get_err) {
+ 				*err = strpprintf(0, ""Failed to parse IPv6 address \""%s\"""", str);
+ 			}
+ 			return NULL;
+ 		}
+-		*portno = atoi(p + 2);
++		*portno = strtol(p + 2, &e, 10);
++		if (e && *e) {
++			if (get_err) {
++				*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
++			}
++			return NULL;
++		}
+ 		return estrndup(str + 1, p - str - 1);
+ 	}
+ #endif
++
+ 	if (str_len) {
+ 		colon = memchr(str, ':', str_len - 1);
+ 	} else {
+ 		colon = NULL;
+ 	}
++
+ 	if (colon) {
+-		*portno = atoi(colon + 1);
+-		host = estrndup(str, colon - str);
+-	} else {
+-		if (get_err) {
+-			*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
++		char *e = NULL;
++		*portno = strtol(colon + 1, &e, 10);
++		if (!e || !*e) {
++			return estrndup(str, colon - str);
+ 		}
+-		return NULL;
+ 	}
+ 
+-	return host;
++	if (get_err) {
++		*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
++	}
++	return NULL;
+ }
+ 
+ static inline char *parse_ip_address(php_stream_xport_param *xparam, int *portno)",php-src,bab0b99f376dac9170ac81382a5ed526938d595a,549a30d2cd7756abc5f5116dfebe217098ade5c5,1,"static inline char *parse_ip_address_ex(const char *str, size_t str_len, int *portno, int get_err, zend_string **err)
+{
+	char *colon;
+ 	char *host = NULL;
+ 
+ #ifdef HAVE_IPV6
+//flaw_line_below:
+	char *p;
+//flaw_line_below:
+
+ 	if (*(str) == '[' && str_len > 1) {
+ 		/* IPV6 notation to specify raw address with port (i.e. [fe80::1]:80) */
+//flaw_line_below:
+		p = memchr(str + 1, ']', str_len - 2);
+//fix_flaw_line_below:
+//		char *p = memchr(str + 1, ']', str_len - 2), *e = NULL;
+ 		if (!p || *(p + 1) != ':') {
+ 			if (get_err) {
+ 				*err = strpprintf(0, ""Failed to parse IPv6 address \""%s\"""", str);
+ 			}
+ 			return NULL;
+ 		}
+//flaw_line_below:
+		*portno = atoi(p + 2);
+//fix_flaw_line_below:
+//		*portno = strtol(p + 2, &e, 10);
+//fix_flaw_line_below:
+//		if (e && *e) {
+//fix_flaw_line_below:
+//			if (get_err) {
+//fix_flaw_line_below:
+//				*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+//fix_flaw_line_below:
+//			}
+//fix_flaw_line_below:
+//			return NULL;
+//fix_flaw_line_below:
+//		}
+ 		return estrndup(str + 1, p - str - 1);
+ 	}
+ #endif
+//fix_flaw_line_below:
+//
+ 	if (str_len) {
+ 		colon = memchr(str, ':', str_len - 1);
+ 	} else {
+ 		colon = NULL;
+ 	}
+//fix_flaw_line_below:
+//
+ 	if (colon) {
+//flaw_line_below:
+		*portno = atoi(colon + 1);
+//flaw_line_below:
+		host = estrndup(str, colon - str);
+//flaw_line_below:
+	} else {
+//flaw_line_below:
+		if (get_err) {
+//flaw_line_below:
+			*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+//fix_flaw_line_below:
+//		char *e = NULL;
+//fix_flaw_line_below:
+//		*portno = strtol(colon + 1, &e, 10);
+//fix_flaw_line_below:
+//		if (!e || !*e) {
+//fix_flaw_line_below:
+//			return estrndup(str, colon - str);
+ 		}
+//flaw_line_below:
+		return NULL;
+ 	}
+ 
+//flaw_line_below:
+	return host;
+//fix_flaw_line_below:
+//	if (get_err) {
+//fix_flaw_line_below:
+//		*err = strpprintf(0, ""Failed to parse address \""%s\"""", str);
+//fix_flaw_line_below:
+//	}
+//fix_flaw_line_below:
+//	return NULL;
+ }
+"
+4976,182712,,Remote,Not required,,CVE-2019-15164,https://www.cvedetails.com/cve/CVE-2019-15164/,CWE-918,Low,,Partial,,2019-10-03,5.0,rpcapd/daemon.c in libpcap before 1.9.1 allows SSRF because a URL may be provided as a capture source.,2019-10-10,,7,https://github.com/the-tcpdump-group/libpcap/commit/33834cb2a4d035b52aa2a26742f832a112e90a0a,33834cb2a4d035b52aa2a26742f832a112e90a0a,"In the open request, reject capture sources that are URLs.
+
+You shouldn't be able to ask a server to open a remote device on some
+*other* server; just open it yourself.
+
+This addresses Include Security issue F13: [libpcap] Remote Packet
+Capture Daemon Allows Opening Capture URLs.",0,rpcapd/daemon.c,"{""sha"": ""635d3195051da51264343a3dcde55a8afb2c2a9d"", ""filename"": ""rpcapd/daemon.c"", ""status"": ""modified"", ""additions"": 72, ""deletions"": 2, ""changes"": 74, ""blob_url"": ""https://github.com/the-tcpdump-group/libpcap/blob/33834cb2a4d035b52aa2a26742f832a112e90a0a/rpcapd/daemon.c"", ""raw_url"": ""https://github.com/the-tcpdump-group/libpcap/raw/33834cb2a4d035b52aa2a26742f832a112e90a0a/rpcapd/daemon.c"", ""contents_url"": ""https://api.github.com/repos/the-tcpdump-group/libpcap/contents/rpcapd/daemon.c?ref=33834cb2a4d035b52aa2a26742f832a112e90a0a"", ""patch"": ""@@ -156,6 +156,8 @@ static int rpcapd_recv(SOCKET sock, char *buffer, size_t toread, uint32 *plen, c\n static int rpcapd_discard(SOCKET sock, uint32 len);\n static void session_close(struct session *);\n \n+static int is_url(const char *source);\n+\n int\n daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,\n     int nullAuthAllowed)\n@@ -1554,8 +1556,13 @@ daemon_msg_open_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,\n \tsource[nread] = '\\0';\n \tplen -= nread;\n \n-\t// XXX - make sure it's *not* a URL; we don't support opening\n-\t// remote devices here.\n+\t// Is this a URL rather than a device?\n+\t// If so, reject it.\n+\tif (is_url(source))\n+\t{\n+\t\tpcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, \""Source string refers to a remote device\"");\n+\t\tgoto error;\n+\t}\n \n \t// Open the selected device\n \t// This is a fake open, since we do that only to get the needed parameters, then we close the device again\n@@ -2647,3 +2654,66 @@ static void session_close(struct session *session)\n \t\tsession->fp = NULL;\n \t}\n }\n+\n+// Check whether a capture source string is a URL or not.\n+// This includes URLs that refer to a local device; a scheme, followed\n+// by ://, followed by *another* scheme and ://, is just silly, and\n+// anybody who supplies that will get an error.\n+//\n+static int\n+is_url(const char *source)\n+{\n+\tchar *colonp;\n+\n+\t/*\n+\t * RFC 3986 says:\n+\t *\n+\t *   URI         = scheme \"":\"" hier-part [ \""?\"" query ] [ \""#\"" fragment ]\n+\t *\n+\t *   hier-part   = \""//\"" authority path-abempty\n+\t *               / path-absolute\n+\t *               / path-rootless\n+\t *               / path-empty\n+\t *\n+\t *   authority   = [ userinfo \""@\"" ] host [ \"":\"" port ]\n+\t *\n+\t *   userinfo    = *( unreserved / pct-encoded / sub-delims / \"":\"" )\n+\t *\n+\t * Step 1: look for the \"":\"" at the end of the scheme.\n+\t * A colon in the source is *NOT* sufficient to indicate that\n+\t * this is a URL, as interface names on some platforms might\n+\t * include colons (e.g., I think some Solaris interfaces\n+\t * might).\n+\t */\n+\tcolonp = strchr(source, ':');\n+\tif (colonp == NULL)\n+\t{\n+\t\t/*\n+\t\t * The source is the device to open.  It's not a URL.\n+\t\t */\n+\t\treturn (0);\n+\t}\n+\n+\t/*\n+\t * All schemes must have \""//\"" after them, i.e. we only support\n+\t * hier-part   = \""//\"" authority path-abempty, not\n+\t * hier-part   = path-absolute\n+\t * hier-part   = path-rootless\n+\t * hier-part   = path-empty\n+\t *\n+\t * We need that in order to distinguish between a local device\n+\t * name that happens to contain a colon and a URI.\n+\t */\n+\tif (strncmp(colonp + 1, \""//\"", 2) != 0)\n+\t{\n+\t\t/*\n+\t\t * The source is the device to open.  It's not a URL.\n+\t\t */\n+\t\treturn (0);\n+\t}\n+\n+\t/*\n+\t * It's a URL.\n+\t */\n+\treturn (1);\n+}""}","daemon_msg_open_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,
+    char *source, size_t sourcelen)
+{
+	char errbuf[PCAP_ERRBUF_SIZE];		// buffer for network errors
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to send to the client
+	pcap_t *fp;				// pcap_t main variable
+	int nread;
+	char sendbuf[RPCAP_NETBUF_SIZE];	// temporary buffer in which data to be sent is buffered
+	int sendbufidx = 0;			// index which keeps the number of bytes currently buffered
+	struct rpcap_openreply *openreply;	// open reply message
+
+	if (plen > sourcelen - 1)
+	{
+		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string too long"");
+		goto error;
+	}
+
+	nread = sock_recv(pars->sockctrl, source, plen,
+	    SOCK_RECEIVEALL_YES|SOCK_EOF_IS_ERROR, errbuf, PCAP_ERRBUF_SIZE);
+	if (nread == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Read from client failed: %s"", errbuf);
+		return -1;
+	}
+ 	source[nread] = '\0';
+ 	plen -= nread;
+ 
+	// Is this a URL rather than a device?
+	// If so, reject it.
+	if (is_url(source))
+	{
+		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string refers to a remote device"");
+		goto error;
+	}
+ 
+	if ((fp = pcap_open_live(source,
+			1500 /* fake snaplen */,
+			0 /* no promis */,
+			1000 /* fake timeout */,
+			errmsgbuf)) == NULL)
+		goto error;
+
+	if (sock_bufferize(NULL, sizeof(struct rpcap_header), NULL, &sendbufidx,
+	    RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
+		goto error;
+
+	rpcap_createhdr((struct rpcap_header *) sendbuf, ver,
+	    RPCAP_MSG_OPEN_REPLY, 0, sizeof(struct rpcap_openreply));
+
+	openreply = (struct rpcap_openreply *) &sendbuf[sendbufidx];
+
+	if (sock_bufferize(NULL, sizeof(struct rpcap_openreply), NULL, &sendbufidx,
+	    RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
+		goto error;
+
+	memset(openreply, 0, sizeof(struct rpcap_openreply));
+	openreply->linktype = htonl(pcap_datalink(fp));
+	openreply->tzoff = 0; /* This is always 0 for live captures */
+
+	pcap_close(fp);
+
+	if (sock_send(pars->sockctrl, sendbuf, sendbufidx, errbuf, PCAP_ERRBUF_SIZE) == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Send to client failed: %s"", errbuf);
+		return -1;
+	}
+	return 0;
+
+error:
+	if (rpcap_senderror(pars->sockctrl, ver, PCAP_ERR_OPEN,
+	    errmsgbuf, errbuf) == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Send to client failed: %s"", errbuf);
+		return -1;
+	}
+
+	if (rpcapd_discard(pars->sockctrl, plen) == -1)
+	{
+		return -1;
+	}
+	return 0;
+}
+","daemon_msg_open_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,
+    char *source, size_t sourcelen)
+{
+	char errbuf[PCAP_ERRBUF_SIZE];		// buffer for network errors
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to send to the client
+	pcap_t *fp;				// pcap_t main variable
+	int nread;
+	char sendbuf[RPCAP_NETBUF_SIZE];	// temporary buffer in which data to be sent is buffered
+	int sendbufidx = 0;			// index which keeps the number of bytes currently buffered
+	struct rpcap_openreply *openreply;	// open reply message
+
+	if (plen > sourcelen - 1)
+	{
+		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string too long"");
+		goto error;
+	}
+
+	nread = sock_recv(pars->sockctrl, source, plen,
+	    SOCK_RECEIVEALL_YES|SOCK_EOF_IS_ERROR, errbuf, PCAP_ERRBUF_SIZE);
+	if (nread == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Read from client failed: %s"", errbuf);
+		return -1;
+	}
+ 	source[nread] = '\0';
+ 	plen -= nread;
+ 
+ 
+	if ((fp = pcap_open_live(source,
+			1500 /* fake snaplen */,
+			0 /* no promis */,
+			1000 /* fake timeout */,
+			errmsgbuf)) == NULL)
+		goto error;
+
+	if (sock_bufferize(NULL, sizeof(struct rpcap_header), NULL, &sendbufidx,
+	    RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
+		goto error;
+
+	rpcap_createhdr((struct rpcap_header *) sendbuf, ver,
+	    RPCAP_MSG_OPEN_REPLY, 0, sizeof(struct rpcap_openreply));
+
+	openreply = (struct rpcap_openreply *) &sendbuf[sendbufidx];
+
+	if (sock_bufferize(NULL, sizeof(struct rpcap_openreply), NULL, &sendbufidx,
+	    RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
+		goto error;
+
+	memset(openreply, 0, sizeof(struct rpcap_openreply));
+	openreply->linktype = htonl(pcap_datalink(fp));
+	openreply->tzoff = 0; /* This is always 0 for live captures */
+
+	pcap_close(fp);
+
+	if (sock_send(pars->sockctrl, sendbuf, sendbufidx, errbuf, PCAP_ERRBUF_SIZE) == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Send to client failed: %s"", errbuf);
+		return -1;
+	}
+	return 0;
+
+error:
+	if (rpcap_senderror(pars->sockctrl, ver, PCAP_ERR_OPEN,
+	    errmsgbuf, errbuf) == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Send to client failed: %s"", errbuf);
+		return -1;
+	}
+
+	if (rpcapd_discard(pars->sockctrl, plen) == -1)
+	{
+		return -1;
+	}
+	return 0;
+}
+",C,"	// Is this a URL rather than a device?
+	// If so, reject it.
+	if (is_url(source))
+	{
+		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string refers to a remote device"");
+		goto error;
+	}
+",,,"@@ -156,6 +156,8 @@ static int rpcapd_recv(SOCKET sock, char *buffer, size_t toread, uint32 *plen, c
+ static int rpcapd_discard(SOCKET sock, uint32 len);
+ static void session_close(struct session *);
+ 
++static int is_url(const char *source);
++
+ int
+ daemon_serviceloop(SOCKET sockctrl, int isactive, char *passiveClients,
+     int nullAuthAllowed)
+@@ -1554,8 +1556,13 @@ daemon_msg_open_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,
+ 	source[nread] = '\0';
+ 	plen -= nread;
+ 
+-	// XXX - make sure it's *not* a URL; we don't support opening
+-	// remote devices here.
++	// Is this a URL rather than a device?
++	// If so, reject it.
++	if (is_url(source))
++	{
++		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string refers to a remote device"");
++		goto error;
++	}
+ 
+ 	// Open the selected device
+ 	// This is a fake open, since we do that only to get the needed parameters, then we close the device again
+@@ -2647,3 +2654,66 @@ static void session_close(struct session *session)
+ 		session->fp = NULL;
+ 	}
+ }
++
++// Check whether a capture source string is a URL or not.
++// This includes URLs that refer to a local device; a scheme, followed
++// by ://, followed by *another* scheme and ://, is just silly, and
++// anybody who supplies that will get an error.
++//
++static int
++is_url(const char *source)
++{
++	char *colonp;
++
++	/*
++	 * RFC 3986 says:
++	 *
++	 *   URI         = scheme "":"" hier-part [ ""?"" query ] [ ""#"" fragment ]
++	 *
++	 *   hier-part   = ""//"" authority path-abempty
++	 *               / path-absolute
++	 *               / path-rootless
++	 *               / path-empty
++	 *
++	 *   authority   = [ userinfo ""@"" ] host [ "":"" port ]
++	 *
++	 *   userinfo    = *( unreserved / pct-encoded / sub-delims / "":"" )
++	 *
++	 * Step 1: look for the "":"" at the end of the scheme.
++	 * A colon in the source is *NOT* sufficient to indicate that
++	 * this is a URL, as interface names on some platforms might
++	 * include colons (e.g., I think some Solaris interfaces
++	 * might).
++	 */
++	colonp = strchr(source, ':');
++	if (colonp == NULL)
++	{
++		/*
++		 * The source is the device to open.  It's not a URL.
++		 */
++		return (0);
++	}
++
++	/*
++	 * All schemes must have ""//"" after them, i.e. we only support
++	 * hier-part   = ""//"" authority path-abempty, not
++	 * hier-part   = path-absolute
++	 * hier-part   = path-rootless
++	 * hier-part   = path-empty
++	 *
++	 * We need that in order to distinguish between a local device
++	 * name that happens to contain a colon and a URI.
++	 */
++	if (strncmp(colonp + 1, ""//"", 2) != 0)
++	{
++		/*
++		 * The source is the device to open.  It's not a URL.
++		 */
++		return (0);
++	}
++
++	/*
++	 * It's a URL.
++	 */
++	return (1);
++}",libpcap,33834cb2a4d035b52aa2a26742f832a112e90a0a,484d60cbf7ca4ec758c3cbb8a82d68b244a78d58,1,"daemon_msg_open_req(uint8 ver, struct daemon_slpars *pars, uint32 plen,
+    char *source, size_t sourcelen)
+{
+	char errbuf[PCAP_ERRBUF_SIZE];		// buffer for network errors
+	char errmsgbuf[PCAP_ERRBUF_SIZE];	// buffer for errors to send to the client
+	pcap_t *fp;				// pcap_t main variable
+	int nread;
+	char sendbuf[RPCAP_NETBUF_SIZE];	// temporary buffer in which data to be sent is buffered
+	int sendbufidx = 0;			// index which keeps the number of bytes currently buffered
+	struct rpcap_openreply *openreply;	// open reply message
+
+	if (plen > sourcelen - 1)
+	{
+		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string too long"");
+		goto error;
+	}
+
+	nread = sock_recv(pars->sockctrl, source, plen,
+	    SOCK_RECEIVEALL_YES|SOCK_EOF_IS_ERROR, errbuf, PCAP_ERRBUF_SIZE);
+	if (nread == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Read from client failed: %s"", errbuf);
+		return -1;
+	}
+ 	source[nread] = '\0';
+ 	plen -= nread;
+ 
+//flaw_line_below:
+	// XXX - make sure it's *not* a URL; we don't support opening
+//flaw_line_below:
+	// remote devices here.
+//fix_flaw_line_below:
+//	// Is this a URL rather than a device?
+//fix_flaw_line_below:
+//	// If so, reject it.
+//fix_flaw_line_below:
+//	if (is_url(source))
+//fix_flaw_line_below:
+//	{
+//fix_flaw_line_below:
+//		pcap_snprintf(errmsgbuf, PCAP_ERRBUF_SIZE, ""Source string refers to a remote device"");
+//fix_flaw_line_below:
+//		goto error;
+//fix_flaw_line_below:
+//	}
+ 
+ 	// Open the selected device
+ 	// This is a fake open, since we do that only to get the needed parameters, then we close the device again
+	if ((fp = pcap_open_live(source,
+			1500 /* fake snaplen */,
+			0 /* no promis */,
+			1000 /* fake timeout */,
+			errmsgbuf)) == NULL)
+		goto error;
+
+	// Now, I can send a RPCAP open reply message
+	if (sock_bufferize(NULL, sizeof(struct rpcap_header), NULL, &sendbufidx,
+	    RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
+		goto error;
+
+	rpcap_createhdr((struct rpcap_header *) sendbuf, ver,
+	    RPCAP_MSG_OPEN_REPLY, 0, sizeof(struct rpcap_openreply));
+
+	openreply = (struct rpcap_openreply *) &sendbuf[sendbufidx];
+
+	if (sock_bufferize(NULL, sizeof(struct rpcap_openreply), NULL, &sendbufidx,
+	    RPCAP_NETBUF_SIZE, SOCKBUF_CHECKONLY, errmsgbuf, PCAP_ERRBUF_SIZE) == -1)
+		goto error;
+
+	memset(openreply, 0, sizeof(struct rpcap_openreply));
+	openreply->linktype = htonl(pcap_datalink(fp));
+	openreply->tzoff = 0; /* This is always 0 for live captures */
+
+	// We're done with the pcap_t.
+	pcap_close(fp);
+
+	// Send the reply.
+	if (sock_send(pars->sockctrl, sendbuf, sendbufidx, errbuf, PCAP_ERRBUF_SIZE) == -1)
+	{
+		rpcapd_log(LOGPRIO_ERROR, ""Send to client failed: %s"", errbuf);
+		return -1;
+	}
+	return 0;
+
+error:
+	if (rpcap_senderror(pars->sockctrl, ver, PCAP_ERR_OPEN,
+	    errmsgbuf, errbuf) == -1)
+	{
+		// That failed; log a message and give up.
+		rpcapd_log(LOGPRIO_ERROR, ""Send to client failed: %s"", errbuf);
+		return -1;
+	}
+
+	// Check if all the data has been read; if not, discard the data in excess
+	if (rpcapd_discard(pars->sockctrl, plen) == -1)
+	{
+		return -1;
+	}
+	return 0;
+}
+"
