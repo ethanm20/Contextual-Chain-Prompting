@@ -75,12 +75,12 @@ significantly improves the generated descriptions.
 1. Clone the Git repository by running the below command:
 
 ```
-git clone https://github.com/ethanm20/CoT-Vulnerability-Descriptions.git
+git clone https://github.com/ethanm20/Contextual-Chain-Prompting.git
 ```
 
 2. Open the repository root folder:
 ```
-cd CoT-Vulnerability-Descriptions
+cd Contextual-Chain-Prompting
 ```
 
 ## 🛠️ Installing Dependencies
