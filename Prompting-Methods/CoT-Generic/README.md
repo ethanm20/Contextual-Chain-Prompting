@@ -103,7 +103,7 @@ python3 eval-IFA-Top5.py
 python3 eval-IFA-Top10.py
 ```
 
-# 🧠 Prompts
+## 🧠 Prompts
 
 | Column Name | Prompt |
 |-------------|--------|
