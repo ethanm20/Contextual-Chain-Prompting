@@ -102,6 +102,18 @@ python3 eval-IFA-Top5.py
 python3 eval-IFA-Top10.py
 ```
 
+## 🧠 Prompts
+
+| Column Name | Prompt |
+|-------------|--------|
+| C1 Description of Functionality (In-Context) | Please provide a clear and comprehensive description of the functionality of the code. In the outputted description please ensure that:<br>1. The description is limited to one paragraph and between 90-100 words.<br>Code:<br>$primevul_func_before_fix |
+| C2 Description of Functionality (Generic) | Please provide a clear and comprehensive description of the functionality of the code that was given to you in the first prompt. In the outputted description please ensure that:<br>1. The description is limited to one paragraph and between 90-100 words.<br>2. Do not include any variable/function/expression names in the description. |
+| C3 Explanation of Vulnerability (In-Context) | Please explain the vulnerability in the Vulnerable Code (with CWE ID: $CWE_ID). To explain the cause of the vulnerability, get the context from the changed code on how the vulnerability was fixed. In your response please ensure that:<br>1. The response is limited to one paragraph and between 90-100 words.<br>2. The response should include variable/function/expression names from the code.<br>Code before Change/Fix (Vulnerable Code):<br>The code provided in the first prompt.<br>Code after Change/Fix (Fixed Code):<br>$primevul_func_after_fix |
+| C4 Explanation of Vulnerability (Generic) | Please explain the vulnerability in the Vulnerable Code (with CWE ID: $CWE_ID). To explain the cause of the vulnerability, get the context from the changed code on how the vulnerability was fixed. In your response please ensure that:<br>1. The response is limited to one paragraph and between 90-100 words.<br>2. Do not include any variable/function/expression names in the description. |
+| C5 Explanation of How Vulnerability Fixed (In-Context) | Please explain how the vulnerability was fixed. In your response please ensure that:<br>1. The response is limited to one paragraph and between 90-100 words.<br>2. The response should include variable/fuction/expression names from the code. |
+| C6 Explanation of How Vulnerability Fixed (Generic) | Please explain how the vulnerability was fixed. In your response please ensure that:<br>1. The response is limited to one paragraph and between 90-100 words.<br>2. Do not include any variable/function/expression names in the description. |
+
+
 ## 📊 Results - CoT Variation 1 
 
 ### IFA 
