@@ -102,6 +102,22 @@ python3 eval-IFA-Top5.py
 python3 eval-IFA-Top10.py
 ```
 
+## 🧠 Prompts
+
+| Column Name                                 | Prompt |
+|--------------------------------------------|--------|
+| C5 Explanation Vulnerability Fixed In Context | Please explain the vulnerability in the vulnerable code (i.e. the Code before the Change) and then explain how the vulnerability was fixed in the changed code below. In your response please ensure that:  
+1. The response is limited to one paragraph and between 90-100 words.  
+2. The response should include variable/fuction/expression names from the code.  
+Code before Change/Fix (Vulnerable Code):  
+$primevul_func_before_fix  
+Code after Change/Fix (Fixed Code):  
+$primevul_func_after_fix |
+| C6 Explanation Vulnerability Fixed Generic   | Please explain the vulnerability in the vulnerable code (i.e. the Code before the Change) and then explain how the vulnerability was fixed in the changed code below. In your response please ensure that:  
+1. The response is limited to one paragraph and between 90-100 words.  
+2. Do not include any variable/function/expression names in the description. |
+
+
 ## 📊 Results - Single Short Prompt (SSP) Method
 
 ### IFA
